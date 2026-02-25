@@ -46,6 +46,17 @@ func SetupWorktree(ctx context.Context, baseDir, taskID string) (string, error) 
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git worktree add: %s: %w", string(out), err)
 	}
+
+	// Set git author in worktree so commits don't fail
+	for _, kv := range [][2]string{
+		{"user.name", "CHUM v2"},
+		{"user.email", "chum@localhost"},
+	} {
+		cmd = exec.CommandContext(ctx, "git", "config", kv[0], kv[1])
+		cmd.Dir = wtDir
+		_ = cmd.Run() // best-effort
+	}
+
 	return wtDir, nil
 }
 
