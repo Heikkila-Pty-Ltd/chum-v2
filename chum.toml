@@ -1,0 +1,22 @@
+[general]
+tick_interval = "2m"
+max_concurrent = 2
+temporal_host_port = "localhost:7233"
+temporal_namespace = "chum-v2"
+task_queue = "chum-v2-tasks"
+db_path = "chum.db"
+
+[projects.chum]
+enabled = true
+workspace = "/home/ubuntu/projects/chum"
+dod_checks = ["go build ./...", "go test ./...", "go vet ./..."]
+
+[providers.claude]
+cli = "claude"
+model = "claude-sonnet-4-20250514"
+enabled = true
+
+[providers.gemini]
+cli = "gemini"
+model = "gemini-2.5-flash"
+enabled = false

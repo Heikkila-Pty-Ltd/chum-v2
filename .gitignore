@@ -1,0 +1,16 @@
+# Binaries
+chum
+*.test
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
