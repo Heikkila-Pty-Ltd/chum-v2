@@ -1,11 +1,38 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 )
+
+// ErrRateLimited is returned when the LLM CLI output indicates a rate/usage limit.
+var ErrRateLimited = errors.New("rate limited")
+
+// rateLimitPatterns are substrings that indicate rate/usage limits in CLI output.
+var rateLimitPatterns = []string{
+	"usage limit",
+	"rate limit",
+	"quota exceeded",
+	"try again at",
+	"rate_limit_exceeded",
+	"too many requests",
+	"capacity",
+	"overloaded",
+}
+
+// IsRateLimited checks whether CLI output indicates a rate/usage limit.
+func IsRateLimited(output string) bool {
+	lower := strings.ToLower(output)
+	for _, pat := range rateLimitPatterns {
+		if strings.Contains(lower, pat) {
+			return true
+		}
+	}
+	return false
+}
 
 // CLIResult holds the output of a CLI invocation.
 type CLIResult struct {
@@ -14,7 +41,7 @@ type CLIResult struct {
 }
 
 // RunCLI executes an LLM CLI with the given prompt piped via stdin.
-// Returns the combined stdout/stderr output.
+// Returns ErrRateLimited if the output indicates a rate/usage limit.
 func RunCLI(agent, model, workDir, prompt string) (*CLIResult, error) {
 	cmd := buildCLICommand(agent, model, workDir)
 
@@ -46,6 +73,12 @@ func RunCLI(agent, model, workDir, prompt string) (*CLIResult, error) {
 			result.ExitCode = 1
 		}
 	}
+
+	// Check for rate limiting regardless of exit code
+	if IsRateLimited(result.Output) {
+		return result, fmt.Errorf("%w: %s", ErrRateLimited, agent)
+	}
+
 	return result, nil
 }
 
