@@ -121,27 +121,27 @@ func (s slogAdapter) Error(msg string, keysAndValues ...interface{}) {
 }
 
 // EnsureNamespace creates the Temporal namespace if it doesn't exist.
-// Uses tctl CLI — requires Temporal server to be running.
+// Uses temporal CLI — requires Temporal server to be running.
 func EnsureNamespace(cfg *config.Config, logger *slog.Logger) error {
 	ns := cfg.General.TemporalNamespace
 	host := cfg.General.TemporalHostPort
 
-	// Try tctl first
 	cmd := exec.CommandContext(context.Background(),
-		"tctl", "--address", host, "--namespace", ns,
-		"namespace", "register",
-		"--retention", "7",
-		"--description", "CHUM v2 namespace",
+		"temporal", "operator", "namespace", "create",
+		"--address", host,
+		"--namespace", ns,
+		"--retention", "7d",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		outStr := string(out)
 		if strings.Contains(outStr, "already registered") ||
-			strings.Contains(outStr, "already exists") {
+			strings.Contains(outStr, "already exists") ||
+			strings.Contains(outStr, "Namespace is already registered") {
 			logger.Info("Namespace already exists", "namespace", ns)
 			return nil
 		}
-		return fmt.Errorf("tctl namespace register: %s: %w", outStr, err)
+		return fmt.Errorf("namespace create: %s: %w", outStr, err)
 	}
 	logger.Info("Namespace created", "namespace", ns)
 	return nil
