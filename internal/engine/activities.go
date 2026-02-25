@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"go.temporal.io/sdk/activity"
@@ -130,9 +132,39 @@ func gatherCodebaseContext(ctx context.Context, workDir string) string {
 // --- 3. ExecuteActivity ---
 
 // ExecuteActivity runs the LLM CLI to implement the plan, then commits changes.
+// Performs preflight checks before invoking the LLM to avoid wasting a
+// 45-minute timeout on a guaranteed failure.
 func (a *Activities) ExecuteActivity(ctx context.Context, plan Plan, req TaskRequest) (*ExecResult, error) {
 	logger := activity.GetLogger(ctx)
 	logger.Info("Executing plan", "TaskID", req.TaskID, "Agent", req.Agent)
+
+	// --- Preflight 1: CLI binary exists ---
+	cliName := normalizeCLIName(req.Agent)
+	if _, err := exec.LookPath(cliName); err != nil {
+		return nil, fmt.Errorf("PREFLIGHT: CLI %q not found on PATH — cannot execute", cliName)
+	}
+
+	// --- Preflight 2: worktree still intact ---
+	if _, err := os.Stat(filepath.Join(req.WorkDir, ".git")); err != nil {
+		return nil, fmt.Errorf("PREFLIGHT: worktree broken — .git missing in %s", req.WorkDir)
+	}
+
+	// --- Preflight 3: project builds before we start ---
+	// If the codebase is already broken, the agent is set up to fail.
+	projCfg, ok := a.Config.Projects[req.Project]
+	if ok && len(projCfg.DoDChecks) > 0 {
+		buildCmd := projCfg.DoDChecks[0] // first check is always the build command
+		parts := strings.Fields(buildCmd)
+		if len(parts) > 0 {
+			cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
+			cmd.Dir = req.WorkDir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return nil, fmt.Errorf("PREFLIGHT: project doesn't build before coding — %s failed: %s",
+					buildCmd, truncate(string(out), 300))
+			}
+			logger.Info("Preflight: baseline build OK")
+		}
+	}
 
 	prompt := fmt.Sprintf(`You are a senior software engineer. Implement the following plan.
 
@@ -239,4 +271,19 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// normalizeCLIName extracts the canonical CLI binary name from an agent string.
+// e.g. "claude-sonnet" → "claude", "gemini-pro" → "gemini"
+func normalizeCLIName(agent string) string {
+	agent = strings.ToLower(agent)
+	switch {
+	case strings.HasPrefix(agent, "claude"):
+		return "claude"
+	case strings.HasPrefix(agent, "gemini"):
+		return "gemini"
+	case strings.HasPrefix(agent, "codex"):
+		return "codex"
+	}
+	return agent
 }
