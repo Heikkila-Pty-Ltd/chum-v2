@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/jsonutil"
 )
 
 // ExtractJSON finds the first JSON object in LLM output.
@@ -71,6 +73,9 @@ func unwrapClaudeJSON(text string) string {
 // Handles: ```json, ```JSON, ```jsonc, plain ```
 var codeFencePattern = regexp.MustCompile("(?i)```(?:json[c]?)?\\s*\n?")
 
+// trailingCommaPattern matches trailing commas before } or ] in JSON.
+var trailingCommaPattern = regexp.MustCompile(`,\s*([}\]])`)
+
 func stripCodeFences(text string) string {
 	return codeFencePattern.ReplaceAllString(text, "")
 }
@@ -99,47 +104,23 @@ func cleanLLMArtifacts(text string) string {
 	return text
 }
 
-// findJSONObject locates and extracts the first complete JSON object from text.
+// findJSONObject locates the first complete JSON object from text.
+// Delegates to jsonutil.FindObject for bracket-balancing, then falls back
+// to repairJSON if the first candidate isn't valid.
 func findJSONObject(text string) string {
-	depth := 0
-	start := -1
-	inString := false
-	escaped := false
-
-	for i, r := range text {
-		if escaped {
-			escaped = false
+	if obj := jsonutil.FindObject(text); obj != "" {
+		return obj
+	}
+	// jsonutil.FindObject only returns valid JSON; try repair on raw candidates.
+	// Walk the text looking for { and attempt repair on each balanced candidate.
+	for i := 0; i < len(text); i++ {
+		if text[i] != '{' {
 			continue
 		}
-		if r == '\\' && inString {
-			escaped = true
-			continue
-		}
-		if r == '"' {
-			inString = !inString
-			continue
-		}
-		if inString {
-			continue
-		}
-		if r == '{' {
-			if start == -1 {
-				start = i
-			}
-			depth++
-		} else if r == '}' {
-			depth--
-			if depth == 0 && start >= 0 {
-				candidate := text[start : i+1]
-				if json.Valid([]byte(candidate)) {
-					return candidate
-				}
-				// Not valid — try to repair common issues
-				if repaired := repairJSON(candidate); repaired != "" {
-					return repaired
-				}
-				// Reset and try next
-				start = -1
+		if end := jsonutil.FindBalancedEnd(text, i, '{', '}'); end > i {
+			candidate := text[i : end+1]
+			if repaired := repairJSON(candidate); repaired != "" {
+				return repaired
 			}
 		}
 	}
@@ -149,8 +130,7 @@ func findJSONObject(text string) string {
 // repairJSON attempts to fix common JSON formatting issues from LLMs.
 func repairJSON(text string) string {
 	// Fix 1: trailing commas before } or ]
-	trailingComma := regexp.MustCompile(`,\s*([}\]])`)
-	text = trailingComma.ReplaceAllString(text, "$1")
+	text = trailingCommaPattern.ReplaceAllString(text, "$1")
 
 	// Fix 2: single quotes → double quotes (only outside existing double quotes)
 	// This is risky so only try if the result would be valid

@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/jsonutil"
 )
 
 // DefaultBinary is the default bd CLI binary name.
@@ -163,68 +165,9 @@ func decodeIssueList(out []byte) ([]Issue, error) {
 }
 
 func extractJSON(out []byte) []byte {
-	s := strings.TrimSpace(string(out))
-	if json.Valid([]byte(s)) {
-		return []byte(s)
-	}
-	// Find the first balanced JSON object or array, tolerating
-	// leading/trailing non-JSON output from the bd CLI.
-	for i := 0; i < len(s); i++ {
-		open := s[i]
-		var close byte
-		switch open {
-		case '{':
-			close = '}'
-		case '[':
-			close = ']'
-		default:
-			continue
-		}
-		if end := findBalancedEnd(s, i, open, close); end > i {
-			candidate := s[i : end+1]
-			if json.Valid([]byte(candidate)) {
-				return []byte(candidate)
-			}
-		}
-	}
-	return nil
+	return jsonutil.ExtractJSON(out)
 }
 
-// findBalancedEnd returns the index of the closing bracket that balances
-// the opener at position start, respecting JSON string escaping.
-// Returns -1 if no balanced close is found.
-func findBalancedEnd(s string, start int, open, close byte) int {
-	depth := 0
-	inString := false
-	escaped := false
-	for i := start; i < len(s); i++ {
-		ch := s[i]
-		if escaped {
-			escaped = false
-			continue
-		}
-		if ch == '\\' && inString {
-			escaped = true
-			continue
-		}
-		if ch == '"' {
-			inString = !inString
-			continue
-		}
-		if inString {
-			continue
-		}
-		if ch == open {
-			depth++
-		} else if ch == close {
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
-}
 
 func compact(out []byte) string {
 	s := strings.TrimSpace(string(out))
