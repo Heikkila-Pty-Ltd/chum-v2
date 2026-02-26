@@ -39,27 +39,29 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	// Register activities
 	parser := astpkg.NewParser(logger)
 
-	// Create beads client for writeback (best-effort — nil if bd unavailable)
-	var beadsClient *beads.Client
-	for _, project := range cfg.Projects {
+	// Create per-project beads clients for writeback (best-effort — nil if bd unavailable)
+	beadsClients := make(map[string]*beads.Client)
+	for name, project := range cfg.Projects {
 		if !project.Enabled {
 			continue
 		}
 		bc, err := beads.NewClient(project.Workspace)
 		if err != nil {
-			logger.Warn("Beads client unavailable, writeback disabled", "error", err)
-		} else {
-			beadsClient = bc
+			logger.Warn("Beads client unavailable for project", "project", name, "error", err)
+			continue
 		}
-		break
+		beadsClients[name] = bc
+	}
+	if len(beadsClients) > 0 {
+		logger.Info("Beads writeback enabled", "projects", len(beadsClients))
 	}
 
 	a := &Activities{
-		DAG:         d,
-		Config:      cfg,
-		Logger:      logger,
-		AST:         parser,
-		BeadsClient: beadsClient,
+		DAG:          d,
+		Config:       cfg,
+		Logger:       logger,
+		AST:          parser,
+		BeadsClients: beadsClients,
 	}
 	// Register activities explicitly so additions are visible and reviewable.
 	w.RegisterActivity(a.SetupWorktreeActivity)
