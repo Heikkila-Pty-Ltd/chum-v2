@@ -12,8 +12,8 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 
-	"github.com/Heikkila-Pty-Ltd/chum/internal/config"
-	"github.com/Heikkila-Pty-Ltd/chum/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 )
 
 // StartWorker connects to Temporal, registers workflows/activities,

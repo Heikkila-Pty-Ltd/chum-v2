@@ -9,8 +9,8 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
-	"github.com/Heikkila-Pty-Ltd/chum/internal/config"
-	"github.com/Heikkila-Pty-Ltd/chum/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 )
 
 // DispatcherWorkflow scans the DAG for ready tasks and spawns AgentWorkflow

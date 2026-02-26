@@ -7,7 +7,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
-	gitpkg "github.com/Heikkila-Pty-Ltd/chum/internal/git"
+	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
 )
 
 // AgentWorkflow is the core CHUM execution loop:

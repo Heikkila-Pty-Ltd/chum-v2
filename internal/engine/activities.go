@@ -12,9 +12,9 @@ import (
 
 	"go.temporal.io/sdk/activity"
 
-	"github.com/Heikkila-Pty-Ltd/chum/internal/config"
-	"github.com/Heikkila-Pty-Ltd/chum/internal/dag"
-	gitpkg "github.com/Heikkila-Pty-Ltd/chum/internal/git"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
 )
 
 // Activities holds dependencies for Temporal activity methods.

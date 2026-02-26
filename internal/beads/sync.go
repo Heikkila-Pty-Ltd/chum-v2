@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/Heikkila-Pty-Ltd/chum/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 )
 
 // SyncResult summarizes a sync operation.
