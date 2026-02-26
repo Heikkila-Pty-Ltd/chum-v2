@@ -73,6 +73,47 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	}
 	defer cleanup()
 
+	// === DECOMPOSE ===
+	// Every task must pass through decomposition. Subtasks (already decomposed)
+	// skip this step. If decomposition fails, the task fails — no direct execution
+	// without decomposition.
+	if req.ParentID != "" {
+		logger.Info("Subtask — skipping decomposition", "ParentID", req.ParentID)
+	} else {
+		decompCtx := workflow.WithActivityOptions(ctx, dodOpts)
+		var decompResult DecompResult
+		if err := workflow.ExecuteActivity(decompCtx, a.DecomposeActivity, req).Get(ctx, &decompResult); err != nil {
+			logger.Error("Decomposition failed", "error", err)
+			if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+				Reason:    CloseNeedsReview,
+				SubReason: "decompose_failed",
+			}); cerr != nil {
+				return fmt.Errorf("decompose failed: %w (close/notify failed: %v)", err, cerr)
+			}
+			return fmt.Errorf("decompose failed: %w", err)
+		}
+		if !decompResult.Atomic && len(decompResult.Steps) > 0 {
+			var subtaskIDs []string
+			if err := workflow.ExecuteActivity(decompCtx, a.CreateSubtasksActivity,
+				req.TaskID, req.Project, decompResult.Steps).Get(ctx, &subtaskIDs); err != nil {
+				logger.Error("Failed to create subtasks", "error", err)
+				if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+					Reason:    CloseNeedsReview,
+					SubReason: "subtask_creation_failed",
+				}); cerr != nil {
+					return fmt.Errorf("subtask creation failed: %w (close/notify failed: %v)", err, cerr)
+				}
+				return fmt.Errorf("subtask creation failed: %w", err)
+			}
+			logger.Info("Task decomposed", "ParentID", req.TaskID, "Subtasks", len(subtaskIDs))
+			cleanup()
+			return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+				Reason:    CloseDecomposed,
+				SubReason: "decomposed",
+			})
+		}
+	}
+
 	// === EXECUTE ===
 	execCtx := workflow.WithActivityOptions(ctx, execOpts)
 	var execResult ExecResult

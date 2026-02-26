@@ -21,6 +21,7 @@ func TestAgentWorkflow_ExecFailure_ClosesAndCleans(t *testing.T) {
 
 	var a *Activities
 	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-1").Return("/tmp/wt-task-1", nil)
+	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return(&DecompResult{Atomic: true}, nil)
 	env.OnActivity(a.ExecuteActivity, mock.Anything, mock.Anything).Return((*ExecResult)(nil), errors.New("exec failed"))
 	env.OnActivity(a.CloseTaskWithDetailActivity, mock.Anything, "task-1", mock.Anything).Return(nil)
 	env.OnActivity(a.NotifyActivity, mock.Anything, mock.Anything).Return(nil)
@@ -50,6 +51,7 @@ func TestAgentWorkflow_DoDFailure_ClosesAndCleans(t *testing.T) {
 
 	var a *Activities
 	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-2").Return("/tmp/wt-task-2", nil)
+	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return(&DecompResult{Atomic: true}, nil)
 	env.OnActivity(a.ExecuteActivity, mock.Anything, mock.Anything).Return(&ExecResult{
 		ExitCode: 0,
 		Output:   "ok",
@@ -86,6 +88,7 @@ func TestAgentWorkflow_SuccessPath_Completes(t *testing.T) {
 
 	var a *Activities
 	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-3").Return("/tmp/wt-task-3", nil)
+	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return(&DecompResult{Atomic: true}, nil)
 	env.OnActivity(a.ExecuteActivity, mock.Anything, mock.Anything).Return(&ExecResult{
 		ExitCode: 0,
 		Output:   "ok",
@@ -162,5 +165,106 @@ func TestCloseAndNotify_PropagatesCloseFailure(t *testing.T) {
 	err := env.GetWorkflowError()
 	if err == nil || !strings.Contains(err.Error(), "close task failed") {
 		t.Fatalf("expected close task failure, got %v", err)
+	}
+}
+
+func TestAgentWorkflow_Decomposition_ClosesParent(t *testing.T) {
+	t.Parallel()
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestWorkflowEnvironment()
+
+	var a *Activities
+	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-decomp").Return("/tmp/wt-task-decomp", nil)
+	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return(&DecompResult{
+		Steps: []DecompStep{
+			{Title: "Step 1", Description: "Do thing 1", Acceptance: "Done 1", Estimate: 15},
+			{Title: "Step 2", Description: "Do thing 2", Acceptance: "Done 2", Estimate: 30},
+		},
+	}, nil)
+	env.OnActivity(a.CreateSubtasksActivity, mock.Anything, "task-decomp", "proj", mock.Anything).Return([]string{"sub-1", "sub-2"}, nil)
+	env.OnActivity(a.CloseTaskWithDetailActivity, mock.Anything, "task-decomp", mock.Anything).Return(nil)
+	env.OnActivity(a.NotifyActivity, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.CleanupWorktreeActivity, mock.Anything, "/repo", "/tmp/wt-task-decomp").Return(nil)
+
+	env.ExecuteWorkflow(AgentWorkflow, TaskRequest{
+		TaskID:  "task-decomp",
+		Project: "proj",
+		Prompt:  "do something vague",
+		WorkDir: "/repo",
+		Agent:   "claude",
+	})
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("expected workflow completion")
+	}
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("unexpected workflow error: %v", err)
+	}
+}
+
+func TestAgentWorkflow_DecompFailure_HardFails(t *testing.T) {
+	t.Parallel()
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestWorkflowEnvironment()
+
+	var a *Activities
+	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-df").Return("/tmp/wt-task-df", nil)
+	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return((*DecompResult)(nil), errors.New("LLM unavailable"))
+	// No ExecuteActivity mock — decomposition failure must NOT fall through
+	env.OnActivity(a.CloseTaskWithDetailActivity, mock.Anything, "task-df", mock.Anything).Return(nil)
+	env.OnActivity(a.NotifyActivity, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.CleanupWorktreeActivity, mock.Anything, "/repo", "/tmp/wt-task-df").Return(nil)
+
+	env.ExecuteWorkflow(AgentWorkflow, TaskRequest{
+		TaskID:  "task-df",
+		Project: "p",
+		Prompt:  "do thing",
+		WorkDir: "/repo",
+		Agent:   "claude",
+	})
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("expected workflow completion")
+	}
+	if err := env.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "decompose failed") {
+		t.Fatalf("expected decompose failure, got %v", err)
+	}
+}
+
+func TestAgentWorkflow_Subtask_SkipsDecomposition(t *testing.T) {
+	t.Parallel()
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestWorkflowEnvironment()
+
+	var a *Activities
+	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-sub").Return("/tmp/wt-task-sub", nil)
+	// NO DecomposeActivity mock — it should NOT be called for subtasks
+	env.OnActivity(a.ExecuteActivity, mock.Anything, mock.Anything).Return(&ExecResult{ExitCode: 0, Output: "ok"}, nil)
+	env.OnActivity(a.DoDCheckActivity, mock.Anything, "/tmp/wt-task-sub", "p").Return(&gitpkg.DoDResult{
+		Passed:   false,
+		Failures: []string{"test fail"},
+	}, nil)
+	env.OnActivity(a.CloseTaskWithDetailActivity, mock.Anything, "task-sub", mock.Anything).Return(nil)
+	env.OnActivity(a.NotifyActivity, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.CleanupWorktreeActivity, mock.Anything, "/repo", "/tmp/wt-task-sub").Return(nil)
+
+	env.ExecuteWorkflow(AgentWorkflow, TaskRequest{
+		TaskID:   "task-sub",
+		Project:  "p",
+		Prompt:   "specific subtask",
+		WorkDir:  "/repo",
+		Agent:    "claude",
+		ParentID: "parent-task-1", // This makes it a subtask
+	})
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("expected workflow completion")
+	}
+	// Should have executed and hit DoD failure (proving decompose was skipped)
+	if err := env.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "DoD failed") {
+		t.Fatalf("expected DoD failure (proving decomp skip), got %v", err)
 	}
 }

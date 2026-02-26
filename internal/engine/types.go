@@ -7,12 +7,13 @@ import gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
 // Tasks arrive fully planned and scoped from beads — description, acceptance
 // criteria, and design notes are all in the Prompt field.
 type TaskRequest struct {
-	TaskID  string `json:"task_id"`
-	Project string `json:"project"`
-	Prompt  string `json:"prompt"`   // full task context from beads
-	WorkDir string `json:"work_dir"` // project workspace root
-	Agent   string `json:"agent"`    // CLI name (claude, gemini, codex)
-	Model   string `json:"model"`    // optional model override
+	TaskID   string `json:"task_id"`
+	Project  string `json:"project"`
+	Prompt   string `json:"prompt"`     // full task context from beads
+	WorkDir  string `json:"work_dir"`   // project workspace root
+	Agent    string `json:"agent"`      // CLI name (claude, gemini, codex)
+	Model    string `json:"model"`      // optional model override
+	ParentID string `json:"parent_id"`  // non-empty for subtasks (skip decomposition)
 }
 
 // ExecResult is the output of the execute activity.
