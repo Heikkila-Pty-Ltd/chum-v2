@@ -65,6 +65,25 @@ func SetupWorktree(ctx context.Context, baseDir, taskID string) (string, error) 
 	return wtDir, nil
 }
 
+// ErrOnProtectedBranch is returned when an operation is attempted on master/main.
+var ErrOnProtectedBranch = errors.New("on protected branch")
+
+// AssertFeatureBranch returns an error if workDir is on master or main.
+// All agent operations must happen on feature branches in isolated worktrees.
+func AssertFeatureBranch(ctx context.Context, workDir string) error {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("cannot determine branch: %w", err)
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == "master" || branch == "main" {
+		return fmt.Errorf("%w: refusing to operate on %s — agents must work on feature branches", ErrOnProtectedBranch, branch)
+	}
+	return nil
+}
+
 // CleanupWorktree removes a git worktree.
 func CleanupWorktree(ctx context.Context, baseDir, wtDir string) error {
 	cmd := exec.CommandContext(ctx, "git", "worktree", "remove", "--force", wtDir)
