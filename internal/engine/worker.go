@@ -80,6 +80,8 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	w.RegisterActivity(a.GuardReviewerCleanActivity)
 	w.RegisterActivity(a.ResolveReviewerLoginActivity)
 	w.RegisterActivity(a.NotifyActivity)
+	w.RegisterActivity(a.DecomposeActivity)
+	w.RegisterActivity(a.CreateSubtasksActivity)
 
 	da := &DispatchActivities{
 		DAG:    d,
