@@ -10,12 +10,17 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.temporal.io/sdk/client"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 )
+
+func atomicAddTxn() uint64 {
+	return atomic.AddUint64(&matrixTxnCounter, 1)
+}
 
 // Bridge polls a Matrix room for /plan commands and routes them to Temporal
 // workflow signals. It also sends push notifications from workflows to chat.
@@ -27,7 +32,9 @@ type Bridge struct {
 	TaskQueue      string
 	DefaultAgent   string                         // default LLM agent (e.g. "claude")
 	CeremonyCfg    planning.PlanningCeremonyConfig // ceremony-level knobs
-	AllowedSenders map[string]bool                // Matrix user IDs allowed to issue commands (nil = allow all)
+	AllowedSenders  map[string]bool                // Matrix user IDs allowed to issue commands (nil = allow all)
+	BotUserID       string                         // Matrix user ID of the bot itself — messages from this sender are ignored
+	ProjectWorkDirs map[string]string              // project name → workspace path (used to resolve WorkDir securely)
 
 	mu           sync.Mutex
 	activeByRoom map[string]string // roomID → active planning session workflow ID
@@ -39,15 +46,34 @@ func (b *Bridge) Run(ctx context.Context) error {
 	if b.PollInterval <= 0 {
 		b.PollInterval = 10 * time.Second
 	}
+
+	// Resolve the bot's own Matrix user ID so we can filter self-echo.
+	if b.BotUserID == "" {
+		if uid, err := resolveMatrixUserID(ctx, b.MatrixCfg); err != nil {
+			b.Logger.Warn("Failed to resolve bot user ID — self-echo filtering disabled", "error", err)
+		} else {
+			b.BotUserID = uid
+			b.Logger.Info("Bot user ID resolved", "user_id", uid)
+		}
+	}
+
 	b.Logger.Info("Chat bridge started", "room", b.MatrixCfg.RoomID, "interval", b.PollInterval)
 
-	// Seed the since token to skip historical messages
-	_, token, err := ReadRoomMessages(ctx, b.MatrixCfg, "")
-	if err != nil {
-		b.Logger.Warn("Failed to seed message cursor, starting from now", "error", err)
-	} else {
-		b.sinceToken = token
+	// Seed the since token to skip historical messages.
+	// Loop until we reach the end to avoid replaying old /plan commands.
+	token := ""
+	for {
+		_, nextToken, err := ReadRoomMessages(ctx, b.MatrixCfg, token)
+		if err != nil {
+			b.Logger.Warn("Failed to seed message cursor, starting from now", "error", err)
+			break
+		}
+		if nextToken == "" || nextToken == token {
+			break
+		}
+		token = nextToken
 	}
+	b.sinceToken = token
 
 	ticker := time.NewTicker(b.PollInterval)
 	defer ticker.Stop()
@@ -73,6 +99,10 @@ func (b *Bridge) poll(ctx context.Context) {
 	}
 
 	for _, msg := range msgs {
+		// Skip messages from the bot itself to prevent self-echo loops.
+		if b.BotUserID != "" && msg.Sender == b.BotUserID {
+			continue
+		}
 		cmd, matched, parseErr := ParseCommand(msg.Body)
 		if !matched {
 			continue
@@ -137,6 +167,12 @@ func (b *Bridge) handleCommand(ctx context.Context, msg InboundMessage, cmd Comm
 }
 
 func (b *Bridge) startPlanning(ctx context.Context, msg InboundMessage, cmd Command) error {
+	// Resolve WorkDir from project config — never trust user-supplied paths.
+	workDir := b.ProjectWorkDirs[cmd.Project]
+	if workDir == "" {
+		return b.send(ctx, fmt.Sprintf("Unknown project %q. Check your config.", cmd.Project))
+	}
+
 	sessionID := fmt.Sprintf("planning-%s-%d", cmd.Project, time.Now().UnixNano())
 
 	opts := client.StartWorkflowOptions{
@@ -152,7 +188,7 @@ func (b *Bridge) startPlanning(ctx context.Context, msg InboundMessage, cmd Comm
 	req := planning.PlanningRequest{
 		GoalID:    cmd.Value,
 		Project:   cmd.Project,
-		WorkDir:   cmd.WorkDir,
+		WorkDir:   workDir,
 		Agent:     agent,
 		RoomID:    msg.Room,
 		Source:    "matrix-control",
@@ -176,6 +212,8 @@ func (b *Bridge) signalWorkflow(ctx context.Context, room, sessionID, signalName
 	}
 
 	if err := b.Client.SignalWorkflow(ctx, sid, "", signalName, value); err != nil {
+		// Report signal failure to the user so they know the command didn't work.
+		_ = b.send(ctx, fmt.Sprintf("Failed to send signal to session %s: %s", sid, err))
 		return fmt.Errorf("signal workflow %s: %w", sid, err)
 	}
 	return nil
@@ -216,9 +254,13 @@ func (b *Bridge) setActiveSession(room, sessionID string) {
 	b.activeByRoom[strings.TrimSpace(room)] = sessionID
 }
 
+// matrixTxnCounter is an atomic counter to ensure unique transaction IDs
+// even when multiple messages are sent within the same nanosecond.
+var matrixTxnCounter uint64
+
 // SendMatrixMessage sends a text message to a Matrix room using the Client-Server API.
 func SendMatrixMessage(ctx context.Context, cfg MatrixConfig, message string) error {
-	txnID := fmt.Sprintf("chum-plan-%d", time.Now().UnixNano())
+	txnID := fmt.Sprintf("chum-plan-%d-%d", time.Now().UnixNano(), atomicAddTxn())
 	path := fmt.Sprintf("%s/_matrix/client/v3/rooms/%s/send/m.room.message/%s",
 		strings.TrimRight(cfg.Homeserver, "/"),
 		url.PathEscape(cfg.RoomID),

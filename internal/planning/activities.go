@@ -104,7 +104,7 @@ CODEBASE:
 %s
 
 Research and propose 3-5 distinct approaches to achieve this goal. For each approach:
-1. Explore the codebase to understand existing patterns and constraints
+1. Analyze the codebase summary above to understand existing patterns and constraints
 2. Consider different architectural approaches
 3. Evaluate tradeoffs (complexity, risk, reuse, maintenance)
 4. Estimate confidence of success (0.0-1.0)
@@ -255,8 +255,8 @@ USER FEEDBACK: %s
 CODEBASE:
 %s
 
-Investigate this approach thoroughly:
-1. Explore relevant code paths in detail
+Investigate this approach thoroughly based on the codebase summary above:
+1. Analyze relevant code paths and structures
 2. Identify specific files/functions that would need changes
 3. Surface any hidden complexity or risks
 4. Refine the confidence based on deeper understanding

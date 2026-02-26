@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -139,9 +140,15 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	defer bridgeCancel()
 
 	if cfg.Planning.Enabled && matrixCfg.Homeserver != "" && matrixCfg.AccessToken != "" && matrixCfg.RoomID != "" {
-		// Resolve default agent from first enabled provider
+		// Resolve default agent from first enabled provider (sorted by name for determinism).
 		defaultAgent := "claude"
-		for _, prov := range cfg.Providers {
+		providerNames := make([]string, 0, len(cfg.Providers))
+		for name := range cfg.Providers {
+			providerNames = append(providerNames, name)
+		}
+		sort.Strings(providerNames)
+		for _, name := range providerNames {
+			prov := cfg.Providers[name]
 			if prov.Enabled && prov.CLI != "" {
 				defaultAgent = prov.CLI
 				break
@@ -157,14 +164,22 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 			logger.Info("Chat bridge sender allowlist active", "senders", len(allowedSenders))
 		}
 
+		projectWorkDirs := make(map[string]string)
+		for name, proj := range cfg.Projects {
+			if proj.Enabled {
+				projectWorkDirs[name] = proj.Workspace
+			}
+		}
+
 		bridge := &chat.Bridge{
-			Client:         c,
-			MatrixCfg:      matrixCfg,
-			PollInterval:   cfg.Planning.PollInterval.Duration,
-			Logger:         logger,
-			TaskQueue:      cfg.General.TaskQueue,
-			DefaultAgent:   defaultAgent,
-			AllowedSenders: allowedSenders,
+			Client:          c,
+			MatrixCfg:       matrixCfg,
+			PollInterval:    cfg.Planning.PollInterval.Duration,
+			Logger:          logger,
+			TaskQueue:       cfg.General.TaskQueue,
+			DefaultAgent:    defaultAgent,
+			AllowedSenders:  allowedSenders,
+			ProjectWorkDirs: projectWorkDirs,
 			CeremonyCfg: planning.PlanningCeremonyConfig{
 				MaxResearchRounds: cfg.Planning.MaxResearchRounds,
 				SignalTimeout:     cfg.Planning.SignalTimeout.Duration,

@@ -20,7 +20,7 @@ func TestParseCommand_Help(t *testing.T) {
 
 func TestParseCommand_Start(t *testing.T) {
 	t.Parallel()
-	cmd, matched, err := ParseCommand("/plan start myproject /home/work agent=gemini topk=3")
+	cmd, matched, err := ParseCommand("/plan start myproject goal-123 agent=gemini")
 	if !matched {
 		t.Fatal("expected match")
 	}
@@ -33,14 +33,11 @@ func TestParseCommand_Start(t *testing.T) {
 	if cmd.Project != "myproject" {
 		t.Fatalf("expected project=myproject, got %q", cmd.Project)
 	}
-	if cmd.WorkDir != "/home/work" {
-		t.Fatalf("expected workdir=/home/work, got %q", cmd.WorkDir)
+	if cmd.Value != "goal-123" {
+		t.Fatalf("expected value=goal-123, got %q", cmd.Value)
 	}
 	if cmd.Agent != "gemini" {
 		t.Fatalf("expected agent=gemini, got %q", cmd.Agent)
-	}
-	if cmd.TopK != 3 {
-		t.Fatalf("expected topk=3, got %d", cmd.TopK)
 	}
 }
 

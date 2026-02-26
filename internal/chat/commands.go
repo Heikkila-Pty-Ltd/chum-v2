@@ -2,7 +2,6 @@ package chat
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -27,12 +26,10 @@ const (
 type Command struct {
 	Kind      CommandKind
 	Project   string
-	WorkDir   string
 	Agent     string
 	SessionID string
-	Value     string // item ID, answer text, or dig target
+	Value     string // goal ID, approach ID, answer text, or dig target
 	Reason    string
-	TopK      int
 }
 
 // ParseCommand parses a /plan command from a chat message body.
@@ -71,12 +68,14 @@ func ParseCommand(raw string) (Command, bool, error) {
 			return Command{}, true, fmt.Errorf("missing project")
 		}
 		cursor := 0
+		// First positional arg is the project name (or goal ID after project=).
 		if !strings.Contains(args[cursor], "=") {
 			cmd.Project = args[cursor]
 			cursor++
 		}
+		// Remaining positional arg (if not key=value) is the goal ID.
 		if cursor < len(args) && !strings.Contains(args[cursor], "=") {
-			cmd.WorkDir = args[cursor]
+			cmd.Value = args[cursor] // goal ID
 			cursor++
 		}
 		for ; cursor < len(args); cursor++ {
@@ -87,14 +86,8 @@ func ParseCommand(raw string) (Command, bool, error) {
 			switch strings.ToLower(strings.TrimSpace(k)) {
 			case "project":
 				cmd.Project = strings.TrimSpace(v)
-			case "workdir", "work_dir":
-				cmd.WorkDir = strings.TrimSpace(v)
 			case "agent":
 				cmd.Agent = strings.TrimSpace(v)
-			case "topk", "candidate_top_k":
-				if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-					cmd.TopK = n
-				}
 			}
 		}
 		if strings.TrimSpace(cmd.Project) == "" {
@@ -204,7 +197,7 @@ func ParseCommand(raw string) (Command, bool, error) {
 // CommandUsage returns the help text for planning commands.
 func CommandUsage() string {
 	return `Planning control commands:
-- /plan start <project> [workdir] [agent=claude] [topk=5]
+- /plan start <project> [agent=claude]
 - /plan prompt [session]
 - /plan status [session]
 - /plan select <approach-id> [session]

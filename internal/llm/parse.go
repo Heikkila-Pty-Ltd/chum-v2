@@ -80,7 +80,6 @@ func cleanLLMArtifacts(text string) string {
 		"here is my plan",
 		"here's my plan",
 		"json output:",
-		"plan:",
 	}
 	lower := strings.ToLower(text)
 	for _, prefix := range prefixes {

@@ -92,7 +92,19 @@ func RunWithPrompt(cmd *exec.Cmd, prompt, agent string) (*CLIResult, error) {
 		return result, fmt.Errorf("%w: %s", ErrRateLimited, agent)
 	}
 
+	if result.ExitCode != 0 {
+		return result, fmt.Errorf("CLI %s exited with code %d: %s", agent, result.ExitCode, truncateOutput(result.Output, 200))
+	}
+
 	return result, nil
+}
+
+func truncateOutput(s string, maxLen int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // FilterEnv returns a copy of env with the named variable removed.

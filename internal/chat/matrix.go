@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -93,6 +94,42 @@ func ReadRoomMessages(ctx context.Context, cfg MatrixConfig, since string) ([]In
 	}
 
 	return messages, result.End, nil
+}
+
+// resolveMatrixUserID calls the Matrix /whoami endpoint to discover the
+// authenticated user's ID. Used to filter out the bot's own messages.
+func resolveMatrixUserID(ctx context.Context, cfg MatrixConfig) (string, error) {
+	endpoint := fmt.Sprintf("%s/_matrix/client/v3/account/whoami",
+		strings.TrimRight(cfg.Homeserver, "/"))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
+	if err != nil {
+		return "", fmt.Errorf("create whoami request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.AccessToken)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("whoami request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return "", fmt.Errorf("read whoami response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("whoami HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
+	}
+
+	var result struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("parse whoami: %w", err)
+	}
+	return result.UserID, nil
 }
 
 func truncate(s string, maxLen int) string {

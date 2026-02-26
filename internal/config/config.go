@@ -32,7 +32,6 @@ type Planning struct {
 	MaxCycles         int      `toml:"max_cycles"`
 	SignalTimeout     Duration `toml:"signal_timeout"`
 	SessionTimeout    Duration `toml:"session_timeout"`
-	MaxApproaches     int      `toml:"max_approaches"`
 	MaxResearchRounds int      `toml:"max_research_rounds"`
 	PollInterval      Duration `toml:"poll_interval"`
 	AllowedSenders    []string `toml:"allowed_senders"` // Matrix user IDs allowed to issue /plan commands (empty = allow all)
@@ -105,9 +104,6 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Planning.SessionTimeout.Duration == 0 {
 		cfg.Planning.SessionTimeout.Duration = 24 * time.Hour
-	}
-	if cfg.Planning.MaxApproaches == 0 {
-		cfg.Planning.MaxApproaches = 5
 	}
 	if cfg.Planning.MaxResearchRounds == 0 {
 		cfg.Planning.MaxResearchRounds = 3

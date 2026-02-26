@@ -152,12 +152,30 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 	summary := formatApproachesSummary(req.SessionID, goal, approaches)
 	notify(summary)
 
+	// Drain any signals that arrived during autonomous phases 1-4.
+	// Without this, a premature /plan select sent during research would
+	// fire immediately when the interactive selector starts.
+	drainChannel := func(ch workflow.ReceiveChannel) {
+		for {
+			var discard string
+			if !ch.ReceiveAsync(&discard) {
+				return
+			}
+			logger.Warn("Drained premature signal", "value", discard)
+		}
+	}
+	drainChannel(selectCh)
+	drainChannel(digCh)
+	drainChannel(questionCh)
+	drainChannel(greenlightCh)
+	drainChannel(approveDecompCh)
+
 	// ============================================================
 	// PHASES 5-7: Interactive loop → Decompose → Approve
 	// Wrapped in an outer cycle loop so decomp rejection or
 	// realignment returns to approach selection instead of cancelling.
 	// ============================================================
-	var selectedApproach *ResearchedApproach
+	var selectedApproach *ResearchedApproach // stored as a copy, not a pointer into the slice
 	maxResearchRounds := cfg.MaxResearchRounds
 	if maxResearchRounds <= 0 {
 		maxResearchRounds = 3
@@ -198,9 +216,10 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 				cancelTimer()
 				value = strings.TrimSpace(value)
 				for i := range approaches {
-					if approaches[i].ID == value || fmt.Sprintf("%d", approaches[i].Rank) == value {
+					if approaches[i].ID == value || (approaches[i].Rank > 0 && fmt.Sprintf("%d", approaches[i].Rank) == value) {
 						approaches[i].Status = "selected"
-						selectedApproach = &approaches[i]
+						copy := approaches[i] // store a copy, not a pointer into the slice
+						selectedApproach = &copy
 						logger.Info("Approach selected", "ID", approaches[i].ID, "Title", approaches[i].Title)
 						notify(fmt.Sprintf("Selected approach %d: %s\nSend `/plan go` to greenlight decomposition, or `/plan dig %s` for deeper research.",
 							approaches[i].Rank, approaches[i].Title, approaches[i].ID))
@@ -298,6 +317,7 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 			})
 
 			selector.AddFuture(timerFuture, func(f workflow.Future) {
+				cancelTimer() // clean up the timer context
 				timedOut = true
 			})
 
@@ -366,6 +386,7 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 			})
 
 			decompSelector.AddFuture(decompTimerFuture, func(f workflow.Future) {
+				decompTimerCancel() // clean up the timer context
 				notify("Decomposition approval waiting. Send `/plan approve` or `/plan realign`.")
 			})
 
