@@ -40,17 +40,22 @@ func SetupWorktree(ctx context.Context, baseDir, taskID string) (string, error) 
 	cmd.Dir = baseDir
 	_ = cmd.Run()
 
-	// Create the worktree on a new branch
-	cmd = exec.CommandContext(ctx, "git", "worktree", "add", "-b", branch, wtDir, "HEAD")
+	// Create the worktree on a new branch.
+	// Use -c core.hooksPath=/dev/null to bypass any project hooks (e.g. beads)
+	// that may reference tools not installed in the execution environment.
+	cmd = exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null",
+		"worktree", "add", "-b", branch, wtDir, "HEAD")
 	cmd.Dir = baseDir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git worktree add: %s: %w", string(out), err)
 	}
 
-	// Set git author in worktree so commits don't fail
+	// Configure the worktree: set author and disable hooks so the agent
+	// CLI doesn't trigger beads/bd hooks during its own git operations.
 	for _, kv := range [][2]string{
 		{"user.name", "CHUM v2"},
 		{"user.email", "chum@localhost"},
+		{"core.hooksPath", "/dev/null"},
 	} {
 		cmd = exec.CommandContext(ctx, "git", "config", kv[0], kv[1])
 		cmd.Dir = wtDir
