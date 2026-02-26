@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/admit"
 	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
@@ -13,6 +16,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/engine"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/health"
 )
 
 func main() {
@@ -49,11 +53,44 @@ func main() {
 
 	switch subcmd {
 	case "serve":
-		fmt.Println("CHUM v2 — starting worker")
-		if err := engine.StartWorker(cfg, d, logger); err != nil {
-			logger.Error("Worker failed", "error", err)
-			os.Exit(1)
-		}
+		fmt.Println("CHUM v2 — starting worker and health server")
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// Handle shutdown signals
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+		var wg sync.WaitGroup
+
+		// Start health server
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			healthServer := health.NewServer(cfg, logger)
+			if err := healthServer.Start(ctx, cfg.General.HealthPort); err != nil {
+				logger.Error("Health server failed", "error", err)
+			}
+		}()
+
+		// Start Temporal worker
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := engine.StartWorker(cfg, d, logger); err != nil {
+				logger.Error("Worker failed", "error", err)
+				cancel() // Signal other goroutines to stop
+			}
+		}()
+
+		// Wait for shutdown signal
+		<-sigCh
+		logger.Info("Shutdown signal received, stopping services...")
+		cancel()
+
+		wg.Wait()
+		logger.Info("All services stopped")
 
 	case "sync":
 		fmt.Println("CHUM v2 — syncing from beads")

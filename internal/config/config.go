@@ -33,6 +33,7 @@ type General struct {
 	TemporalNamespace string   `toml:"temporal_namespace"`
 	TaskQueue         string   `toml:"task_queue"`
 	DBPath            string   `toml:"db_path"`
+	HealthPort        string   `toml:"health_port"`
 	MatrixWebhookURL  string   `toml:"matrix_webhook_url"`
 	MatrixRoomID      string   `toml:"matrix_room_id"`
 	MatrixAccessToken string   `toml:"matrix_access_token"`
@@ -82,6 +83,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.General.DBPath == "" {
 		cfg.General.DBPath = "chum.db"
+	}
+	if cfg.General.HealthPort == "" {
+		cfg.General.HealthPort = ":8080"
 	}
 	return &cfg, nil
 }
