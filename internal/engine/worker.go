@@ -148,13 +148,23 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 			}
 		}
 
+		var allowedSenders map[string]bool
+		if len(cfg.Planning.AllowedSenders) > 0 {
+			allowedSenders = make(map[string]bool, len(cfg.Planning.AllowedSenders))
+			for _, s := range cfg.Planning.AllowedSenders {
+				allowedSenders[s] = true
+			}
+			logger.Info("Chat bridge sender allowlist active", "senders", len(allowedSenders))
+		}
+
 		bridge := &chat.Bridge{
-			Client:       c,
-			MatrixCfg:    matrixCfg,
-			PollInterval: cfg.Planning.PollInterval.Duration,
-			Logger:       logger,
-			TaskQueue:    cfg.General.TaskQueue,
-			DefaultAgent: defaultAgent,
+			Client:         c,
+			MatrixCfg:      matrixCfg,
+			PollInterval:   cfg.Planning.PollInterval.Duration,
+			Logger:         logger,
+			TaskQueue:      cfg.General.TaskQueue,
+			DefaultAgent:   defaultAgent,
+			AllowedSenders: allowedSenders,
 			CeremonyCfg: planning.PlanningCeremonyConfig{
 				MaxResearchRounds: cfg.Planning.MaxResearchRounds,
 				SignalTimeout:     cfg.Planning.SignalTimeout.Duration,

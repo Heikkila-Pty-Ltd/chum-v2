@@ -35,8 +35,7 @@ type Planning struct {
 	MaxApproaches     int      `toml:"max_approaches"`
 	MaxResearchRounds int      `toml:"max_research_rounds"`
 	PollInterval      Duration `toml:"poll_interval"`
-	CommandPrefix     string   `toml:"command_prefix"`
-	PushOnReady       bool     `toml:"push_on_ready"`
+	AllowedSenders    []string `toml:"allowed_senders"` // Matrix user IDs allowed to issue /plan commands (empty = allow all)
 }
 
 // General holds scheduler-level settings.
@@ -115,9 +114,6 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Planning.PollInterval.Duration == 0 {
 		cfg.Planning.PollInterval.Duration = 10 * time.Second
-	}
-	if cfg.Planning.CommandPrefix == "" {
-		cfg.Planning.CommandPrefix = "/plan"
 	}
 	return &cfg, nil
 }

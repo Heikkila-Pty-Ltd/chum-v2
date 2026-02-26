@@ -160,17 +160,19 @@ func main() {
 
 	case "plan":
 		// CLI fallback for planning ceremony (when Matrix is not available)
-		var project, agent string
+		var project, agent, goalID string
 		for i := 2; i < len(os.Args)-1; i++ {
 			switch os.Args[i] {
 			case "--project":
 				project = os.Args[i+1]
 			case "--agent":
 				agent = os.Args[i+1]
+			case "--goal":
+				goalID = os.Args[i+1]
 			}
 		}
-		if project == "" {
-			fmt.Fprintf(os.Stderr, "Usage: chum plan --project NAME [--agent claude]\n")
+		if project == "" || goalID == "" {
+			fmt.Fprintf(os.Stderr, "Usage: chum plan --project NAME --goal ISSUE_ID [--agent claude]\n")
 			os.Exit(1)
 		}
 		projCfg, ok := cfg.Projects[project]
@@ -193,8 +195,9 @@ func main() {
 		}
 		defer c.Close()
 
-		sessionID := fmt.Sprintf("planning-%s-%d", project, time.Now().Unix())
+		sessionID := fmt.Sprintf("planning-%s-%d", project, time.Now().UnixNano())
 		req := planning.PlanningRequest{
+			GoalID:    goalID,
 			Project:   project,
 			WorkDir:   projCfg.Workspace,
 			Agent:     agent,

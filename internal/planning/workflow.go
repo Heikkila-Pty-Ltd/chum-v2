@@ -39,6 +39,9 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 		cfg.MaxCycles = 3
 	}
 
+	// pa is nil — this is intentional. Temporal uses the method reference
+	// (e.g. pa.ClarifyGoalActivity) only to resolve the activity type name.
+	// The actual PlanningActivities instance is the one registered on the worker.
 	var pa *PlanningActivities
 
 	shortOpts := workflow.ActivityOptions{
@@ -47,7 +50,11 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 	}
 	researchOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 15 * time.Minute,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+		RetryPolicy: &temporal.RetryPolicy{
+			MaximumAttempts:    2,
+			InitialInterval:   5 * time.Second,
+			BackoffCoefficient: 2.0,
+		},
 	}
 	notifyOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
@@ -146,9 +153,10 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 	notify(summary)
 
 	// ============================================================
-	// PHASE 5: Interactive Signal Loop (human-driven)
+	// PHASES 5-7: Interactive loop → Decompose → Approve
+	// Wrapped in an outer cycle loop so decomp rejection or
+	// realignment returns to approach selection instead of cancelling.
 	// ============================================================
-	logger.Info("Phase: interactive")
 	var selectedApproach *ResearchedApproach
 	maxResearchRounds := cfg.MaxResearchRounds
 	if maxResearchRounds <= 0 {
@@ -159,205 +167,227 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 		signalTimeout = 30 * time.Minute
 	}
 	researchRound := 1
-	greenlightReceived := false
 
-	for !greenlightReceived {
-		if drainCancel() {
-			return &PlanningResult{GoalID: req.GoalID, Cancelled: true, CancelReason: cancelReason, Approaches: approaches}, nil
-		}
-
-		// Wait for any signal with timeout
-		selector := workflow.NewSelector(ctx)
-		timedOut := false
-
-		// Timer for signal timeout (configurable reminder)
-		timerCtx, cancelTimer := workflow.WithCancel(ctx)
-		timerFuture := workflow.NewTimer(timerCtx, signalTimeout)
-
-		selector.AddReceive(selectCh, func(ch workflow.ReceiveChannel, more bool) {
-			var value string
-			ch.Receive(ctx, &value)
-			cancelTimer()
-			value = strings.TrimSpace(value)
-			for i := range approaches {
-				if approaches[i].ID == value || fmt.Sprintf("%d", approaches[i].Rank) == value {
-					approaches[i].Status = "selected"
-					selectedApproach = &approaches[i]
-					logger.Info("Approach selected", "ID", approaches[i].ID, "Title", approaches[i].Title)
-					notify(fmt.Sprintf("Selected approach %d: %s\nSend `/plan go` to greenlight decomposition, or `/plan dig %s` for deeper research.",
-						approaches[i].Rank, approaches[i].Title, approaches[i].ID))
-					break
-				}
-			}
-		})
-
-		selector.AddReceive(digCh, func(ch workflow.ReceiveChannel, more bool) {
-			var value string
-			ch.Receive(ctx, &value)
-			cancelTimer()
-			if researchRound >= maxResearchRounds {
-				notify("Maximum research rounds reached. Please select an approach or realign.")
-				return
-			}
-			researchRound++
-
-			parts := strings.SplitN(value, "|", 2)
-			approachID := strings.TrimSpace(parts[0])
-			feedback := ""
-			if len(parts) > 1 {
-				feedback = strings.TrimSpace(parts[1])
-			}
-
-			// Find the approach to dig deeper on
-			var target *ResearchedApproach
-			for i := range approaches {
-				if approaches[i].ID == approachID || fmt.Sprintf("%d", approaches[i].Rank) == approachID {
-					target = &approaches[i]
-					break
-				}
-			}
-			if target == nil {
-				notify(fmt.Sprintf("Approach %q not found.", approachID))
-				return
-			}
-
-			notify(fmt.Sprintf("Researching approach %d deeper (round %d)...", target.Rank, researchRound))
-			deepCtx := workflow.WithActivityOptions(ctx, researchOpts)
-			var updated ResearchedApproach
-			if err := workflow.ExecuteActivity(deepCtx, pa.DeeperResearchActivity, req, *target, feedback).Get(ctx, &updated); err != nil {
-				logger.Warn("Deeper research failed", "error", err)
-				notify(fmt.Sprintf("Deeper research failed: %s", err))
-				return
-			}
-			// Update the approach in our list
-			for i := range approaches {
-				if approaches[i].ID == target.ID {
-					approaches[i] = updated
-					break
-				}
-			}
-			notify(formatSingleApproach(updated))
-		})
-
-		selector.AddReceive(questionCh, func(ch workflow.ReceiveChannel, more bool) {
-			var question string
-			ch.Receive(ctx, &question)
-			cancelTimer()
-
-			qCtx := workflow.WithActivityOptions(ctx, researchOpts)
-			var answer string
-			if err := workflow.ExecuteActivity(qCtx, pa.AnswerQuestionActivity, req, goal, approaches, question).Get(ctx, &answer); err != nil {
-				notify(fmt.Sprintf("Failed to answer: %s", err))
-				return
-			}
-			notify(fmt.Sprintf("Q: %s\n\nA: %s", question, answer))
-		})
-
-		selector.AddReceive(greenlightCh, func(ch workflow.ReceiveChannel, more bool) {
-			var decision string
-			ch.Receive(ctx, &decision)
-			cancelTimer()
-
-			decision = strings.ToUpper(strings.TrimSpace(decision))
-			if decision == "REALIGN" {
-				logger.Info("User requested realignment")
-				selectedApproach = nil
-				researchRound = 0
-				notify("Realigning. Research will restart with fresh context.\nSend `/plan dig <id>` or wait for new approaches.")
-				return
-			}
-			// GO — proceed to decomposition if an approach is selected
-			if selectedApproach == nil {
-				notify("No approach selected. Use `/plan select <id>` first, then `/plan go`.")
-				return
-			}
-			greenlightReceived = true
-		})
-
-		selector.AddReceive(cancelCh, func(ch workflow.ReceiveChannel, more bool) {
-			var reason string
-			ch.Receive(ctx, &reason)
-			cancelTimer()
-			cancelled = true
-			cancelReason = reason
-		})
-
-		selector.AddFuture(timerFuture, func(f workflow.Future) {
-			timedOut = true
-		})
-
-		selector.Select(ctx)
-
-		if cancelled {
-			return &PlanningResult{GoalID: req.GoalID, Cancelled: true, CancelReason: cancelReason, Approaches: approaches}, nil
-		}
-
-		if timedOut {
-			notify(fmt.Sprintf("Planning session %s is waiting for input. Send `/plan help` for commands.", req.SessionID))
-		}
-	}
-
-	// ============================================================
-	// PHASE 6: Decompose selected approach (autonomous, gated)
-	// ============================================================
-	logger.Info("Phase: decompose", "Approach", selectedApproach.Title)
-	notify(fmt.Sprintf("Decomposing approach: %s...", selectedApproach.Title))
-
-	decompCtx := workflow.WithActivityOptions(ctx, researchOpts)
 	var steps []DecompStep
-	if err := workflow.ExecuteActivity(decompCtx, pa.DecomposeApproachActivity, req, *selectedApproach).Get(ctx, &steps); err != nil {
-		logger.Error("Decomposition failed", "error", err)
-		notify(fmt.Sprintf("Decomposition failed: %s. Send `/plan go` to retry or `/plan realign` to restart.", err))
-		// TODO: loop back to interactive phase on decomp failure
-		return &PlanningResult{GoalID: req.GoalID, Approaches: approaches, SelectedApproach: selectedApproach}, nil
+	handoffReady := false
+
+	for cycle := 0; cycle < cfg.MaxCycles && !handoffReady; cycle++ {
+		if cycle > 0 {
+			logger.Info("Returning to approach selection", "Cycle", cycle+1)
+		}
+
+		// ── PHASE 5: Interactive Signal Loop (human-driven) ──
+		logger.Info("Phase: interactive", "Cycle", cycle+1)
+		selectedApproach = nil
+		greenlightReceived := false
+
+		for !greenlightReceived {
+			if drainCancel() {
+				return &PlanningResult{GoalID: req.GoalID, Cancelled: true, CancelReason: cancelReason, Approaches: approaches}, nil
+			}
+
+			selector := workflow.NewSelector(ctx)
+			timedOut := false
+
+			timerCtx, cancelTimer := workflow.WithCancel(ctx)
+			timerFuture := workflow.NewTimer(timerCtx, signalTimeout)
+
+			selector.AddReceive(selectCh, func(ch workflow.ReceiveChannel, more bool) {
+				var value string
+				ch.Receive(ctx, &value)
+				cancelTimer()
+				value = strings.TrimSpace(value)
+				for i := range approaches {
+					if approaches[i].ID == value || fmt.Sprintf("%d", approaches[i].Rank) == value {
+						approaches[i].Status = "selected"
+						selectedApproach = &approaches[i]
+						logger.Info("Approach selected", "ID", approaches[i].ID, "Title", approaches[i].Title)
+						notify(fmt.Sprintf("Selected approach %d: %s\nSend `/plan go` to greenlight decomposition, or `/plan dig %s` for deeper research.",
+							approaches[i].Rank, approaches[i].Title, approaches[i].ID))
+						break
+					}
+				}
+			})
+
+			selector.AddReceive(digCh, func(ch workflow.ReceiveChannel, more bool) {
+				var value string
+				ch.Receive(ctx, &value)
+				cancelTimer()
+				if researchRound >= maxResearchRounds {
+					notify("Maximum research rounds reached. Please select an approach or realign.")
+					return
+				}
+				researchRound++
+
+				parts := strings.SplitN(value, "|", 2)
+				approachID := strings.TrimSpace(parts[0])
+				feedback := ""
+				if len(parts) > 1 {
+					feedback = strings.TrimSpace(parts[1])
+				}
+
+				var target *ResearchedApproach
+				for i := range approaches {
+					if approaches[i].ID == approachID || fmt.Sprintf("%d", approaches[i].Rank) == approachID {
+						target = &approaches[i]
+						break
+					}
+				}
+				if target == nil {
+					notify(fmt.Sprintf("Approach %q not found.", approachID))
+					return
+				}
+
+				notify(fmt.Sprintf("Researching approach %d deeper (round %d)...", target.Rank, researchRound))
+				deepCtx := workflow.WithActivityOptions(ctx, researchOpts)
+				var updated ResearchedApproach
+				if err := workflow.ExecuteActivity(deepCtx, pa.DeeperResearchActivity, req, *target, feedback).Get(ctx, &updated); err != nil {
+					logger.Warn("Deeper research failed", "error", err)
+					notify(fmt.Sprintf("Deeper research failed: %s", err))
+					return
+				}
+				for i := range approaches {
+					if approaches[i].ID == target.ID {
+						approaches[i] = updated
+						break
+					}
+				}
+				notify(formatSingleApproach(updated))
+			})
+
+			selector.AddReceive(questionCh, func(ch workflow.ReceiveChannel, more bool) {
+				var question string
+				ch.Receive(ctx, &question)
+				cancelTimer()
+
+				qCtx := workflow.WithActivityOptions(ctx, researchOpts)
+				var answer string
+				if err := workflow.ExecuteActivity(qCtx, pa.AnswerQuestionActivity, req, goal, approaches, question).Get(ctx, &answer); err != nil {
+					notify(fmt.Sprintf("Failed to answer: %s", err))
+					return
+				}
+				notify(fmt.Sprintf("Q: %s\n\nA: %s", question, answer))
+			})
+
+			selector.AddReceive(greenlightCh, func(ch workflow.ReceiveChannel, more bool) {
+				var decision string
+				ch.Receive(ctx, &decision)
+				cancelTimer()
+
+				decision = strings.ToUpper(strings.TrimSpace(decision))
+				if decision == "REALIGN" {
+					logger.Info("User requested realignment")
+					selectedApproach = nil
+					researchRound = 0
+					notify("Realigning. Selection cleared — use `/plan dig <id>` to research further, then `/plan select <id>` and `/plan go`.")
+					return
+				}
+				if selectedApproach == nil {
+					notify("No approach selected. Use `/plan select <id>` first, then `/plan go`.")
+					return
+				}
+				greenlightReceived = true
+			})
+
+			selector.AddReceive(cancelCh, func(ch workflow.ReceiveChannel, more bool) {
+				var reason string
+				ch.Receive(ctx, &reason)
+				cancelTimer()
+				cancelled = true
+				cancelReason = reason
+			})
+
+			selector.AddFuture(timerFuture, func(f workflow.Future) {
+				timedOut = true
+			})
+
+			selector.Select(ctx)
+
+			if cancelled {
+				return &PlanningResult{GoalID: req.GoalID, Cancelled: true, CancelReason: cancelReason, Approaches: approaches}, nil
+			}
+
+			if timedOut {
+				notify(fmt.Sprintf("Planning session %s is waiting for input. Send `/plan help` for commands.", req.SessionID))
+			}
+		}
+
+		// ── PHASE 6: Decompose selected approach (autonomous) ──
+		logger.Info("Phase: decompose", "Approach", selectedApproach.Title)
+		notify(fmt.Sprintf("Decomposing approach: %s...", selectedApproach.Title))
+
+		decompCtx := workflow.WithActivityOptions(ctx, researchOpts)
+		if err := workflow.ExecuteActivity(decompCtx, pa.DecomposeApproachActivity, req, *selectedApproach).Get(ctx, &steps); err != nil {
+			logger.Error("Decomposition failed", "error", err)
+			notify(fmt.Sprintf("Decomposition failed: %s\nReturning to approach selection. Use `/plan go` to retry or `/plan select <id>` to pick a different approach.", err))
+			continue // loop back to phase 5
+		}
+
+		decompSummary := formatDecompSummary(selectedApproach.Title, steps)
+		notify(decompSummary + "\n\nSend `/plan approve` to create subtasks or `/plan realign` to go back.")
+
+		// ── PHASE 7: Decomposition Approval Gate (human) ──
+		logger.Info("Phase: approve decomposition")
+		approved := false
+		rejected := false
+
+		for !approved && !rejected {
+			decompSelector := workflow.NewSelector(ctx)
+
+			// Timeout for decomp approval — same as signal timeout
+			decompTimerCtx, decompTimerCancel := workflow.WithCancel(ctx)
+			decompTimerFuture := workflow.NewTimer(decompTimerCtx, signalTimeout)
+
+			decompSelector.AddReceive(approveDecompCh, func(ch workflow.ReceiveChannel, more bool) {
+				var sig string
+				ch.Receive(ctx, &sig)
+				decompTimerCancel()
+				approved = true
+			})
+
+			decompSelector.AddReceive(greenlightCh, func(ch workflow.ReceiveChannel, more bool) {
+				var decision string
+				ch.Receive(ctx, &decision)
+				decompTimerCancel()
+				decision = strings.ToUpper(strings.TrimSpace(decision))
+				if decision == "GO" {
+					approved = true
+				} else {
+					rejected = true
+				}
+			})
+
+			decompSelector.AddReceive(cancelCh, func(ch workflow.ReceiveChannel, more bool) {
+				var reason string
+				ch.Receive(ctx, &reason)
+				decompTimerCancel()
+				cancelled = true
+				cancelReason = reason
+			})
+
+			decompSelector.AddFuture(decompTimerFuture, func(f workflow.Future) {
+				notify("Decomposition approval waiting. Send `/plan approve` or `/plan realign`.")
+			})
+
+			decompSelector.Select(ctx)
+
+			if cancelled {
+				return &PlanningResult{GoalID: req.GoalID, Cancelled: true, CancelReason: cancelReason, Approaches: approaches, SelectedApproach: selectedApproach}, nil
+			}
+		}
+
+		if approved {
+			handoffReady = true
+		} else {
+			// rejected — loop back to approach selection
+			notify("Decomposition rejected. Returning to approach selection.")
+			logger.Info("Decomposition rejected, returning to interactive phase")
+		}
 	}
 
-	// Push decomposition to chat for approval
-	decompSummary := formatDecompSummary(selectedApproach.Title, steps)
-	notify(decompSummary + "\n\nSend `/plan approve` to create subtasks or `/plan realign` to go back.")
-
-	// ============================================================
-	// PHASE 7: Decomposition Approval Gate (human)
-	// ============================================================
-	logger.Info("Phase: approve decomposition")
-	approved := false
-
-	for !approved {
-		decompSelector := workflow.NewSelector(ctx)
-
-		decompSelector.AddReceive(approveDecompCh, func(ch workflow.ReceiveChannel, more bool) {
-			var sig string
-			ch.Receive(ctx, &sig)
-			approved = true
-		})
-
-		decompSelector.AddReceive(greenlightCh, func(ch workflow.ReceiveChannel, more bool) {
-			var decision string
-			ch.Receive(ctx, &decision)
-			decision = strings.ToUpper(strings.TrimSpace(decision))
-			if decision == "GO" {
-				approved = true
-			} else {
-				// REALIGN — go back
-				notify("Decomposition rejected. Returning to approach selection.")
-				// For now, cancel. TODO: loop back to interactive phase.
-				cancelled = true
-				cancelReason = "decomp_rejected"
-			}
-		})
-
-		decompSelector.AddReceive(cancelCh, func(ch workflow.ReceiveChannel, more bool) {
-			var reason string
-			ch.Receive(ctx, &reason)
-			cancelled = true
-			cancelReason = reason
-		})
-
-		decompSelector.Select(ctx)
-
-		if cancelled {
-			return &PlanningResult{GoalID: req.GoalID, Cancelled: true, CancelReason: cancelReason, Approaches: approaches, SelectedApproach: selectedApproach}, nil
-		}
+	if !handoffReady {
+		notify("Maximum ceremony cycles reached. Planning session ending.")
+		return &PlanningResult{GoalID: req.GoalID, Approaches: approaches, SelectedApproach: selectedApproach}, nil
 	}
 
 	// ============================================================

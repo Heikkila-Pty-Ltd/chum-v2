@@ -20,13 +20,14 @@ import (
 // Bridge polls a Matrix room for /plan commands and routes them to Temporal
 // workflow signals. It also sends push notifications from workflows to chat.
 type Bridge struct {
-	Client       client.Client
-	MatrixCfg    MatrixConfig
-	PollInterval time.Duration
-	Logger       *slog.Logger
-	TaskQueue    string
-	DefaultAgent string                       // default LLM agent (e.g. "claude")
-	CeremonyCfg  planning.PlanningCeremonyConfig // ceremony-level knobs
+	Client         client.Client
+	MatrixCfg      MatrixConfig
+	PollInterval   time.Duration
+	Logger         *slog.Logger
+	TaskQueue      string
+	DefaultAgent   string                         // default LLM agent (e.g. "claude")
+	CeremonyCfg    planning.PlanningCeremonyConfig // ceremony-level knobs
+	AllowedSenders map[string]bool                // Matrix user IDs allowed to issue commands (nil = allow all)
 
 	mu           sync.Mutex
 	activeByRoom map[string]string // roomID → active planning session workflow ID
@@ -74,6 +75,10 @@ func (b *Bridge) poll(ctx context.Context) {
 	for _, msg := range msgs {
 		cmd, matched, parseErr := ParseCommand(msg.Body)
 		if !matched {
+			continue
+		}
+		if b.AllowedSenders != nil && !b.AllowedSenders[msg.Sender] {
+			b.Logger.Warn("Rejected planning command from unauthorized sender", "sender", msg.Sender)
 			continue
 		}
 		if parseErr != nil {
@@ -132,7 +137,7 @@ func (b *Bridge) handleCommand(ctx context.Context, msg InboundMessage, cmd Comm
 }
 
 func (b *Bridge) startPlanning(ctx context.Context, msg InboundMessage, cmd Command) error {
-	sessionID := fmt.Sprintf("planning-%s-%d", cmd.Project, time.Now().Unix())
+	sessionID := fmt.Sprintf("planning-%s-%d", cmd.Project, time.Now().UnixNano())
 
 	opts := client.StartWorkflowOptions{
 		ID:        sessionID,
