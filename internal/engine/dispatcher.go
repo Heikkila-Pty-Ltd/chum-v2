@@ -3,6 +3,9 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"os/exec"
+	"strings"
 	"time"
 
 	"go.temporal.io/api/enums/v1"
@@ -94,6 +97,7 @@ type DispatchCandidate struct {
 type DispatchActivities struct {
 	DAG    *dag.DAG
 	Config *config.Config
+	Logger *slog.Logger
 }
 
 // MarkTaskRunningActivity marks a task as "running" in the DAG.
@@ -110,6 +114,9 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 		if !project.Enabled {
 			continue
 		}
+
+		// Pull latest master so agents start from current code
+		pullMaster(ctx, project.Workspace, da.Logger)
 
 		tasks, err := da.DAG.GetReadyNodes(ctx, projectName)
 		if err != nil {
@@ -143,6 +150,35 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 	}
 
 	return candidates, nil
+}
+
+// pullMaster fetches and fast-forwards master so agents start from the latest code.
+// Non-fatal — if it fails, we proceed with whatever we have.
+func pullMaster(ctx context.Context, workDir string, logger *slog.Logger) {
+	cmd := exec.CommandContext(ctx, "git", "fetch", "origin", "master")
+	cmd.Dir = workDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// Try "main" if "master" doesn't exist
+		cmd = exec.CommandContext(ctx, "git", "fetch", "origin", "main")
+		cmd.Dir = workDir
+		if out2, err2 := cmd.CombinedOutput(); err2 != nil {
+			logger.Warn("Failed to fetch from origin",
+				"WorkDir", workDir,
+				"Error", strings.TrimSpace(string(out)),
+				"Error2", strings.TrimSpace(string(out2)))
+			return
+		}
+	}
+	// Fast-forward the local branch to match origin
+	cmd = exec.CommandContext(ctx, "git", "merge", "--ff-only", "FETCH_HEAD")
+	cmd.Dir = workDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		logger.Warn("Failed to fast-forward master",
+			"WorkDir", workDir,
+			"Output", strings.TrimSpace(string(out)))
+	} else {
+		logger.Info("Pulled latest from origin", "WorkDir", workDir)
+	}
 }
 
 func pickProvider(cfg *config.Config) (cli, model string) {

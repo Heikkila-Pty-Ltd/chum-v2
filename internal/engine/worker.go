@@ -48,6 +48,7 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	da := &DispatchActivities{
 		DAG:    d,
 		Config: cfg,
+		Logger: logger,
 	}
 	w.RegisterActivity(da)
 
