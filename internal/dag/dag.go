@@ -185,6 +185,130 @@ func (d *DAG) CreateTask(ctx context.Context, t Task) (string, error) {
 	return t.ID, nil
 }
 
+// CreateSubtasksAtomic creates subtasks, wires sequential dependencies, rewires
+// parent dependents to the last subtask, and marks the parent as "decomposed" —
+// all in a single transaction. If any step fails, everything is rolled back.
+func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks []Task) ([]string, error) {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var ids []string
+	for _, t := range tasks {
+		if t.ID == "" {
+			id, err := generateTaskID(t.Project)
+			if err != nil {
+				return nil, fmt.Errorf("generate id: %w", err)
+			}
+			t.ID = id
+		}
+		labelsJSON, _ := json.Marshal(t.Labels)
+		if t.Labels == nil {
+			labelsJSON = []byte("[]")
+		}
+		status := t.Status
+		if status == "" {
+			status = "open"
+		}
+		taskType := t.Type
+		if taskType == "" {
+			taskType = "task"
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO tasks
+			(id, title, description, status, priority, type, assignee, labels,
+			 estimate_minutes, parent_id, acceptance, project, error_log)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			t.ID, t.Title, t.Description, status, t.Priority, taskType,
+			t.Assignee, string(labelsJSON), t.EstimateMinutes,
+			t.ParentID, t.Acceptance, t.Project, t.ErrorLog,
+		); err != nil {
+			return nil, fmt.Errorf("insert subtask %q: %w", t.Title, err)
+		}
+		ids = append(ids, t.ID)
+	}
+
+	// Wire sequential dependencies: step[i+1] depends on step[i]
+	for i := 1; i < len(ids); i++ {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT OR IGNORE INTO task_edges (from_task, to_task, source) VALUES (?, ?, 'beads')",
+			ids[i], ids[i-1]); err != nil {
+			return nil, fmt.Errorf("add subtask edge %s→%s: %w", ids[i], ids[i-1], err)
+		}
+	}
+
+	// Inherit: parent's own prerequisites (to_task entries where from_task = parent)
+	// become prerequisites of the first subtask, so S1 won't run before them.
+	firstSubtask := ids[0]
+	prereqRows, err := tx.QueryContext(ctx,
+		"SELECT to_task FROM task_edges WHERE from_task = ?", parentID)
+	if err != nil {
+		return nil, fmt.Errorf("get parent prerequisites: %w", err)
+	}
+	var prereqs []string
+	for prereqRows.Next() {
+		var p string
+		if err := prereqRows.Scan(&p); err != nil {
+			prereqRows.Close()
+			return nil, err
+		}
+		prereqs = append(prereqs, p)
+	}
+	prereqRows.Close()
+
+	for _, prereq := range prereqs {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT OR IGNORE INTO task_edges (from_task, to_task, source) VALUES (?, ?, 'beads')",
+			firstSubtask, prereq); err != nil {
+			return nil, fmt.Errorf("inherit prereq edge %s→%s: %w", firstSubtask, prereq, err)
+		}
+	}
+
+	// Rewire: dependents of parent now depend on the last subtask
+	lastSubtask := ids[len(ids)-1]
+	rows, err := tx.QueryContext(ctx,
+		"SELECT from_task FROM task_edges WHERE to_task = ?", parentID)
+	if err != nil {
+		return nil, fmt.Errorf("get parent dependents: %w", err)
+	}
+	var dependents []string
+	for rows.Next() {
+		var dep string
+		if err := rows.Scan(&dep); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		dependents = append(dependents, dep)
+	}
+	rows.Close()
+
+	for _, dep := range dependents {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT OR IGNORE INTO task_edges (from_task, to_task, source) VALUES (?, ?, 'beads')",
+			dep, lastSubtask); err != nil {
+			return nil, fmt.Errorf("rewire edge %s→%s: %w", dep, lastSubtask, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			"DELETE FROM task_edges WHERE from_task = ? AND to_task = ?",
+			dep, parentID); err != nil {
+			return nil, fmt.Errorf("remove old edge %s→%s: %w", dep, parentID, err)
+		}
+	}
+
+	// Mark parent as decomposed
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE tasks SET status = 'decomposed', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		parentID); err != nil {
+		return nil, fmt.Errorf("mark parent decomposed: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return ids, nil
+}
+
 // GetTask retrieves a task by ID.
 func (d *DAG) GetTask(ctx context.Context, id string) (Task, error) {
 	row := d.db.QueryRowContext(ctx,

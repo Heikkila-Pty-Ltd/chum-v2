@@ -406,6 +406,90 @@ func TestGetDependents(t *testing.T) {
 	}
 }
 
+func TestCreateSubtasksAtomic_RewiresEdges(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	// Setup: prereq → parent → downstream
+	d.CreateTask(ctx, Task{ID: "prereq", Project: "p", Status: "completed"})
+	d.CreateTask(ctx, Task{ID: "parent", Project: "p", Status: "running"})
+	d.CreateTask(ctx, Task{ID: "downstream", Project: "p", Status: "ready"})
+	d.AddEdge(ctx, "parent", "prereq")       // parent depends on prereq
+	d.AddEdge(ctx, "downstream", "parent")   // downstream depends on parent
+
+	// Decompose parent into 2 subtasks
+	ids, err := d.CreateSubtasksAtomic(ctx, "parent", []Task{
+		{Title: "S1", Description: "step 1", Project: "p"},
+		{Title: "S2", Description: "step 2", Project: "p"},
+	})
+	if err != nil {
+		t.Fatalf("CreateSubtasksAtomic: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 subtask IDs, got %d", len(ids))
+	}
+
+	// Parent should be "decomposed"
+	parent, _ := d.GetTask(ctx, "parent")
+	if parent.Status != "decomposed" {
+		t.Fatalf("parent status = %q, want decomposed", parent.Status)
+	}
+
+	// S1 should inherit prereq dependency
+	s1Deps, _ := d.GetDependents(ctx, "prereq")
+	foundS1 := false
+	for _, dep := range s1Deps {
+		if dep == ids[0] {
+			foundS1 = true
+		}
+	}
+	if !foundS1 {
+		t.Fatalf("S1 (%s) should depend on prereq, dependents of prereq = %v", ids[0], s1Deps)
+	}
+
+	// Downstream should now depend on S2 (last subtask), not parent
+	s2Deps, _ := d.GetDependents(ctx, ids[1])
+	foundDownstream := false
+	for _, dep := range s2Deps {
+		if dep == "downstream" {
+			foundDownstream = true
+		}
+	}
+	if !foundDownstream {
+		t.Fatalf("downstream should depend on S2 (%s), dependents of S2 = %v", ids[1], s2Deps)
+	}
+
+	// Downstream should NOT depend on parent anymore
+	parentDeps, _ := d.GetDependents(ctx, "parent")
+	for _, dep := range parentDeps {
+		if dep == "downstream" {
+			t.Fatal("downstream should no longer depend on parent")
+		}
+	}
+
+	// S2 should depend on S1 (sequential wiring)
+	s1AsDep, _ := d.GetDependents(ctx, ids[0])
+	foundS2 := false
+	for _, dep := range s1AsDep {
+		if dep == ids[1] {
+			foundS2 = true
+		}
+	}
+	if !foundS2 {
+		t.Fatalf("S2 should depend on S1, dependents of S1 = %v", s1AsDep)
+	}
+
+	// With prereq completed and S1+S2 as open, downstream should NOT be ready
+	// (it depends on S2 which is open)
+	ready, _ := d.GetReadyNodes(ctx, "p")
+	for _, r := range ready {
+		if r.ID == "downstream" {
+			t.Fatal("downstream should not be ready while S2 is open")
+		}
+	}
+}
+
 func TestAddEdgeWithSource(t *testing.T) {
 	t.Parallel()
 	d := newTestDAG(t)

@@ -48,13 +48,15 @@ func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*D
 }
 
 // CreateSubtasksActivity creates DAG tasks from decomposition steps,
-// wires sequential dependencies, and marks the parent as "decomposed".
+// wires sequential dependencies, rewires parent dependents to the last
+// subtask, and marks the parent as "decomposed" — all atomically.
+// If any step fails, the entire operation is rolled back (no partial children).
 func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, project string, steps []DecompStep) ([]string, error) {
 	logger := activity.GetLogger(ctx)
-	var ids []string
 
+	var tasks []dag.Task
 	for _, step := range steps {
-		task := dag.Task{
+		tasks = append(tasks, dag.Task{
 			Title:           step.Title,
 			Description:     step.Description,
 			Status:          "open",
@@ -62,45 +64,15 @@ func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, proje
 			Acceptance:      step.Acceptance,
 			EstimateMinutes: step.Estimate,
 			Project:         project,
-		}
-		id, err := a.DAG.CreateTask(ctx, task)
-		if err != nil {
-			return nil, fmt.Errorf("create subtask %q: %w", step.Title, err)
-		}
-		ids = append(ids, id)
-		logger.Info("Created subtask", "ID", id, "Title", step.Title, "Parent", parentID)
+		})
 	}
 
-	// Wire sequential dependencies: step[i+1] depends on step[i]
-	for i := 1; i < len(ids); i++ {
-		if err := a.DAG.AddEdge(ctx, ids[i], ids[i-1]); err != nil {
-			logger.Warn("Failed to add subtask edge", "from", ids[i], "to", ids[i-1], "error", err)
-		}
-	}
-
-	// Rewire: any task that depended on the parent now depends on the last subtask.
-	// Without this, dependents would block forever since "decomposed" != "completed".
-	lastSubtask := ids[len(ids)-1]
-	dependents, err := a.DAG.GetDependents(ctx, parentID)
+	ids, err := a.DAG.CreateSubtasksAtomic(ctx, parentID, tasks)
 	if err != nil {
-		logger.Warn("Failed to get parent dependents for rewiring", "parentID", parentID, "error", err)
-	} else {
-		for _, dep := range dependents {
-			if err := a.DAG.AddEdge(ctx, dep, lastSubtask); err != nil {
-				logger.Warn("Failed to add rewired edge", "from", dep, "to", lastSubtask, "error", err)
-			}
-			if err := a.DAG.RemoveEdge(ctx, dep, parentID); err != nil {
-				logger.Warn("Failed to remove old edge", "from", dep, "to", parentID, "error", err)
-			}
-			logger.Info("Rewired dependency", "dependent", dep, "oldDep", parentID, "newDep", lastSubtask)
-		}
+		return nil, fmt.Errorf("create subtasks for %s: %w", parentID, err)
 	}
 
-	// Mark parent as decomposed
-	if err := a.DAG.UpdateTaskStatus(ctx, parentID, "decomposed"); err != nil {
-		logger.Warn("Failed to mark parent as decomposed", "parentID", parentID, "error", err)
-	}
-
+	logger.Info("Created subtasks atomically", "Parent", parentID, "Count", len(ids), "IDs", ids)
 	return ids, nil
 }
 
