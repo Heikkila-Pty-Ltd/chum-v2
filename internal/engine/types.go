@@ -1,6 +1,8 @@
 // Package engine implements the Temporal workflows and activities for CHUM v2.
 package engine
 
+import gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
+
 // TaskRequest is the input to the AgentWorkflow.
 // Tasks arrive fully planned and scoped from beads — description, acceptance
 // criteria, and design notes are all in the Prompt field.
@@ -20,11 +22,7 @@ type ExecResult struct {
 }
 
 // PRInfo captures pull request metadata needed by the workflow.
-type PRInfo struct {
-	Number  int    `json:"number"`
-	HeadSHA string `json:"head_sha"`
-	URL     string `json:"url"`
-}
+type PRInfo = gitpkg.PRInfo
 
 // ReviewDraft is the parsed output of the reviewer model in print mode.
 type ReviewDraft struct {

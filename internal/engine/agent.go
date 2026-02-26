@@ -51,10 +51,12 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	var worktreePath string
 	if err := workflow.ExecuteActivity(wtCtx, a.SetupWorktreeActivity, baseWorkDir, req.TaskID).Get(ctx, &worktreePath); err != nil {
 		logger.Error("Worktree setup failed — refusing to work on master", "error", err)
-		_ = closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+		if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
 			Reason:    CloseNeedsReview,
 			SubReason: "worktree_failed",
-		})
+		}); cerr != nil {
+			return fmt.Errorf("worktree setup failed: %w (close/notify failed: %v)", err, cerr)
+		}
 		return fmt.Errorf("worktree setup failed (will not work on master): %w", err)
 	}
 	req.WorkDir = worktreePath
@@ -77,10 +79,12 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	var execResult ExecResult
 	if err := workflow.ExecuteActivity(execCtx, a.ExecuteActivity, req).Get(ctx, &execResult); err != nil {
 		logger.Error("Execute failed", "error", err)
-		_ = closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+		if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
 			Reason:    CloseNeedsReview,
 			SubReason: "exec_failed",
-		})
+		}); cerr != nil {
+			return fmt.Errorf("execute failed: %w (close/notify failed: %v)", err, cerr)
+		}
 		return fmt.Errorf("execute failed: %w", err)
 	}
 	logger.Info("Execute complete", "ExitCode", execResult.ExitCode)
@@ -90,19 +94,23 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	var dodResult gitpkg.DoDResult
 	if err := workflow.ExecuteActivity(dodCtx, a.DoDCheckActivity, req.WorkDir, req.Project).Get(ctx, &dodResult); err != nil {
 		logger.Error("DoD check error", "error", err)
-		_ = closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+		if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
 			Reason:    CloseNeedsReview,
 			SubReason: "dod_error",
-		})
+		}); cerr != nil {
+			return fmt.Errorf("DoD error: %w (close/notify failed: %v)", err, cerr)
+		}
 		return fmt.Errorf("DoD error: %w", err)
 	}
 
 	if !dodResult.Passed {
 		logger.Warn("DoD FAILED — closing task", "Failures", dodResult.Failures)
-		_ = closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+		if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
 			Reason:    CloseDoDFailed,
 			SubReason: "dod_failed",
-		})
+		}); cerr != nil {
+			return fmt.Errorf("DoD failed: %v (close/notify failed: %v)", dodResult.Failures, cerr)
+		}
 		return fmt.Errorf("DoD failed: %v", dodResult.Failures)
 	}
 
@@ -288,9 +296,25 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			}
 
 			var refreshed PRInfo
-			if err := workflow.ExecuteActivity(prCtx, a.GetPRInfoActivity, req.WorkDir, prInfo.Number).Get(ctx, &refreshed); err == nil && refreshed.HeadSHA != "" {
-				prInfo = refreshed
+			if err := workflow.ExecuteActivity(prCtx, a.GetPRInfoActivity, req.WorkDir, prInfo.Number).Get(ctx, &refreshed); err != nil {
+				logger.Error("Failed to refresh PR head SHA after push", "error", err)
+				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+					Reason:    CloseNeedsReview,
+					SubReason: "reviewer_error",
+					PRNumber:  prInfo.Number,
+					ReviewURL: state.ReviewURL,
+				})
 			}
+			if refreshed.HeadSHA == "" {
+				logger.Error("Refreshed PR metadata missing head SHA", "PR", prInfo.Number)
+				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+					Reason:    CloseNeedsReview,
+					SubReason: "reviewer_error",
+					PRNumber:  prInfo.Number,
+					ReviewURL: state.ReviewURL,
+				})
+			}
+			prInfo = refreshed
 
 		case ReviewNoActivity:
 			return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
@@ -362,10 +386,16 @@ func augmentPromptWithReviewFeedback(prompt string, round int, feedback string) 
 func closeAndNotify(ctx workflow.Context, opts workflow.ActivityOptions, taskID string, detail CloseDetail) error {
 	var a *Activities
 	actCtx := workflow.WithActivityOptions(ctx, opts)
-	_ = workflow.ExecuteActivity(actCtx, a.CloseTaskWithDetailActivity, taskID, detail).Get(ctx, nil)
+	closeErr := workflow.ExecuteActivity(actCtx, a.CloseTaskWithDetailActivity, taskID, detail).Get(ctx, nil)
 
 	message := fmt.Sprintf("task=%s reason=%s sub_reason=%s pr=%d review=%s",
 		taskID, detail.Reason, detail.SubReason, detail.PRNumber, detail.ReviewURL)
-	_ = workflow.ExecuteActivity(actCtx, a.NotifyActivity, message).Get(ctx, nil)
+	notifyErr := workflow.ExecuteActivity(actCtx, a.NotifyActivity, message).Get(ctx, nil)
+	if closeErr != nil {
+		return fmt.Errorf("close task failed: %w", closeErr)
+	}
+	if notifyErr != nil {
+		return fmt.Errorf("notify failed: %w", notifyErr)
+	}
 	return nil
 }

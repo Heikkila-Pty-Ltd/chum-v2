@@ -162,11 +162,7 @@ func (a *Activities) CreatePRInfoActivity(ctx context.Context, workDir, title st
 	if err != nil {
 		return nil, err
 	}
-	return &PRInfo{
-		Number:  info.Number,
-		HeadSHA: info.HeadRefOID,
-		URL:     info.URL,
-	}, nil
+	return info, nil
 }
 
 // GetPRInfoActivity returns metadata for an existing pull request.
@@ -175,11 +171,7 @@ func (a *Activities) GetPRInfoActivity(ctx context.Context, workDir string, prNu
 	if err != nil {
 		return nil, err
 	}
-	return &PRInfo{
-		Number:  info.Number,
-		HeadSHA: info.HeadRefOID,
-		URL:     info.URL,
-	}, nil
+	return info, nil
 }
 
 // --- 6. CloseTaskActivity ---

@@ -167,9 +167,9 @@ type DoDResult struct {
 
 // PRInfo captures pull request metadata from gh.
 type PRInfo struct {
-	Number     int    `json:"number"`
-	HeadRefOID string `json:"headRefOid"`
-	URL        string `json:"url"`
+	Number  int    `json:"number"`
+	HeadSHA string `json:"headRefOid"`
+	URL     string `json:"url"`
 }
 
 // RunDoDChecks validates worktree integrity, checks for actual changes,

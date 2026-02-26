@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"go.temporal.io/sdk/activity"
 )
@@ -129,28 +127,22 @@ func (a *Activities) SubmitReviewActivity(ctx context.Context, workDir string, p
 
 // CheckPRStateActivity reads review state from GitHub scoped by reviewer+SHA+round.
 func (a *Activities) CheckPRStateActivity(ctx context.Context, workDir string, prNumber, round int, reviewerLogin, headSHA string) (*ReviewResult, error) {
-	for attempt := 0; attempt < 3; attempt++ {
-		reviews, err := listPRReviews(ctx, workDir, prNumber)
-		if err != nil {
-			return &ReviewResult{
-				Outcome: ReviewerFailed,
-				Reason:  err.Error(),
-			}, nil
-		}
-
-		match, ok := findLatestMatchingReview(reviews, reviewerLogin, headSHA, round)
-		if ok {
-			return &ReviewResult{
-				Outcome:   reviewStateToOutcome(match.State),
-				Reason:    "matched review state",
-				ReviewURL: match.HTMLURL,
-				Comments:  match.Body,
-				ReviewID:  match.ID,
-			}, nil
-		}
-		if attempt < 2 {
-			time.Sleep(2 * time.Second)
-		}
+	reviews, err := listPRReviews(ctx, workDir, prNumber)
+	if err != nil {
+		return &ReviewResult{
+			Outcome: ReviewerFailed,
+			Reason:  err.Error(),
+		}, nil
+	}
+	match, ok := findLatestMatchingReview(reviews, reviewerLogin, headSHA, round)
+	if ok {
+		return &ReviewResult{
+			Outcome:   reviewStateToOutcome(match.State),
+			Reason:    "matched review state",
+			ReviewURL: match.HTMLURL,
+			Comments:  match.Body,
+			ReviewID:  match.ID,
+		}, nil
 	}
 
 	return &ReviewResult{
@@ -214,21 +206,6 @@ func (a *Activities) MergePRActivity(ctx context.Context, workDir string, prNumb
 		return &MergeResult{Merged: true, Reason: out}, nil
 	case "BLOCKED":
 		if checksPending(raw) {
-			for i := 0; i < 3; i++ {
-				time.Sleep(2 * time.Second)
-				s2, raw2, err := readMergeState(ctx, workDir, prNumber)
-				if err != nil {
-					return nil, err
-				}
-				if s2 == "CLEAN" {
-					out, err := runCommand(ctx, workDir, "gh", "pr", "merge", strconv.Itoa(prNumber), "--squash", "--delete-branch")
-					if err != nil {
-						return &MergeResult{Merged: false, SubReason: "merge_failed", Reason: err.Error()}, nil
-					}
-					return &MergeResult{Merged: true, Reason: out}, nil
-				}
-				raw = raw2
-			}
 			return &MergeResult{Merged: false, SubReason: "checks_pending_timeout", Reason: "required checks still pending"}, nil
 		}
 		return &MergeResult{Merged: false, SubReason: "merge_blocked", Reason: "merge state BLOCKED"}, nil
@@ -322,6 +299,7 @@ PR diff:
 }
 
 func parseReviewSignal(output string) (signal string, body string, invalid bool) {
+	output = unwrapClaudeJSON(output)
 	lines := strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n")
 	first := -1
 	for i, line := range lines {
@@ -488,12 +466,4 @@ func readMergeState(ctx context.Context, workDir string, prNumber int) (state st
 
 func checksPending(raw string) bool {
 	return strings.Contains(raw, `"PENDING"`) || strings.Contains(raw, `"IN_PROGRESS"`) || strings.Contains(raw, `"QUEUED"`)
-}
-
-func normalizePath(path string) string {
-	clean := filepath.Clean(path)
-	if clean == "." {
-		return ""
-	}
-	return clean
 }

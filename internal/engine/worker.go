@@ -43,7 +43,25 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 		Logger: logger,
 		AST:    parser,
 	}
-	w.RegisterActivity(a)
+	// Register activities explicitly so additions are visible and reviewable.
+	w.RegisterActivity(a.SetupWorktreeActivity)
+	w.RegisterActivity(a.ExecuteActivity)
+	w.RegisterActivity(a.DoDCheckActivity)
+	w.RegisterActivity(a.PushActivity)
+	w.RegisterActivity(a.CreatePRActivity)
+	w.RegisterActivity(a.CreatePRInfoActivity)
+	w.RegisterActivity(a.GetPRInfoActivity)
+	w.RegisterActivity(a.CloseTaskActivity)
+	w.RegisterActivity(a.CloseTaskWithDetailActivity)
+	w.RegisterActivity(a.CleanupWorktreeActivity)
+	w.RegisterActivity(a.RunReviewActivity)
+	w.RegisterActivity(a.SubmitReviewActivity)
+	w.RegisterActivity(a.CheckPRStateActivity)
+	w.RegisterActivity(a.ReadReviewFeedbackActivity)
+	w.RegisterActivity(a.MergePRActivity)
+	w.RegisterActivity(a.GuardReviewerCleanActivity)
+	w.RegisterActivity(a.ResolveReviewerLoginActivity)
+	w.RegisterActivity(a.NotifyActivity)
 
 	da := &DispatchActivities{
 		DAG:    d,
