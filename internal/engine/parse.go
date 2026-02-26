@@ -112,9 +112,24 @@ func findJSONObject(text string) string {
 		return obj
 	}
 	// jsonutil.FindObject only returns valid JSON; try repair on raw candidates.
-	// Walk the text looking for { and attempt repair on each balanced candidate.
+	// Track string state so we skip braces inside quoted text in surrounding prose.
+	inString := false
+	escaped := false
 	for i := 0; i < len(text); i++ {
-		if text[i] != '{' {
+		ch := text[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			inString = !inString
+			continue
+		}
+		if inString || ch != '{' {
 			continue
 		}
 		if end := jsonutil.FindBalancedEnd(text, i, '{', '}'); end > i {
