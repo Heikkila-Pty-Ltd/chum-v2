@@ -8,7 +8,7 @@ db_path = "chum.db"
 
 [projects.chum]
 enabled = true
-workspace = "/home/ubuntu/projects/chum"
+workspace = "/home/ubuntu/projects/chum-factory"
 dod_checks = ["go build ./...", "go test ./...", "go vet ./..."]
 
 [providers.claude]
