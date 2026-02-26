@@ -12,6 +12,7 @@ import (
 
 	"go.temporal.io/sdk/activity"
 
+	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
@@ -22,6 +23,7 @@ type Activities struct {
 	DAG    *dag.DAG
 	Config *config.Config
 	Logger *slog.Logger
+	AST    *astpkg.Parser
 }
 
 // --- 1. SetupWorktreeActivity ---
@@ -46,7 +48,7 @@ func (a *Activities) PlanActivity(ctx context.Context, req TaskRequest) (*Plan, 
 	logger.Info("Generating plan", "TaskID", req.TaskID, "Agent", req.Agent)
 
 	// Gather codebase context — the LLM needs to know what exists
-	codebaseCtx := gatherCodebaseContext(ctx, req.WorkDir)
+	codebaseCtx := a.gatherCodebaseContext(ctx, req.WorkDir)
 
 	prompt := fmt.Sprintf(`You are a senior software engineer. Analyze this task and produce a JSON plan.
 
@@ -98,19 +100,30 @@ RULES:
 	return &plan, nil
 }
 
-// gatherCodebaseContext builds a summary of the project structure.
-// Uses `go list` for Go projects, falls back to directory listing.
-func gatherCodebaseContext(ctx context.Context, workDir string) string {
+// gatherCodebaseContext builds a structured summary of the project using AST parsing.
+// Falls back to file listing if AST parsing fails.
+func (a *Activities) gatherCodebaseContext(ctx context.Context, workDir string) string {
+	if a.AST != nil {
+		files, err := a.AST.ParseDir(ctx, workDir)
+		if err == nil && len(files) > 0 {
+			return astpkg.Summarize(files)
+		}
+		a.Logger.Warn("AST parse failed, falling back to file listing", "Error", err)
+	}
+	return fallbackFileList(ctx, workDir)
+}
+
+// fallbackFileList is the original file-listing approach used when AST parsing
+// is unavailable or fails.
+func fallbackFileList(ctx context.Context, workDir string) string {
 	var sections []string
 
-	// Try go list for Go projects
 	cmd := exec.CommandContext(ctx, "go", "list", "./...")
 	cmd.Dir = workDir
 	if out, err := cmd.Output(); err == nil && len(out) > 0 {
 		sections = append(sections, "Go packages:\n"+string(out))
 	}
 
-	// Always include a file tree (capped at reasonable size)
 	cmd = exec.CommandContext(ctx, "find", ".", "-type", "f",
 		"-not", "-path", "./.git/*",
 		"-not", "-path", "./vendor/*",
@@ -188,7 +201,7 @@ Implement this plan by modifying the necessary files. Do not explain, just code.
 		strings.Join(plan.Acceptance, "\n"),
 	)
 
-	result, err := RunCLI(req.Agent, req.Model, req.WorkDir, prompt)
+	result, err := RunCLIExec(req.Agent, req.Model, req.WorkDir, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("execute CLI: %w", err)
 	}

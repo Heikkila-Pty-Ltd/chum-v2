@@ -12,6 +12,7 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 
+	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 )
@@ -35,10 +36,12 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	w.RegisterWorkflow(DispatcherWorkflow)
 
 	// Register activities
+	parser := astpkg.NewParser(logger)
 	a := &Activities{
 		DAG:    d,
 		Config: cfg,
 		Logger: logger,
+		AST:    parser,
 	}
 	w.RegisterActivity(a)
 
