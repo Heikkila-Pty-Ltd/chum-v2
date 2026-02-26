@@ -20,9 +20,9 @@ func (d *Duration) UnmarshalText(text []byte) error {
 
 // Config is the top-level CHUM configuration.
 type Config struct {
-	General   General              `toml:"general"`
-	Projects  map[string]Project   `toml:"projects"`
-	Providers map[string]Provider  `toml:"providers"`
+	General   General             `toml:"general"`
+	Projects  map[string]Project  `toml:"projects"`
+	Providers map[string]Provider `toml:"providers"`
 }
 
 // General holds scheduler-level settings.
@@ -33,6 +33,10 @@ type General struct {
 	TemporalNamespace string   `toml:"temporal_namespace"`
 	TaskQueue         string   `toml:"task_queue"`
 	DBPath            string   `toml:"db_path"`
+	MatrixWebhookURL  string   `toml:"matrix_webhook_url"`
+	MatrixRoomID      string   `toml:"matrix_room_id"`
+	MatrixAccessToken string   `toml:"matrix_access_token"`
+	MatrixHomeserver  string   `toml:"matrix_homeserver"`
 }
 
 // Project configures a single managed project.
@@ -44,9 +48,10 @@ type Project struct {
 
 // Provider defines an LLM CLI provider.
 type Provider struct {
-	CLI     string `toml:"cli"`
-	Model   string `toml:"model"`
-	Enabled bool   `toml:"enabled"`
+	CLI      string `toml:"cli"`
+	Model    string `toml:"model"`
+	Reviewer string `toml:"reviewer"`
+	Enabled  bool   `toml:"enabled"`
 }
 
 // Load reads and parses a TOML config file.

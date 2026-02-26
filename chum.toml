@@ -5,6 +5,10 @@ temporal_host_port = "localhost:7233"
 temporal_namespace = "chum-v2"
 task_queue = "chum-v2-tasks"
 db_path = "chum.db"
+matrix_webhook_url = ""
+matrix_room_id = ""
+matrix_access_token = ""
+matrix_homeserver = "https://matrix.org"
 
 [projects.chum]
 enabled = true
@@ -14,9 +18,11 @@ dod_checks = ["go build ./...", "go test ./...", "go vet ./..."]
 [providers.claude]
 cli = "claude"
 model = "claude-sonnet-4-20250514"
+reviewer = "gemini"
 enabled = true
 
 [providers.gemini]
 cli = "gemini"
 model = "gemini-2.5-flash"
+reviewer = "claude"
 enabled = false

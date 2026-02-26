@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -155,11 +156,49 @@ func (a *Activities) CreatePRActivity(ctx context.Context, workDir, title string
 	return gitpkg.CreatePR(ctx, workDir, title)
 }
 
+// CreatePRInfoActivity creates a pull request and returns metadata (PR number/head SHA/url).
+func (a *Activities) CreatePRInfoActivity(ctx context.Context, workDir, title string) (*PRInfo, error) {
+	info, err := gitpkg.CreatePRInfo(ctx, workDir, title)
+	if err != nil {
+		return nil, err
+	}
+	return &PRInfo{
+		Number:  info.Number,
+		HeadSHA: info.HeadRefOID,
+		URL:     info.URL,
+	}, nil
+}
+
+// GetPRInfoActivity returns metadata for an existing pull request.
+func (a *Activities) GetPRInfoActivity(ctx context.Context, workDir string, prNumber int) (*PRInfo, error) {
+	info, err := gitpkg.GetPRInfo(ctx, workDir, prNumber)
+	if err != nil {
+		return nil, err
+	}
+	return &PRInfo{
+		Number:  info.Number,
+		HeadSHA: info.HeadRefOID,
+		URL:     info.URL,
+	}, nil
+}
+
 // --- 6. CloseTaskActivity ---
 
 // CloseTaskActivity sets the task status in the DAG (e.g. "completed", "dod_failed").
 func (a *Activities) CloseTaskActivity(ctx context.Context, taskID, status string) error {
 	return a.DAG.CloseTask(ctx, taskID, status)
+}
+
+// CloseTaskWithDetailActivity updates task status plus structured error_log detail.
+func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID string, detail CloseDetail) error {
+	raw, err := json.Marshal(detail)
+	if err != nil {
+		return fmt.Errorf("marshal close detail: %w", err)
+	}
+	return a.DAG.UpdateTask(ctx, taskID, map[string]any{
+		"status":    string(detail.Reason),
+		"error_log": string(raw),
+	})
 }
 
 // --- 7. CleanupWorktreeActivity ---
