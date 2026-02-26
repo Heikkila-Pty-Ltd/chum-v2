@@ -354,7 +354,7 @@ func truncateForTitle(prompt string, maxLen int) string {
 	// Use first line as title
 	if idx := len(prompt); idx > 0 {
 		lines := prompt
-		if nlIdx := indexOf(lines, '\n'); nlIdx >= 0 {
+		if nlIdx := strings.IndexByte(lines, '\n'); nlIdx >= 0 {
 			lines = lines[:nlIdx]
 		}
 		if len(lines) > maxLen {
@@ -365,14 +365,7 @@ func truncateForTitle(prompt string, maxLen int) string {
 	return "chum: automated change"
 }
 
-func indexOf(s string, c byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
-}
+
 
 func augmentPromptWithReviewFeedback(prompt string, round int, feedback string) string {
 	feedback = strings.TrimSpace(feedback)
