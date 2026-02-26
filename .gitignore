@@ -1,5 +1,5 @@
 # Binaries
-chum
+/chum
 *.test
 
 # Database

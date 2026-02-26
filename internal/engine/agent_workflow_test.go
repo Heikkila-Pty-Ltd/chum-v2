@@ -10,7 +10,7 @@ import (
 	"go.temporal.io/sdk/testsuite"
 )
 
-func TestAgentWorkflow_PlanFailure_ClosesAndCleans(t *testing.T) {
+func TestAgentWorkflow_ExecFailure_ClosesAndCleans(t *testing.T) {
 	t.Parallel()
 
 	s := testsuite.WorkflowTestSuite{}
@@ -18,8 +18,8 @@ func TestAgentWorkflow_PlanFailure_ClosesAndCleans(t *testing.T) {
 
 	var a *Activities
 	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-1").Return("/tmp/wt-task-1", nil)
-	env.OnActivity(a.PlanActivity, mock.Anything, mock.Anything).Return((*Plan)(nil), errors.New("plan failed"))
-	env.OnActivity(a.CloseTaskActivity, mock.Anything, "task-1", "plan_failed").Return(nil)
+	env.OnActivity(a.ExecuteActivity, mock.Anything, mock.Anything).Return((*ExecResult)(nil), errors.New("exec failed"))
+	env.OnActivity(a.CloseTaskActivity, mock.Anything, "task-1", "exec_failed").Return(nil)
 	env.OnActivity(a.CleanupWorktreeActivity, mock.Anything, "/repo", "/tmp/wt-task-1").Return(nil)
 
 	env.ExecuteWorkflow(AgentWorkflow, TaskRequest{
@@ -33,8 +33,8 @@ func TestAgentWorkflow_PlanFailure_ClosesAndCleans(t *testing.T) {
 	if !env.IsWorkflowCompleted() {
 		t.Fatal("expected workflow completion")
 	}
-	if err := env.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "plan failed") {
-		t.Fatalf("expected plan failure error, got %v", err)
+	if err := env.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "execute failed") {
+		t.Fatalf("expected exec failure error, got %v", err)
 	}
 }
 
@@ -46,11 +46,7 @@ func TestAgentWorkflow_DoDFailure_ClosesAndCleans(t *testing.T) {
 
 	var a *Activities
 	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-2").Return("/tmp/wt-task-2", nil)
-	env.OnActivity(a.PlanActivity, mock.Anything, mock.Anything).Return(&Plan{
-		Summary: "plan",
-		Steps:   []string{"s1"},
-	}, nil)
-	env.OnActivity(a.ExecuteActivity, mock.Anything, mock.Anything, mock.Anything).Return(&ExecResult{
+	env.OnActivity(a.ExecuteActivity, mock.Anything, mock.Anything).Return(&ExecResult{
 		ExitCode: 0,
 		Output:   "ok",
 	}, nil)
@@ -85,11 +81,7 @@ func TestAgentWorkflow_SuccessPath_Completes(t *testing.T) {
 
 	var a *Activities
 	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-3").Return("/tmp/wt-task-3", nil)
-	env.OnActivity(a.PlanActivity, mock.Anything, mock.Anything).Return(&Plan{
-		Summary: "plan-summary",
-		Steps:   []string{"s1"},
-	}, nil)
-	env.OnActivity(a.ExecuteActivity, mock.Anything, mock.Anything, mock.Anything).Return(&ExecResult{
+	env.OnActivity(a.ExecuteActivity, mock.Anything, mock.Anything).Return(&ExecResult{
 		ExitCode: 0,
 		Output:   "ok",
 	}, nil)
@@ -97,7 +89,7 @@ func TestAgentWorkflow_SuccessPath_Completes(t *testing.T) {
 		Passed: true,
 	}, nil)
 	env.OnActivity(a.PushActivity, mock.Anything, "/tmp/wt-task-3").Return(nil)
-	env.OnActivity(a.CreatePRActivity, mock.Anything, "/tmp/wt-task-3", "plan-summary").Return(nil)
+	env.OnActivity(a.CreatePRActivity, mock.Anything, "/tmp/wt-task-3", mock.Anything).Return(nil)
 	env.OnActivity(a.CloseTaskActivity, mock.Anything, "task-3", "completed").Return(nil)
 	env.OnActivity(a.CleanupWorktreeActivity, mock.Anything, "/repo", "/tmp/wt-task-3").Return(nil)
 
@@ -116,4 +108,3 @@ func TestAgentWorkflow_SuccessPath_Completes(t *testing.T) {
 		t.Fatalf("unexpected workflow error: %v", err)
 	}
 }
-

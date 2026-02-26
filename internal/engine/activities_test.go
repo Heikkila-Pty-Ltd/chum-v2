@@ -21,10 +21,7 @@ func TestExecuteActivity_PreflightFailsWhenCLIMissing(t *testing.T) {
 	s := testsuite.WorkflowTestSuite{}
 	env := s.NewTestActivityEnvironment()
 	env.RegisterActivity(a.ExecuteActivity)
-	_, err := env.ExecuteActivity(a.ExecuteActivity, Plan{
-		Summary: "x",
-		Steps:   []string{"y"},
-	}, TaskRequest{
+	_, err := env.ExecuteActivity(a.ExecuteActivity, TaskRequest{
 		TaskID:  "t-1",
 		Project: "p",
 		WorkDir: t.TempDir(),

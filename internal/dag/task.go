@@ -21,3 +21,12 @@ type Task struct {
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
+
+// TaskTarget records a resolved code reference for a task.
+// A task's targets are the files and symbols its description references.
+type TaskTarget struct {
+	TaskID     string `json:"task_id"`
+	FilePath   string `json:"file_path"`
+	SymbolName string `json:"symbol_name"`
+	SymbolKind string `json:"symbol_kind"`
+}
