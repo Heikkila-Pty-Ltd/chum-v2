@@ -101,12 +101,15 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 		return cancelled
 	}
 
+	// notify sends a chat message. Uses a disconnected context so notifications
+	// still work after the session timeout cancels the main ctx.
+	notifyBaseCtx, _ := workflow.NewDisconnectedContext(ctx)
 	notify := func(message string) {
 		if req.RoomID == "" {
 			return
 		}
-		nCtx := workflow.WithActivityOptions(ctx, notifyOpts)
-		_ = workflow.ExecuteActivity(nCtx, pa.NotifyChatActivity, req.RoomID, message).Get(ctx, nil)
+		nCtx := workflow.WithActivityOptions(notifyBaseCtx, notifyOpts)
+		_ = workflow.ExecuteActivity(nCtx, pa.NotifyChatActivity, req.RoomID, message).Get(nCtx, nil)
 	}
 
 	// ============================================================
@@ -219,16 +222,21 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 				ch.Receive(ctx, &value)
 				cancelTimer()
 				value = strings.TrimSpace(value)
+				found := false
 				for i := range approaches {
 					if approaches[i].ID == value || (approaches[i].Rank > 0 && fmt.Sprintf("%d", approaches[i].Rank) == value) {
 						approaches[i].Status = "selected"
 						copy := approaches[i] // store a copy, not a pointer into the slice
 						selectedApproach = &copy
+						found = true
 						logger.Info("Approach selected", "ID", approaches[i].ID, "Title", approaches[i].Title)
 						notify(fmt.Sprintf("Selected approach %d: %s\nSend `/plan go` to greenlight decomposition, or `/plan dig %s` for deeper research.",
 							approaches[i].Rank, approaches[i].Title, approaches[i].ID))
 						break
 					}
+				}
+				if !found {
+					notify(fmt.Sprintf("Approach %q not found. Available: 1-%d", value, len(approaches)))
 				}
 			})
 
@@ -301,7 +309,7 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 				if decision == "REALIGN" {
 					logger.Info("User requested realignment")
 					selectedApproach = nil
-					researchRound = 0
+					researchRound = 0 // intentional: REALIGN grants fresh research rounds
 					notify("Realigning. Selection cleared — use `/plan dig <id>` to research further, then `/plan select <id>` and `/plan go`.")
 					return
 				}
@@ -337,6 +345,11 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 		}
 
 		// ── PHASE 6: Decompose selected approach (autonomous) ──
+		if selectedApproach == nil {
+			logger.Error("Reached decompose phase with nil selectedApproach")
+			notify("Internal error: no approach selected. Returning to selection.")
+			continue
+		}
 		logger.Info("Phase: decompose", "Approach", selectedApproach.Title)
 		notify(fmt.Sprintf("Decomposing approach: %s...", selectedApproach.Title))
 
@@ -424,7 +437,7 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 	if err := workflow.ExecuteActivity(handoffCtx, pa.CreatePlanSubtasksActivity, req, steps).Get(ctx, &subtaskIDs); err != nil {
 		logger.Error("Failed to create subtasks", "error", err)
 		notify(fmt.Sprintf("Failed to create subtasks: %s", err))
-		return &PlanningResult{GoalID: req.GoalID, Approaches: approaches, SelectedApproach: selectedApproach}, nil
+		return &PlanningResult{GoalID: req.GoalID, Approaches: approaches, SelectedApproach: selectedApproach, Cancelled: true, CancelReason: "subtask_creation_failed"}, nil
 	}
 
 	notify(fmt.Sprintf("Planning complete. %d subtasks created for approach: %s\nSubtask IDs: %s",

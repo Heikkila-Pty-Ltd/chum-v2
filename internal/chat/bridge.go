@@ -219,10 +219,23 @@ func (b *Bridge) signalWorkflow(ctx context.Context, room, sessionID, signalName
 	}
 
 	if err := b.Client.SignalWorkflow(ctx, sid, "", signalName, value); err != nil {
-		// Report signal failure to the user so they know the command didn't work.
+		errStr := err.Error()
+		// Clear the active session if the workflow no longer exists.
+		if strings.Contains(errStr, "not found") || strings.Contains(errStr, "NotFound") ||
+			strings.Contains(errStr, "completed") || strings.Contains(errStr, "terminated") {
+			b.clearActiveSession(room, sid)
+			_ = b.send(ctx, fmt.Sprintf("Session %s is no longer running. Start a new one with `/plan start`.", sid))
+			return nil
+		}
 		_ = b.send(ctx, fmt.Sprintf("Failed to send signal to session %s: %s", sid, err))
 		return fmt.Errorf("signal workflow %s: %w", sid, err)
 	}
+
+	// If the user just sent a cancel signal, clear the active session.
+	if signalName == "plan-cancel" {
+		b.clearActiveSession(room, sid)
+	}
+
 	return nil
 }
 
@@ -259,6 +272,19 @@ func (b *Bridge) setActiveSession(room, sessionID string) {
 		b.activeByRoom = make(map[string]string)
 	}
 	b.activeByRoom[strings.TrimSpace(room)] = sessionID
+}
+
+func (b *Bridge) clearActiveSession(room, sessionID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.activeByRoom == nil {
+		return
+	}
+	room = strings.TrimSpace(room)
+	// Only clear if the current session matches — prevents racing with a new /plan start.
+	if b.activeByRoom[room] == sessionID {
+		delete(b.activeByRoom, room)
+	}
 }
 
 // matrixTxnCounter is an atomic counter to ensure unique transaction IDs

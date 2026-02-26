@@ -88,41 +88,8 @@ const (
 	PhaseCompleted         Phase = "completed"
 )
 
-// --- Signal types for Temporal workflow signals ---
-
-// SignalSelect is sent when the user selects an approach.
-type SignalSelect struct {
-	ApproachID string `json:"approach_id"`
-}
-
-// SignalDig is sent when the user wants deeper research on an approach.
-type SignalDig struct {
-	ApproachID string `json:"approach_id"`
-	Feedback   string `json:"feedback"` // optional direction
-}
-
-// SignalQuestion is sent when the user asks a question about an approach.
-type SignalQuestion struct {
-	Question string `json:"question"`
-}
-
-// SignalGreenlight is sent when the user approves moving to decomposition.
-type SignalGreenlight struct {
-	Decision string `json:"decision"` // "GO" or "REALIGN"
-}
-
-// SignalApproveDecomp is sent when the user approves the decomposition.
-type SignalApproveDecomp struct {
-	Approved bool   `json:"approved"`
-	Feedback string `json:"feedback"` // if rejected, why
-}
-
-// SignalCancel is sent to cancel the ceremony.
-type SignalCancel struct {
-	Reason string `json:"reason"`
-}
-
 // Signal channel names used by the workflow.
+// All signals are sent and received as plain strings via the bridge.
 const (
 	SignalNameSelect       = "plan-select"
 	SignalNameDig          = "plan-dig"

@@ -203,9 +203,9 @@ Output ONLY the JSON array.`, goal.Intent, goal.Why, string(approachJSON))
 	for i := range checked {
 		if id, ok := origByRank[checked[i].Rank]; ok {
 			checked[i].ID = id
-		} else if i < len(approaches) {
-			checked[i].ID = approaches[i].ID
 		}
+		// No index-based fallback — unmatched approaches keep whatever ID the LLM returned
+		// (or empty). This prevents silent ID misassignment when the LLM reorders approaches.
 		if checked[i].Status == "" {
 			checked[i].Status = "exploring"
 		}
