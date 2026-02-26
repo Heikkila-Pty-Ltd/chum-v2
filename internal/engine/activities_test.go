@@ -20,6 +20,7 @@ func TestExecuteActivity_PreflightFailsWhenCLIMissing(t *testing.T) {
 
 	s := testsuite.WorkflowTestSuite{}
 	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(a.ExecuteActivity)
 	_, err := env.ExecuteActivity(a.ExecuteActivity, Plan{
 		Summary: "x",
 		Steps:   []string{"y"},
@@ -43,6 +44,7 @@ func TestDoDCheckActivity_ProjectNotFound(t *testing.T) {
 	a := &Activities{Config: &config.Config{Projects: map[string]config.Project{}}}
 	s := testsuite.WorkflowTestSuite{}
 	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(a.DoDCheckActivity)
 	_, err := env.ExecuteActivity(a.DoDCheckActivity, t.TempDir(), "missing-project")
 	if err == nil {
 		t.Fatal("expected project-not-found error, got nil")
@@ -51,4 +53,3 @@ func TestDoDCheckActivity_ProjectNotFound(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
-
