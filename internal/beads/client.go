@@ -1,5 +1,4 @@
-// Package beads wraps the bd CLI for reading issues into CHUM.
-// Ported from cortex/internal/beadsfork — stripped to read-only surface.
+// Package beads wraps the bd CLI for reading and writing issues in CHUM.
 package beads
 
 import (
@@ -50,12 +49,13 @@ type Dependency struct {
 
 // Client is a local wrapper around the bd CLI.
 type Client struct {
-	binary  string
-	workDir string
-	flags   []string
+	binary   string
+	workDir  string
+	flags    []string
+	readOnly bool
 }
 
-// NewClient creates a beads client pointing at a project directory.
+// NewClient creates a read-write beads client pointing at a project directory.
 func NewClient(workDir string) (*Client, error) {
 	if workDir == "" {
 		return nil, errors.New("workdir is required")
@@ -66,8 +66,18 @@ func NewClient(workDir string) (*Client, error) {
 	return &Client{
 		binary:  DefaultBinary,
 		workDir: workDir,
-		flags:   []string{"--sandbox"},
 	}, nil
+}
+
+// NewReadOnlyClient creates a sandboxed beads client that cannot modify issues.
+func NewReadOnlyClient(workDir string) (*Client, error) {
+	c, err := NewClient(workDir)
+	if err != nil {
+		return nil, err
+	}
+	c.readOnly = true
+	c.flags = []string{"--sandbox"}
+	return c, nil
 }
 
 // List returns all issues from bd.
@@ -103,6 +113,48 @@ func (c *Client) Show(ctx context.Context, issueID string) (Issue, error) {
 		return Issue{}, err
 	}
 	return decodeSingleIssue(out)
+}
+
+// Close closes an issue in beads with an optional reason.
+func (c *Client) Close(ctx context.Context, issueID, reason string) error {
+	if c.readOnly {
+		return errors.New("beads client is read-only")
+	}
+	args := []string{"close", issueID}
+	if reason != "" {
+		args = append(args, "--reason", reason)
+	}
+	_, err := c.run(ctx, args...)
+	return err
+}
+
+// Update updates fields on an issue in beads.
+// Supported keys: "status", "title", "description", "acceptance", "priority", "estimate".
+func (c *Client) Update(ctx context.Context, issueID string, fields map[string]string) error {
+	if c.readOnly {
+		return errors.New("beads client is read-only")
+	}
+	args := []string{"update", issueID}
+	for k, v := range fields {
+		switch k {
+		case "status":
+			args = append(args, "--status", v)
+		case "title":
+			args = append(args, "--title", v)
+		case "description":
+			args = append(args, "-d", v)
+		case "acceptance":
+			args = append(args, "--acceptance", v)
+		case "priority":
+			args = append(args, "--priority", v)
+		case "estimate":
+			args = append(args, "--estimate", v)
+		default:
+			return fmt.Errorf("unsupported beads update field: %s", k)
+		}
+	}
+	_, err := c.run(ctx, args...)
+	return err
 }
 
 func (c *Client) run(ctx context.Context, args ...string) ([]byte, error) {

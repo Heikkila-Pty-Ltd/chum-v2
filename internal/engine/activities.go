@@ -13,6 +13,7 @@ import (
 	"go.temporal.io/sdk/activity"
 
 	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
@@ -20,10 +21,11 @@ import (
 
 // Activities holds dependencies for Temporal activity methods.
 type Activities struct {
-	DAG    *dag.DAG
-	Config *config.Config
-	Logger *slog.Logger
-	AST    *astpkg.Parser
+	DAG         *dag.DAG
+	Config      *config.Config
+	Logger      *slog.Logger
+	AST         *astpkg.Parser
+	BeadsClient *beads.Client // nil if beads unavailable
 }
 
 // --- 1. SetupWorktreeActivity ---
@@ -182,15 +184,38 @@ func (a *Activities) CloseTaskActivity(ctx context.Context, taskID, status strin
 }
 
 // CloseTaskWithDetailActivity updates task status plus structured error_log detail.
+// On completion, writes back status to beads (best-effort).
 func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID string, detail CloseDetail) error {
+	logger := activity.GetLogger(ctx)
 	raw, err := json.Marshal(detail)
 	if err != nil {
 		return fmt.Errorf("marshal close detail: %w", err)
 	}
-	return a.DAG.UpdateTask(ctx, taskID, map[string]any{
+	if err := a.DAG.UpdateTask(ctx, taskID, map[string]any{
 		"status":    string(detail.Reason),
 		"error_log": string(raw),
-	})
+	}); err != nil {
+		return err
+	}
+
+	// Writeback to beads (best-effort, non-fatal)
+	if a.BeadsClient == nil {
+		return nil
+	}
+	switch detail.Reason {
+	case CloseCompleted:
+		reason := fmt.Sprintf("Completed by CHUM. PR #%d", detail.PRNumber)
+		if err := a.BeadsClient.Close(ctx, taskID, reason); err != nil {
+			logger.Warn("Beads writeback failed", "taskID", taskID, "error", err)
+		}
+	case CloseDecomposed:
+		if err := a.BeadsClient.Update(ctx, taskID, map[string]string{
+			"status": "decomposed",
+		}); err != nil {
+			logger.Warn("Beads decomposed writeback failed", "taskID", taskID, "error", err)
+		}
+	}
+	return nil
 }
 
 // --- 7. CleanupWorktreeActivity ---

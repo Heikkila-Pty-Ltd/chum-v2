@@ -65,6 +65,7 @@ const (
 	CloseCompleted   CloseReason = "completed"
 	CloseDoDFailed   CloseReason = "dod_failed"
 	CloseNeedsReview CloseReason = "needs_review"
+	CloseDecomposed  CloseReason = "decomposed"
 )
 
 // CloseDetail is persisted for auditability in task error_log.
@@ -73,4 +74,18 @@ type CloseDetail struct {
 	SubReason string      `json:"sub_reason"`
 	ReviewURL string      `json:"review_url"`
 	PRNumber  int         `json:"pr_number"`
+}
+
+// DecompStep is a single sub-task produced by decomposition.
+type DecompStep struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Acceptance  string `json:"acceptance"`
+	Estimate    int    `json:"estimate_minutes"`
+}
+
+// DecompResult is the output of the decomposition activity.
+type DecompResult struct {
+	Steps  []DecompStep `json:"steps"`
+	Atomic bool         `json:"atomic"` // true when steps is empty (task needs no decomposition)
 }

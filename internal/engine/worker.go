@@ -13,6 +13,7 @@ import (
 	"go.temporal.io/sdk/worker"
 
 	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 )
@@ -37,11 +38,28 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 
 	// Register activities
 	parser := astpkg.NewParser(logger)
+
+	// Create beads client for writeback (best-effort — nil if bd unavailable)
+	var beadsClient *beads.Client
+	for _, project := range cfg.Projects {
+		if !project.Enabled {
+			continue
+		}
+		bc, err := beads.NewClient(project.Workspace)
+		if err != nil {
+			logger.Warn("Beads client unavailable, writeback disabled", "error", err)
+		} else {
+			beadsClient = bc
+		}
+		break
+	}
+
 	a := &Activities{
-		DAG:    d,
-		Config: cfg,
-		Logger: logger,
-		AST:    parser,
+		DAG:         d,
+		Config:      cfg,
+		Logger:      logger,
+		AST:         parser,
+		BeadsClient: beadsClient,
 	}
 	// Register activities explicitly so additions are visible and reviewable.
 	w.RegisterActivity(a.SetupWorktreeActivity)
@@ -62,6 +80,8 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	w.RegisterActivity(a.GuardReviewerCleanActivity)
 	w.RegisterActivity(a.ResolveReviewerLoginActivity)
 	w.RegisterActivity(a.NotifyActivity)
+	w.RegisterActivity(a.DecomposeActivity)
+	w.RegisterActivity(a.CreateSubtasksActivity)
 
 	da := &DispatchActivities{
 		DAG:    d,
