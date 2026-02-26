@@ -3,6 +3,7 @@ package git
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -164,6 +165,13 @@ type DoDResult struct {
 	Failures []string      `json:"failures"`
 }
 
+// PRInfo captures pull request metadata from gh.
+type PRInfo struct {
+	Number  int    `json:"number"`
+	HeadSHA string `json:"headRefOid"`
+	URL     string `json:"url"`
+}
+
 // RunDoDChecks validates worktree integrity, checks for actual changes,
 // then executes each check command. Returns the aggregate result.
 func RunDoDChecks(ctx context.Context, workDir string, checks []string) DoDResult {
@@ -185,7 +193,7 @@ func RunDoDChecks(ctx context.Context, workDir string, checks []string) DoDResul
 		// Non-fatal — proceed to checks anyway
 	} else if !hasChanges {
 		return DoDResult{
-			Passed: false,
+			Passed:   false,
 			Failures: []string{"NO CHANGES: agent produced no code changes — diff is empty"},
 		}
 	}
@@ -274,4 +282,39 @@ func runCheck(ctx context.Context, workDir, command string) CheckResult {
 		cr.Passed = true
 	}
 	return cr
+}
+
+// GetPRInfo returns PR number/head SHA/url for the current branch or a specific PR.
+func GetPRInfo(ctx context.Context, workDir string, prNumber int) (*PRInfo, error) {
+	if _, err := exec.LookPath("gh"); err != nil {
+		return nil, fmt.Errorf("gh CLI not installed")
+	}
+
+	args := []string{"pr", "view", "--json", "number,headRefOid,url"}
+	if prNumber > 0 {
+		args = []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "number,headRefOid,url"}
+	}
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd.Dir = workDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("gh pr view: %s: %w", string(out), err)
+	}
+
+	var info PRInfo
+	if err := json.Unmarshal(out, &info); err != nil {
+		return nil, fmt.Errorf("parse gh pr view JSON: %w", err)
+	}
+	if info.Number == 0 {
+		return nil, fmt.Errorf("gh pr view returned empty PR number")
+	}
+	return &info, nil
+}
+
+// CreatePRInfo creates a PR and then returns PR metadata for the current branch.
+func CreatePRInfo(ctx context.Context, workDir, title string) (*PRInfo, error) {
+	if err := CreatePR(ctx, workDir, title); err != nil {
+		return nil, err
+	}
+	return GetPRInfo(ctx, workDir, 0)
 }
