@@ -61,8 +61,9 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	// Seed the since token to skip historical messages.
 	// Loop until we reach the end to avoid replaying old /plan commands.
+	// Cap at 500 pages (~10k messages) to prevent spinning on huge rooms.
 	token := ""
-	for {
+	for page := 0; page < 500; page++ {
 		_, nextToken, err := ReadRoomMessages(ctx, b.MatrixCfg, token)
 		if err != nil {
 			b.Logger.Warn("Failed to seed message cursor, starting from now", "error", err)
@@ -113,6 +114,7 @@ func (b *Bridge) poll(ctx context.Context) {
 		}
 		if parseErr != nil {
 			b.Logger.Warn("Malformed planning command", "sender", msg.Sender, "error", parseErr)
+			_ = b.send(ctx, fmt.Sprintf("Invalid command: %s. Send `/plan help` for usage.", parseErr))
 			continue
 		}
 		if err := b.handleCommand(ctx, msg, cmd); err != nil {
@@ -171,6 +173,11 @@ func (b *Bridge) startPlanning(ctx context.Context, msg InboundMessage, cmd Comm
 	workDir := b.ProjectWorkDirs[cmd.Project]
 	if workDir == "" {
 		return b.send(ctx, fmt.Sprintf("Unknown project %q. Check your config.", cmd.Project))
+	}
+
+	// Guard against duplicate sessions for the same room.
+	if existing := b.resolveSession(msg.Room, ""); existing != "" {
+		return b.send(ctx, fmt.Sprintf("Planning session already active: `%s`. Send `/plan stop` first, or use `/plan select`/`/plan go` to continue.", existing))
 	}
 
 	sessionID := fmt.Sprintf("planning-%s-%d", cmd.Project, time.Now().UnixNano())

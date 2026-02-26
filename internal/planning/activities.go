@@ -188,6 +188,7 @@ Output ONLY the JSON array.`, goal.Intent, goal.Why, string(approachJSON))
 
 	var checked []ResearchedApproach
 	if err := json.Unmarshal([]byte(jsonStr), &checked); err != nil {
+		logger.Warn("Goal check returned invalid JSON, keeping original approaches", "error", err)
 		return approaches, nil
 	}
 
@@ -290,6 +291,7 @@ Output ONLY the JSON object.`,
 
 	var updated ResearchedApproach
 	if err := json.Unmarshal([]byte(jsonStr), &updated); err != nil {
+		logger.Warn("Deeper research returned invalid JSON, keeping original approach", "error", err)
 		return &approach, nil
 	}
 	updated.ID = approach.ID

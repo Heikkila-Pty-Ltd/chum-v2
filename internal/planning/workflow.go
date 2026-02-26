@@ -61,10 +61,17 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
 	}
 
-	// Enforce session-level timeout (Fix #9: workflow deadline)
+	// Cancellation state — shared between session timeout goroutine and signal handlers.
+	cancelled := false
+	cancelReason := ""
+
+	// Enforce session-level timeout. When the timer fires, set cancelled and
+	// cancel the context so in-flight activities and selectors unblock.
 	ctx, sessionCancel := workflow.WithCancel(ctx)
 	workflow.Go(ctx, func(gCtx workflow.Context) {
 		_ = workflow.NewTimer(gCtx, cfg.SessionTimeout).Get(gCtx, nil)
+		cancelled = true
+		cancelReason = "session_timeout"
 		sessionCancel()
 	})
 
@@ -76,20 +83,22 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 	approveDecompCh := workflow.GetSignalChannel(ctx, SignalNameApproveDecomp)
 	cancelCh := workflow.GetSignalChannel(ctx, SignalNameCancel)
 
-	// Check for cancellation at any point
-	cancelled := false
-	cancelReason := ""
-
 	drainCancel := func() bool {
 		for {
 			var sig string
 			ok := cancelCh.ReceiveAsync(&sig)
 			if !ok {
-				return cancelled
+				break
 			}
 			cancelled = true
 			cancelReason = sig
 		}
+		// Also detect session timeout — the goroutine sets cancelled directly.
+		if ctx.Err() != nil && !cancelled {
+			cancelled = true
+			cancelReason = "session_timeout"
+		}
+		return cancelled
 	}
 
 	notify := func(message string) {
@@ -137,6 +146,9 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 	checkCtx := workflow.WithActivityOptions(ctx, researchOpts)
 	if err := workflow.ExecuteActivity(checkCtx, pa.GoalCheckActivity, req, goal, approaches).Get(ctx, &approaches); err != nil {
 		logger.Warn("Goal check failed, proceeding with unchecked approaches", "error", err)
+	}
+	if drainCancel() {
+		return &PlanningResult{GoalID: req.GoalID, Cancelled: true, CancelReason: cancelReason, Approaches: approaches}, nil
 	}
 
 	// ============================================================
