@@ -52,7 +52,7 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 		StartToCloseTimeout: 15 * time.Minute,
 		RetryPolicy: &temporal.RetryPolicy{
 			MaximumAttempts:    2,
-			InitialInterval:   5 * time.Second,
+			InitialInterval:    5 * time.Second,
 			BackoffCoefficient: 2.0,
 		},
 	}
@@ -279,7 +279,13 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 				}
 				for i := range approaches {
 					if approaches[i].ID == target.ID {
+						wasSelected := selectedApproach != nil && selectedApproach.ID == approaches[i].ID
 						approaches[i] = updated
+						if wasSelected {
+							approaches[i].Status = "selected"
+							copy := approaches[i]
+							selectedApproach = &copy
+						}
 						break
 					}
 				}

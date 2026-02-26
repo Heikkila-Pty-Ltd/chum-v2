@@ -25,16 +25,16 @@ func atomicAddTxn() uint64 {
 // Bridge polls a Matrix room for /plan commands and routes them to Temporal
 // workflow signals. It also sends push notifications from workflows to chat.
 type Bridge struct {
-	Client         client.Client
-	MatrixCfg      MatrixConfig
-	PollInterval   time.Duration
-	Logger         *slog.Logger
-	TaskQueue      string
-	DefaultAgent   string                         // default LLM agent (e.g. "claude")
-	CeremonyCfg    planning.PlanningCeremonyConfig // ceremony-level knobs
-	AllowedSenders  map[string]bool                // Matrix user IDs allowed to issue commands (nil = allow all)
-	BotUserID       string                         // Matrix user ID of the bot itself — messages from this sender are ignored
-	ProjectWorkDirs map[string]string              // project name → workspace path (used to resolve WorkDir securely)
+	Client          client.Client
+	MatrixCfg       MatrixConfig
+	PollInterval    time.Duration
+	Logger          *slog.Logger
+	TaskQueue       string
+	DefaultAgent    string                          // default LLM agent (e.g. "claude")
+	CeremonyCfg     planning.PlanningCeremonyConfig // ceremony-level knobs
+	AllowedSenders  map[string]bool                 // Matrix user IDs allowed to issue commands (nil = allow all)
+	BotUserID       string                          // Matrix user ID of the bot itself — messages from this sender are ignored
+	ProjectWorkDirs map[string]string               // project name → workspace path (used to resolve WorkDir securely)
 
 	mu           sync.Mutex
 	activeByRoom map[string]string // roomID → active planning session workflow ID
@@ -174,6 +174,10 @@ func (b *Bridge) startPlanning(ctx context.Context, msg InboundMessage, cmd Comm
 	if workDir == "" {
 		return b.send(ctx, fmt.Sprintf("Unknown project %q. Check your config.", cmd.Project))
 	}
+	goalID := strings.TrimSpace(cmd.Value)
+	if goalID == "" {
+		return b.send(ctx, "Usage: /plan start <project> <goal-id> [agent=claude]")
+	}
 
 	// Guard against duplicate sessions for the same room.
 	if existing := b.resolveSession(msg.Room, ""); existing != "" {
@@ -193,7 +197,7 @@ func (b *Bridge) startPlanning(ctx context.Context, msg InboundMessage, cmd Comm
 	}
 
 	req := planning.PlanningRequest{
-		GoalID:    cmd.Value,
+		GoalID:    goalID,
 		Project:   cmd.Project,
 		WorkDir:   workDir,
 		Agent:     agent,
@@ -208,8 +212,19 @@ func (b *Bridge) startPlanning(ctx context.Context, msg InboundMessage, cmd Comm
 	}
 
 	b.setActiveSession(msg.Room, sessionID)
+	go b.watchSessionCompletion(msg.Room, sessionID, run)
 	return b.send(ctx, fmt.Sprintf("Started planning session `%s` (run: %s) for project %s",
 		sessionID, run.GetRunID(), cmd.Project))
+}
+
+func (b *Bridge) watchSessionCompletion(room, sessionID string, run client.WorkflowRun) {
+	var result planning.PlanningResult
+	if err := run.Get(context.Background(), &result); err != nil {
+		b.Logger.Warn("Planning session ended with error", "session_id", sessionID, "error", err)
+	} else {
+		b.Logger.Info("Planning session completed", "session_id", sessionID, "cancelled", result.Cancelled)
+	}
+	b.clearActiveSession(room, sessionID)
 }
 
 func (b *Bridge) signalWorkflow(ctx context.Context, room, sessionID, signalName, value string) error {

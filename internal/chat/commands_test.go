@@ -52,6 +52,34 @@ func TestParseCommand_StartMissingProject(t *testing.T) {
 	}
 }
 
+func TestParseCommand_StartMissingGoal(t *testing.T) {
+	t.Parallel()
+	_, matched, err := ParseCommand("/plan start myproject")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err == nil {
+		t.Fatal("expected error for missing goal id")
+	}
+}
+
+func TestParseCommand_StartWithGoalKey(t *testing.T) {
+	t.Parallel()
+	cmd, matched, err := ParseCommand("/plan start project=myproject goal=goal-123 agent=claude")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cmd.Project != "myproject" {
+		t.Fatalf("expected project=myproject, got %q", cmd.Project)
+	}
+	if cmd.Value != "goal-123" {
+		t.Fatalf("expected goal value, got %q", cmd.Value)
+	}
+}
+
 func TestParseCommand_Select(t *testing.T) {
 	t.Parallel()
 	cmd, matched, err := ParseCommand("/plan select 2")
@@ -178,6 +206,20 @@ func TestParseCommand_BarePlanNotMatched(t *testing.T) {
 	_, matched, _ := ParseCommand("plan start myproject")
 	if matched {
 		t.Fatal("expected no match for bare 'plan' without slash prefix")
+	}
+}
+
+func TestParseCommand_PrefixBoundaryNotMatched(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"/planner start x",
+		"/planets",
+	}
+	for _, tc := range cases {
+		_, matched, _ := ParseCommand(tc)
+		if matched {
+			t.Fatalf("expected no match for %q", tc)
+		}
 	}
 }
 

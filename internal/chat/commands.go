@@ -41,10 +41,17 @@ func ParseCommand(raw string) (Command, bool, error) {
 		return Command{}, false, nil
 	}
 	lower := strings.ToLower(text)
-	if !strings.HasPrefix(lower, "/plan") {
+	const prefix = "/plan"
+	if !strings.HasPrefix(lower, prefix) {
 		return Command{}, false, nil
 	}
-	text = strings.TrimSpace(text[len("/plan"):])
+	if len(lower) > len(prefix) {
+		next := lower[len(prefix)]
+		if next != ' ' && next != '\t' && next != '\n' && next != '\r' {
+			return Command{}, false, nil
+		}
+	}
+	text = strings.TrimSpace(text[len(prefix):])
 
 	if text == "" {
 		return Command{Kind: CommandHelp}, true, nil
@@ -86,12 +93,17 @@ func ParseCommand(raw string) (Command, bool, error) {
 			switch strings.ToLower(strings.TrimSpace(k)) {
 			case "project":
 				cmd.Project = strings.TrimSpace(v)
+			case "goal", "goal_id":
+				cmd.Value = strings.TrimSpace(v)
 			case "agent":
 				cmd.Agent = strings.TrimSpace(v)
 			}
 		}
 		if strings.TrimSpace(cmd.Project) == "" {
 			return Command{}, true, fmt.Errorf("missing project")
+		}
+		if strings.TrimSpace(cmd.Value) == "" {
+			return Command{}, true, fmt.Errorf("missing goal id")
 		}
 		return cmd, true, nil
 
@@ -197,7 +209,7 @@ func ParseCommand(raw string) (Command, bool, error) {
 // CommandUsage returns the help text for planning commands.
 func CommandUsage() string {
 	return `Planning control commands:
-- /plan start <project> [agent=claude]
+- /plan start <project> <goal-id> [agent=claude]
 - /plan prompt [session]
 - /plan status [session]
 - /plan select <approach-id> [session]
