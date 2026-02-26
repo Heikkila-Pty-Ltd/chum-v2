@@ -87,6 +87,7 @@ func (p *Parser) ParseFile(ctx context.Context, path string) (*ParsedFile, error
 		Package: pkg,
 		Imports: imports,
 		Symbols: symbols,
+		lines:   strings.Split(string(src), "\n"),
 	}
 
 	p.cache.Store(path, cacheEntry{mtime: mtime, result: result})
@@ -136,6 +137,27 @@ func (p *Parser) ParseDir(ctx context.Context, dir string) ([]*ParsedFile, error
 	return results, nil
 }
 
+// ParseFiles parses specific files by path. Files that fail to parse are
+// logged and skipped.
+func (p *Parser) ParseFiles(ctx context.Context, workDir string, paths []string) []*ParsedFile {
+	var results []*ParsedFile
+	for _, rel := range paths {
+		abs := rel
+		if !filepath.IsAbs(rel) {
+			abs = filepath.Join(workDir, rel)
+		}
+		pf, err := p.ParseFile(ctx, abs)
+		if err != nil {
+			p.logger.Warn("Skipping unparseable file", "Path", rel, "Error", err)
+			continue
+		}
+		// Store the relative path for cleaner prompt output
+		pf.Path = rel
+		results = append(results, pf)
+	}
+	return results
+}
+
 // Summarize produces a compact multi-line context string from parsed files.
 // This is the primary output format for LLM prompt injection.
 func Summarize(files []*ParsedFile) string {
@@ -147,5 +169,43 @@ func Summarize(files []*ParsedFile) string {
 		b.WriteString(f.Summary())
 		b.WriteByte('\n')
 	}
+	return b.String()
+}
+
+// SummarizeTargeted produces context with full source for target files and
+// signatures-only for surrounding files. This gives agents deep understanding
+// of files they're about to modify while maintaining awareness of the broader
+// codebase.
+func SummarizeTargeted(allFiles []*ParsedFile, targetFiles []*ParsedFile) string {
+	targetPaths := make(map[string]bool, len(targetFiles))
+	for _, f := range targetFiles {
+		targetPaths[f.Path] = true
+	}
+
+	var b strings.Builder
+
+	// Target files first — detailed with full source
+	if len(targetFiles) > 0 {
+		b.WriteString("=== FILES TO MODIFY (full source) ===\n\n")
+		for _, f := range targetFiles {
+			b.WriteString(f.DetailedSummary())
+			b.WriteByte('\n')
+		}
+	}
+
+	// Surrounding files — signatures only
+	var hasContext bool
+	for _, f := range allFiles {
+		if targetPaths[f.Path] || (len(f.Symbols) == 0 && len(f.Imports) == 0) {
+			continue
+		}
+		if !hasContext {
+			b.WriteString("=== SURROUNDING CODEBASE (signatures only) ===\n\n")
+			hasContext = true
+		}
+		b.WriteString(f.Summary())
+		b.WriteByte('\n')
+	}
+
 	return b.String()
 }

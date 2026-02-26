@@ -336,6 +336,96 @@ func broken( {
 	}
 }
 
+func TestDetailedSummary_IncludesSource(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTemp(t, dir, "svc.go", `package svc
+
+func Hello(name string) string {
+	return "hello " + name
+}
+`)
+	p := NewParser(nil)
+	defer p.Close()
+
+	pf, err := p.ParseFile(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detailed := pf.DetailedSummary()
+	// Should contain the signature line
+	if !strings.Contains(detailed, "func Hello(") {
+		t.Errorf("missing signature in: %s", detailed)
+	}
+	// Should contain the actual source body
+	if !strings.Contains(detailed, `return "hello " + name`) {
+		t.Errorf("missing function body in: %s", detailed)
+	}
+	// Should have line numbers
+	if !strings.Contains(detailed, "3:") || !strings.Contains(detailed, "4:") {
+		t.Errorf("missing line numbers in: %s", detailed)
+	}
+}
+
+func TestParseFiles_TargetedParsing(t *testing.T) {
+	dir := t.TempDir()
+	writeTemp(t, dir, "a.go", `package main
+func A() {}
+`)
+	writeTemp(t, dir, "b.go", `package main
+func B() {}
+`)
+
+	p := NewParser(nil)
+	defer p.Close()
+
+	files := p.ParseFiles(context.Background(), dir, []string{"a.go", "b.go"})
+	if len(files) != 2 {
+		t.Fatalf("got %d files, want 2", len(files))
+	}
+
+	// Paths should be relative (as passed in)
+	if files[0].Path != "a.go" {
+		t.Errorf("Path = %q, want a.go", files[0].Path)
+	}
+}
+
+func TestSummarizeTargeted_SplitsContext(t *testing.T) {
+	target := &ParsedFile{
+		Path:    "target.go",
+		Package: "main",
+		Symbols: []Symbol{
+			{Name: "Foo", Kind: KindFunc, Signature: "func Foo()", StartLine: 3, EndLine: 5},
+		},
+		lines: []string{"package main", "", "func Foo() {", "\treturn", "}"},
+	}
+	surrounding := &ParsedFile{
+		Path:    "other.go",
+		Package: "main",
+		Symbols: []Symbol{
+			{Name: "Bar", Kind: KindFunc, Signature: "func Bar()", StartLine: 3, EndLine: 5},
+		},
+	}
+
+	out := SummarizeTargeted([]*ParsedFile{target, surrounding}, []*ParsedFile{target})
+
+	// Target section with full source
+	if !strings.Contains(out, "FILES TO MODIFY") {
+		t.Errorf("missing target section header in: %s", out)
+	}
+	if !strings.Contains(out, "return") {
+		t.Errorf("missing target source body in: %s", out)
+	}
+
+	// Surrounding section with signatures only
+	if !strings.Contains(out, "SURROUNDING CODEBASE") {
+		t.Errorf("missing surrounding section header in: %s", out)
+	}
+	if !strings.Contains(out, "func Bar()") {
+		t.Errorf("missing surrounding signature in: %s", out)
+	}
+}
+
 func TestSummarize_Format(t *testing.T) {
 	files := []*ParsedFile{
 		{

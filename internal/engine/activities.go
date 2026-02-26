@@ -182,6 +182,10 @@ func (a *Activities) ExecuteActivity(ctx context.Context, plan Plan, req TaskReq
 		}
 	}
 
+	// Build targeted AST context: full source for files-to-modify,
+	// signatures for surrounding code
+	codeContext := a.buildTargetedContext(ctx, req.WorkDir, plan.FilesToModify)
+
 	prompt := fmt.Sprintf(`You are a senior software engineer. Implement the following plan.
 
 PLAN: %s
@@ -189,7 +193,8 @@ PLAN: %s
 STEPS:
 %s
 
-FILES TO MODIFY: %s
+CODE CONTEXT:
+%s
 
 ACCEPTANCE CRITERIA:
 %s
@@ -197,7 +202,7 @@ ACCEPTANCE CRITERIA:
 Implement this plan by modifying the necessary files. Do not explain, just code.`,
 		plan.Summary,
 		strings.Join(plan.Steps, "\n"),
-		strings.Join(plan.FilesToModify, ", "),
+		codeContext,
 		strings.Join(plan.Acceptance, "\n"),
 	)
 
@@ -278,6 +283,30 @@ func (a *Activities) CloseTaskActivity(ctx context.Context, taskID, status strin
 // CleanupWorktreeActivity removes the git worktree after the task completes.
 func (a *Activities) CleanupWorktreeActivity(ctx context.Context, baseDir, wtDir string) error {
 	return gitpkg.CleanupWorktree(ctx, baseDir, wtDir)
+}
+
+// buildTargetedContext produces AST context with full source for the target files
+// and signature-only context for the rest of the codebase.
+func (a *Activities) buildTargetedContext(ctx context.Context, workDir string, filesToModify []string) string {
+	if a.AST == nil || len(filesToModify) == 0 {
+		return "Files to modify: " + strings.Join(filesToModify, ", ")
+	}
+
+	// Parse target files with full source
+	targetFiles := a.AST.ParseFiles(ctx, workDir, filesToModify)
+
+	// Parse full codebase for surrounding context (signatures only)
+	allFiles, err := a.AST.ParseDir(ctx, workDir)
+	if err != nil {
+		a.Logger.Warn("AST dir parse failed for execute context", "Error", err)
+		// Still use whatever target files we got
+		if len(targetFiles) > 0 {
+			return astpkg.SummarizeTargeted(nil, targetFiles)
+		}
+		return "Files to modify: " + strings.Join(filesToModify, ", ")
+	}
+
+	return astpkg.SummarizeTargeted(allFiles, targetFiles)
 }
 
 // --- helpers ---

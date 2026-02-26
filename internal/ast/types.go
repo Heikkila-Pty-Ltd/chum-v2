@@ -45,9 +45,11 @@ type ParsedFile struct {
 	Package string   `json:"package"`
 	Imports []string `json:"imports,omitempty"`
 	Symbols []Symbol `json:"symbols,omitempty"`
+	lines   []string // source lines (unexported, not serialized)
 }
 
 // Summary returns a compact multi-line string for LLM context injection.
+// Shows signatures only — use DetailedSummary for full function bodies.
 func (pf *ParsedFile) Summary() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "== %s (package %s) ==\n", pf.Path, pf.Package)
@@ -56,6 +58,37 @@ func (pf *ParsedFile) Summary() string {
 	}
 	for _, sym := range pf.Symbols {
 		b.WriteString(sym.String())
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// DetailedSummary returns the file header plus full source for each symbol.
+// Used for target files the agent is about to modify — gives complete context.
+func (pf *ParsedFile) DetailedSummary() string {
+	if len(pf.lines) == 0 {
+		return pf.Summary() // fallback if source not available
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "== %s (package %s) ==\n", pf.Path, pf.Package)
+	if len(pf.Imports) > 0 {
+		fmt.Fprintf(&b, "imports: %s\n", strings.Join(pf.Imports, ", "))
+	}
+	for _, sym := range pf.Symbols {
+		b.WriteString(sym.String())
+		b.WriteByte('\n')
+		// Include the actual source lines for this symbol
+		start := sym.StartLine - 1 // 0-indexed
+		end := sym.EndLine         // exclusive
+		if start < 0 {
+			start = 0
+		}
+		if end > len(pf.lines) {
+			end = len(pf.lines)
+		}
+		for i := start; i < end; i++ {
+			fmt.Fprintf(&b, "  %d: %s\n", i+1, pf.lines[i])
+		}
 		b.WriteByte('\n')
 	}
 	return b.String()
