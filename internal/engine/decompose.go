@@ -7,6 +7,7 @@ import (
 
 	"go.temporal.io/sdk/activity"
 
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/admit"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 )
 
@@ -70,8 +71,21 @@ func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, proje
 	if err != nil {
 		return nil, fmt.Errorf("create subtasks for %s: %w", parentID, err)
 	}
-
 	logger.Info("Created subtasks atomically", "Parent", parentID, "Count", len(ids), "IDs", ids)
+
+	// Run admission gate to validate, resolve targets, and promote open → ready.
+	// Subtasks must pass the same structural checks and conflict fence logic as
+	// any other task. Without this they'd sit in "open" until the next chum sync.
+	proj, ok := a.Config.Projects[project]
+	if ok && a.AST != nil {
+		gateResult, err := admit.RunGate(ctx, a.DAG, a.AST, project, proj.Workspace, a.Logger)
+		if err != nil {
+			logger.Warn("Admission gate failed after subtask creation", "error", err)
+		} else {
+			logger.Info("Admission gate ran inline", "result", gateResult.String())
+		}
+	}
+
 	return ids, nil
 }
 

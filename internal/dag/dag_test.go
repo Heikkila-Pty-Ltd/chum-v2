@@ -480,10 +480,10 @@ func TestCreateSubtasksAtomic_RewiresEdges(t *testing.T) {
 		t.Fatalf("S2 should depend on S1, dependents of S1 = %v", s1AsDep)
 	}
 
-	// Subtasks should be created as "ready"
+	// Subtasks should be created as "open" (admission gate promotes them)
 	s1, _ := d.GetTask(ctx, ids[0])
-	if s1.Status != "ready" {
-		t.Fatalf("S1 status = %q, want ready", s1.Status)
+	if s1.Status != "open" {
+		t.Fatalf("S1 status = %q, want open", s1.Status)
 	}
 
 	// Parent's upstream edges should be cleaned up (no dangling cruft)

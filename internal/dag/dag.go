@@ -214,7 +214,7 @@ func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks [
 		}
 		status := t.Status
 		if status == "" {
-			status = "ready"
+			status = "open"
 		}
 		taskType := t.Type
 		if taskType == "" {
