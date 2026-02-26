@@ -7,6 +7,7 @@ import (
 
 	"go.temporal.io/sdk/activity"
 
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/admit"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 )
 
@@ -48,39 +49,41 @@ func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*D
 }
 
 // CreateSubtasksActivity creates DAG tasks from decomposition steps,
-// wires sequential dependencies, and marks the parent as "decomposed".
+// wires sequential dependencies, rewires parent dependents to the last
+// subtask, and marks the parent as "decomposed" — all atomically.
+// If any step fails, the entire operation is rolled back (no partial children).
 func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, project string, steps []DecompStep) ([]string, error) {
 	logger := activity.GetLogger(ctx)
-	var ids []string
 
+	var tasks []dag.Task
 	for _, step := range steps {
-		task := dag.Task{
+		tasks = append(tasks, dag.Task{
 			Title:           step.Title,
 			Description:     step.Description,
-			Status:          "open",
 			ParentID:        parentID,
 			Acceptance:      step.Acceptance,
 			EstimateMinutes: step.Estimate,
 			Project:         project,
-		}
-		id, err := a.DAG.CreateTask(ctx, task)
+		})
+	}
+
+	ids, err := a.DAG.CreateSubtasksAtomic(ctx, parentID, tasks)
+	if err != nil {
+		return nil, fmt.Errorf("create subtasks for %s: %w", parentID, err)
+	}
+	logger.Info("Created subtasks atomically", "Parent", parentID, "Count", len(ids), "IDs", ids)
+
+	// Run admission gate to validate, resolve targets, and promote open → ready.
+	// Subtasks must pass the same structural checks and conflict fence logic as
+	// any other task. Without this they'd sit in "open" until the next chum sync.
+	proj, ok := a.Config.Projects[project]
+	if ok && a.AST != nil {
+		gateResult, err := admit.RunGate(ctx, a.DAG, a.AST, project, proj.Workspace, a.Logger)
 		if err != nil {
-			return nil, fmt.Errorf("create subtask %q: %w", step.Title, err)
+			logger.Warn("Admission gate failed after subtask creation", "error", err)
+		} else {
+			logger.Info("Admission gate ran inline", "result", gateResult.String())
 		}
-		ids = append(ids, id)
-		logger.Info("Created subtask", "ID", id, "Title", step.Title, "Parent", parentID)
-	}
-
-	// Wire sequential dependencies: step[i+1] depends on step[i]
-	for i := 1; i < len(ids); i++ {
-		if err := a.DAG.AddEdge(ctx, ids[i], ids[i-1]); err != nil {
-			logger.Warn("Failed to add subtask edge", "from", ids[i], "to", ids[i-1], "error", err)
-		}
-	}
-
-	// Mark parent as decomposed
-	if err := a.DAG.UpdateTaskStatus(ctx, parentID, "decomposed"); err != nil {
-		logger.Warn("Failed to mark parent as decomposed", "parentID", parentID, "error", err)
 	}
 
 	return ids, nil

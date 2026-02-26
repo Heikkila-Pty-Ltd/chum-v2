@@ -60,14 +60,7 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 		}
 		childCtx := workflow.WithChildOptions(ctx, childOpts)
 
-		req := TaskRequest{
-			TaskID:  c.TaskID,
-			Project: c.Project,
-			Prompt:  c.Prompt,
-			WorkDir: c.WorkDir,
-			Agent:   c.Agent,
-			Model:   c.Model,
-		}
+		req := TaskRequest(c)
 
 		// Wait for child workflow to actually start — without this,
 		// the parent completes before the server creates the child
@@ -85,12 +78,13 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 
 // DispatchCandidate is a ready task that should be dispatched.
 type DispatchCandidate struct {
-	TaskID  string
-	Project string
-	Prompt  string
-	WorkDir string
-	Agent   string
-	Model   string
+	TaskID   string
+	Project  string
+	Prompt   string
+	WorkDir  string
+	Agent    string
+	Model    string
+	ParentID string
 }
 
 // DispatchActivities holds dependencies for dispatch-related activities.
@@ -139,12 +133,13 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 			}
 
 			candidates = append(candidates, DispatchCandidate{
-				TaskID:  t.ID,
-				Project: projectName,
-				Prompt:  prompt,
-				WorkDir: project.Workspace,
-				Agent:   agent,
-				Model:   model,
+				TaskID:   t.ID,
+				Project:  projectName,
+				Prompt:   prompt,
+				WorkDir:  project.Workspace,
+				Agent:    agent,
+				Model:    model,
+				ParentID: t.ParentID,
 			})
 		}
 	}

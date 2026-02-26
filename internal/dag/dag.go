@@ -185,6 +185,152 @@ func (d *DAG) CreateTask(ctx context.Context, t Task) (string, error) {
 	return t.ID, nil
 }
 
+// CreateSubtasksAtomic creates subtasks, wires sequential dependencies, rewires
+// parent dependents to the last subtask, and marks the parent as "decomposed" —
+// all in a single transaction. If any step fails, everything is rolled back.
+func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks []Task) ([]string, error) {
+	if len(tasks) == 0 {
+		return nil, nil
+	}
+
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var ids []string
+	for _, t := range tasks {
+		if t.ID == "" {
+			id, err := generateTaskID(t.Project)
+			if err != nil {
+				return nil, fmt.Errorf("generate id: %w", err)
+			}
+			t.ID = id
+		}
+		labelsJSON, _ := json.Marshal(t.Labels)
+		if t.Labels == nil {
+			labelsJSON = []byte("[]")
+		}
+		status := t.Status
+		if status == "" {
+			status = "open"
+		}
+		taskType := t.Type
+		if taskType == "" {
+			taskType = "task"
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO tasks
+			(id, title, description, status, priority, type, assignee, labels,
+			 estimate_minutes, parent_id, acceptance, project, error_log)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			t.ID, t.Title, t.Description, status, t.Priority, taskType,
+			t.Assignee, string(labelsJSON), t.EstimateMinutes,
+			t.ParentID, t.Acceptance, t.Project, t.ErrorLog,
+		); err != nil {
+			return nil, fmt.Errorf("insert subtask %q: %w", t.Title, err)
+		}
+		ids = append(ids, t.ID)
+	}
+
+	// Wire sequential dependencies: step[i+1] depends on step[i]
+	for i := 1; i < len(ids); i++ {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT OR IGNORE INTO task_edges (from_task, to_task, source) VALUES (?, ?, 'beads')",
+			ids[i], ids[i-1]); err != nil {
+			return nil, fmt.Errorf("add subtask edge %s→%s: %w", ids[i], ids[i-1], err)
+		}
+	}
+
+	// Inherit: parent's own prerequisites (to_task entries where from_task = parent)
+	// become prerequisites of the first subtask, so S1 won't run before them.
+	// Preserves the original edge source. Deletes the parent's edges after copying.
+	firstSubtask := ids[0]
+	prereqRows, err := tx.QueryContext(ctx,
+		"SELECT to_task, source FROM task_edges WHERE from_task = ?", parentID)
+	if err != nil {
+		return nil, fmt.Errorf("get parent prerequisites: %w", err)
+	}
+	type edgeInfo struct {
+		target, source string
+	}
+	var prereqs []edgeInfo
+	for prereqRows.Next() {
+		var ei edgeInfo
+		if err := prereqRows.Scan(&ei.target, &ei.source); err != nil {
+			prereqRows.Close()
+			return nil, err
+		}
+		prereqs = append(prereqs, ei)
+	}
+	prereqRows.Close()
+	if err := prereqRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate parent prerequisites: %w", err)
+	}
+
+	for _, prereq := range prereqs {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT OR IGNORE INTO task_edges (from_task, to_task, source) VALUES (?, ?, ?)",
+			firstSubtask, prereq.target, prereq.source); err != nil {
+			return nil, fmt.Errorf("inherit prereq edge %s→%s: %w", firstSubtask, prereq.target, err)
+		}
+	}
+	// Clean up parent's upstream edges
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM task_edges WHERE from_task = ?", parentID); err != nil {
+		return nil, fmt.Errorf("remove parent upstream edges: %w", err)
+	}
+
+	// Rewire: dependents of parent now depend on the last subtask.
+	// Preserves the original edge source.
+	lastSubtask := ids[len(ids)-1]
+	rows, err := tx.QueryContext(ctx,
+		"SELECT from_task, source FROM task_edges WHERE to_task = ?", parentID)
+	if err != nil {
+		return nil, fmt.Errorf("get parent dependents: %w", err)
+	}
+	var dependents []edgeInfo
+	for rows.Next() {
+		var ei edgeInfo
+		if err := rows.Scan(&ei.target, &ei.source); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		dependents = append(dependents, ei)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate parent dependents: %w", err)
+	}
+
+	for _, dep := range dependents {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT OR IGNORE INTO task_edges (from_task, to_task, source) VALUES (?, ?, ?)",
+			dep.target, lastSubtask, dep.source); err != nil {
+			return nil, fmt.Errorf("rewire edge %s→%s: %w", dep.target, lastSubtask, err)
+		}
+	}
+	// Clean up parent's downstream edges
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM task_edges WHERE to_task = ?", parentID); err != nil {
+		return nil, fmt.Errorf("remove parent downstream edges: %w", err)
+	}
+
+	// Mark parent as decomposed
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE tasks SET status = 'decomposed', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		parentID); err != nil {
+		return nil, fmt.Errorf("mark parent decomposed: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return ids, nil
+}
+
 // GetTask retrieves a task by ID.
 func (d *DAG) GetTask(ctx context.Context, id string) (Task, error) {
 	row := d.db.QueryRowContext(ctx,
@@ -329,6 +475,25 @@ func (d *DAG) DeleteEdgesBySource(ctx context.Context, project, source string) e
 	return nil
 }
 
+// GetDependents returns task IDs that depend on the given task (from_task where to_task = id).
+func (d *DAG) GetDependents(ctx context.Context, id string) ([]string, error) {
+	rows, err := d.db.QueryContext(ctx,
+		"SELECT from_task FROM task_edges WHERE to_task = ?", id)
+	if err != nil {
+		return nil, fmt.Errorf("get dependents: %w", err)
+	}
+	defer rows.Close()
+	var deps []string
+	for rows.Next() {
+		var dep string
+		if err := rows.Scan(&dep); err != nil {
+			return nil, err
+		}
+		deps = append(deps, dep)
+	}
+	return deps, rows.Err()
+}
+
 // RemoveEdge removes a dependency.
 func (d *DAG) RemoveEdge(ctx context.Context, from, to string) error {
 	_, err := d.db.ExecContext(ctx,
@@ -345,7 +510,9 @@ func (d *DAG) SetTaskTargets(ctx context.Context, taskID string, targets []TaskT
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
 	if _, err := tx.ExecContext(ctx, "DELETE FROM task_targets WHERE task_id = ?", taskID); err != nil {
 		return fmt.Errorf("clear targets: %w", err)
@@ -413,9 +580,6 @@ func (d *DAG) GetAllTargetsForStatuses(ctx context.Context, project string, stat
 
 // --- scan helpers ---
 
-type rowScanner interface {
-	Scan(dest ...any) error
-}
 
 func scanTask(row *sql.Row) (Task, error) {
 	var t Task
