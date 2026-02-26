@@ -376,6 +376,36 @@ func TestAddEdge_RemoveEdge(t *testing.T) {
 	}
 }
 
+func TestGetDependents(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "gd-parent", Project: "p"})
+	d.CreateTask(ctx, Task{ID: "gd-child1", Project: "p"})
+	d.CreateTask(ctx, Task{ID: "gd-child2", Project: "p"})
+
+	d.AddEdge(ctx, "gd-child1", "gd-parent") // child1 depends on parent
+	d.AddEdge(ctx, "gd-child2", "gd-parent") // child2 depends on parent
+
+	deps, err := d.GetDependents(ctx, "gd-parent")
+	if err != nil {
+		t.Fatalf("GetDependents: %v", err)
+	}
+	if len(deps) != 2 {
+		t.Fatalf("expected 2 dependents, got %v", deps)
+	}
+
+	// No dependents case
+	deps, err = d.GetDependents(ctx, "gd-child1")
+	if err != nil {
+		t.Fatalf("GetDependents: %v", err)
+	}
+	if len(deps) != 0 {
+		t.Fatalf("expected 0 dependents, got %v", deps)
+	}
+}
+
 func TestAddEdgeWithSource(t *testing.T) {
 	t.Parallel()
 	d := newTestDAG(t)

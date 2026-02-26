@@ -78,6 +78,24 @@ func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, proje
 		}
 	}
 
+	// Rewire: any task that depended on the parent now depends on the last subtask.
+	// Without this, dependents would block forever since "decomposed" != "completed".
+	lastSubtask := ids[len(ids)-1]
+	dependents, err := a.DAG.GetDependents(ctx, parentID)
+	if err != nil {
+		logger.Warn("Failed to get parent dependents for rewiring", "parentID", parentID, "error", err)
+	} else {
+		for _, dep := range dependents {
+			if err := a.DAG.AddEdge(ctx, dep, lastSubtask); err != nil {
+				logger.Warn("Failed to add rewired edge", "from", dep, "to", lastSubtask, "error", err)
+			}
+			if err := a.DAG.RemoveEdge(ctx, dep, parentID); err != nil {
+				logger.Warn("Failed to remove old edge", "from", dep, "to", parentID, "error", err)
+			}
+			logger.Info("Rewired dependency", "dependent", dep, "oldDep", parentID, "newDep", lastSubtask)
+		}
+	}
+
 	// Mark parent as decomposed
 	if err := a.DAG.UpdateTaskStatus(ctx, parentID, "decomposed"); err != nil {
 		logger.Warn("Failed to mark parent as decomposed", "parentID", parentID, "error", err)
