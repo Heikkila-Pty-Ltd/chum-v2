@@ -21,8 +21,20 @@ func (d *Duration) UnmarshalText(text []byte) error {
 // Config is the top-level CHUM configuration.
 type Config struct {
 	General   General             `toml:"general"`
+	Planning  Planning            `toml:"planning"`
 	Projects  map[string]Project  `toml:"projects"`
 	Providers map[string]Provider `toml:"providers"`
+}
+
+// Planning configures the push-based planning ceremony.
+type Planning struct {
+	Enabled           bool     `toml:"enabled"`
+	MaxCycles         int      `toml:"max_cycles"`
+	SignalTimeout     Duration `toml:"signal_timeout"`
+	SessionTimeout    Duration `toml:"session_timeout"`
+	MaxResearchRounds int      `toml:"max_research_rounds"`
+	PollInterval      Duration `toml:"poll_interval"`
+	AllowedSenders    []string `toml:"allowed_senders"` // Matrix user IDs allowed to issue /plan commands (empty = allow all)
 }
 
 // General holds scheduler-level settings.
@@ -82,6 +94,22 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.General.DBPath == "" {
 		cfg.General.DBPath = "chum.db"
+	}
+	// Planning defaults
+	if cfg.Planning.MaxCycles == 0 {
+		cfg.Planning.MaxCycles = 3
+	}
+	if cfg.Planning.SignalTimeout.Duration == 0 {
+		cfg.Planning.SignalTimeout.Duration = 30 * time.Minute
+	}
+	if cfg.Planning.SessionTimeout.Duration == 0 {
+		cfg.Planning.SessionTimeout.Duration = 24 * time.Hour
+	}
+	if cfg.Planning.MaxResearchRounds == 0 {
+		cfg.Planning.MaxResearchRounds = 3
+	}
+	if cfg.Planning.PollInterval.Duration == 0 {
+		cfg.Planning.PollInterval.Duration = 10 * time.Second
 	}
 	return &cfg, nil
 }

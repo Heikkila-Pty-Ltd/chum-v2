@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/admit"
 	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
@@ -13,6 +14,9 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/engine"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
+
+	"go.temporal.io/sdk/client"
 )
 
 func main() {
@@ -154,8 +158,84 @@ func main() {
 		}
 		fmt.Printf("Created task %s [%s] %s\n", id, status, title)
 
+	case "plan":
+		// CLI fallback for planning ceremony (when Matrix is not available)
+		var project, agent, goalID string
+		for i := 2; i < len(os.Args)-1; i++ {
+			switch os.Args[i] {
+			case "--project":
+				project = os.Args[i+1]
+			case "--agent":
+				agent = os.Args[i+1]
+			case "--goal":
+				goalID = os.Args[i+1]
+			}
+		}
+		if project == "" || goalID == "" {
+			fmt.Fprintf(os.Stderr, "Usage: chum plan --project NAME --goal ISSUE_ID [--agent claude]\n")
+			os.Exit(1)
+		}
+		projCfg, ok := cfg.Projects[project]
+		if !ok || !projCfg.Enabled {
+			fmt.Fprintf(os.Stderr, "Error: project %q not found or not enabled\n", project)
+			os.Exit(1)
+		}
+		if agent == "" {
+			agent = "claude"
+		}
+		fmt.Printf("CHUM v2 — starting planning ceremony for %s\n", project)
+
+		c, err := client.Dial(client.Options{
+			HostPort:  cfg.General.TemporalHostPort,
+			Namespace: cfg.General.TemporalNamespace,
+		})
+		if err != nil {
+			logger.Error("Failed to connect to Temporal", "error", err)
+			os.Exit(1)
+		}
+		defer c.Close()
+
+		sessionID := fmt.Sprintf("planning-%s-%d", project, time.Now().UnixNano())
+		req := planning.PlanningRequest{
+			GoalID:    goalID,
+			Project:   project,
+			WorkDir:   projCfg.Workspace,
+			Agent:     agent,
+			Source:    "cli",
+			SessionID: sessionID,
+		}
+
+		opts := client.StartWorkflowOptions{
+			ID:        sessionID,
+			TaskQueue: cfg.General.TaskQueue,
+		}
+		ceremonyCfg := planning.PlanningCeremonyConfig{
+			MaxResearchRounds: cfg.Planning.MaxResearchRounds,
+			SignalTimeout:     cfg.Planning.SignalTimeout.Duration,
+			SessionTimeout:    cfg.Planning.SessionTimeout.Duration,
+			MaxCycles:         cfg.Planning.MaxCycles,
+		}
+		run, err := c.ExecuteWorkflow(context.Background(), opts, planning.PlanningWorkflow, req, ceremonyCfg)
+		if err != nil {
+			logger.Error("Failed to start planning workflow", "error", err)
+			os.Exit(1)
+		}
+		fmt.Printf("  Planning session started: %s (run: %s)\n", sessionID, run.GetRunID())
+		fmt.Println("  Monitor via Matrix chat or wait for completion.")
+
+		var result planning.PlanningResult
+		if err := run.Get(context.Background(), &result); err != nil {
+			logger.Error("Planning workflow failed", "error", err)
+			os.Exit(1)
+		}
+		if result.Cancelled {
+			fmt.Printf("  Planning cancelled: %s\n", result.CancelReason)
+		} else {
+			fmt.Printf("  Planning complete. %d subtasks created.\n", len(result.SubtaskIDs))
+		}
+
 	default:
-		fmt.Fprintf(os.Stderr, "Usage: chum [serve|sync|tasks|task create|init] [--config path]\n")
+		fmt.Fprintf(os.Stderr, "Usage: chum [serve|sync|tasks|task create|plan|init] [--config path]\n")
 		os.Exit(1)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,8 +15,10 @@ import (
 
 	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/chat"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 )
 
 // StartWorker connects to Temporal, registers workflows/activities,
@@ -29,6 +32,7 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("connect to temporal: %w", err)
 	}
+	defer c.Close()
 
 	w := worker.New(c, cfg.General.TaskQueue, worker.Options{})
 
@@ -92,6 +96,36 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	}
 	w.RegisterActivity(da)
 
+	// Register planning workflow + activities
+	w.RegisterWorkflow(planning.PlanningWorkflow)
+
+	matrixCfg := chat.MatrixConfig{
+		Homeserver:  cfg.General.MatrixHomeserver,
+		RoomID:      cfg.General.MatrixRoomID,
+		AccessToken: cfg.General.MatrixAccessToken,
+	}
+	pa := &planning.PlanningActivities{
+		DAG:          d,
+		Config:       cfg,
+		Logger:       logger,
+		AST:          parser,
+		BeadsClients: beadsClients,
+		ChatSend: func(ctx context.Context, roomID, message string) error {
+			sendCfg := matrixCfg
+			sendCfg.RoomID = roomID
+			return chat.SendMatrixMessage(ctx, sendCfg, message)
+		},
+	}
+	w.RegisterActivity(pa.ClarifyGoalActivity)
+	w.RegisterActivity(pa.ResearchApproachesActivity)
+	w.RegisterActivity(pa.GoalCheckActivity)
+	w.RegisterActivity(pa.StoreApproachesActivity)
+	w.RegisterActivity(pa.DeeperResearchActivity)
+	w.RegisterActivity(pa.AnswerQuestionActivity)
+	w.RegisterActivity(pa.DecomposeApproachActivity)
+	w.RegisterActivity(pa.CreatePlanSubtasksActivity)
+	w.RegisterActivity(pa.NotifyChatActivity)
+
 	// Register dispatcher schedule (idempotent — skips if already exists)
 	go func() {
 		// Wait for worker to be ready before registering schedules
@@ -100,6 +134,68 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 			logger.Error("Failed to register dispatcher schedule", "error", err)
 		}
 	}()
+
+	// Start chat bridge if planning is enabled and Matrix is configured.
+	// Use a cancellable context so the bridge stops when the worker shuts down.
+	bridgeCtx, bridgeCancel := context.WithCancel(context.Background())
+	defer bridgeCancel()
+
+	if cfg.Planning.Enabled && matrixCfg.Homeserver != "" && matrixCfg.AccessToken != "" && matrixCfg.RoomID != "" {
+		// Resolve default agent from first enabled provider (sorted by name for determinism).
+		defaultAgent := "claude"
+		providerNames := make([]string, 0, len(cfg.Providers))
+		for name := range cfg.Providers {
+			providerNames = append(providerNames, name)
+		}
+		sort.Strings(providerNames)
+		for _, name := range providerNames {
+			prov := cfg.Providers[name]
+			if prov.Enabled && prov.CLI != "" {
+				defaultAgent = prov.CLI
+				break
+			}
+		}
+
+		var allowedSenders map[string]bool
+		if len(cfg.Planning.AllowedSenders) > 0 {
+			allowedSenders = make(map[string]bool, len(cfg.Planning.AllowedSenders))
+			for _, s := range cfg.Planning.AllowedSenders {
+				allowedSenders[s] = true
+			}
+			logger.Info("Chat bridge sender allowlist active", "senders", len(allowedSenders))
+		}
+
+		projectWorkDirs := make(map[string]string)
+		for name, proj := range cfg.Projects {
+			if proj.Enabled {
+				projectWorkDirs[name] = proj.Workspace
+			}
+		}
+
+		bridge := &chat.Bridge{
+			Client:          c,
+			MatrixCfg:       matrixCfg,
+			PollInterval:    cfg.Planning.PollInterval.Duration,
+			Logger:          logger,
+			TaskQueue:       cfg.General.TaskQueue,
+			DefaultAgent:    defaultAgent,
+			AllowedSenders:  allowedSenders,
+			ProjectWorkDirs: projectWorkDirs,
+			CeremonyCfg: planning.PlanningCeremonyConfig{
+				MaxResearchRounds: cfg.Planning.MaxResearchRounds,
+				SignalTimeout:     cfg.Planning.SignalTimeout.Duration,
+				SessionTimeout:    cfg.Planning.SessionTimeout.Duration,
+				MaxCycles:         cfg.Planning.MaxCycles,
+			},
+		}
+		go func() {
+			time.Sleep(3 * time.Second)
+			logger.Info("Starting chat bridge for planning")
+			if err := bridge.Run(bridgeCtx); err != nil && bridgeCtx.Err() == nil {
+				logger.Error("Chat bridge stopped", "error", err)
+			}
+		}()
+	}
 
 	logger.Info("Starting CHUM v2 worker",
 		"task_queue", cfg.General.TaskQueue,
