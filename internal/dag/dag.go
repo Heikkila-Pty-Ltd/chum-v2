@@ -189,6 +189,10 @@ func (d *DAG) CreateTask(ctx context.Context, t Task) (string, error) {
 // parent dependents to the last subtask, and marks the parent as "decomposed" —
 // all in a single transaction. If any step fails, everything is rolled back.
 func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks []Task) ([]string, error) {
+	if len(tasks) == 0 {
+		return nil, nil
+	}
+
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -210,7 +214,7 @@ func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks [
 		}
 		status := t.Status
 		if status == "" {
-			status = "open"
+			status = "ready"
 		}
 		taskType := t.Type
 		if taskType == "" {
@@ -240,60 +244,70 @@ func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks [
 
 	// Inherit: parent's own prerequisites (to_task entries where from_task = parent)
 	// become prerequisites of the first subtask, so S1 won't run before them.
+	// Preserves the original edge source. Deletes the parent's edges after copying.
 	firstSubtask := ids[0]
 	prereqRows, err := tx.QueryContext(ctx,
-		"SELECT to_task FROM task_edges WHERE from_task = ?", parentID)
+		"SELECT to_task, source FROM task_edges WHERE from_task = ?", parentID)
 	if err != nil {
 		return nil, fmt.Errorf("get parent prerequisites: %w", err)
 	}
-	var prereqs []string
+	type edgeInfo struct {
+		target, source string
+	}
+	var prereqs []edgeInfo
 	for prereqRows.Next() {
-		var p string
-		if err := prereqRows.Scan(&p); err != nil {
+		var ei edgeInfo
+		if err := prereqRows.Scan(&ei.target, &ei.source); err != nil {
 			prereqRows.Close()
 			return nil, err
 		}
-		prereqs = append(prereqs, p)
+		prereqs = append(prereqs, ei)
 	}
 	prereqRows.Close()
 
 	for _, prereq := range prereqs {
 		if _, err := tx.ExecContext(ctx,
-			"INSERT OR IGNORE INTO task_edges (from_task, to_task, source) VALUES (?, ?, 'beads')",
-			firstSubtask, prereq); err != nil {
-			return nil, fmt.Errorf("inherit prereq edge %s→%s: %w", firstSubtask, prereq, err)
+			"INSERT OR IGNORE INTO task_edges (from_task, to_task, source) VALUES (?, ?, ?)",
+			firstSubtask, prereq.target, prereq.source); err != nil {
+			return nil, fmt.Errorf("inherit prereq edge %s→%s: %w", firstSubtask, prereq.target, err)
 		}
 	}
+	// Clean up parent's upstream edges
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM task_edges WHERE from_task = ?", parentID); err != nil {
+		return nil, fmt.Errorf("remove parent upstream edges: %w", err)
+	}
 
-	// Rewire: dependents of parent now depend on the last subtask
+	// Rewire: dependents of parent now depend on the last subtask.
+	// Preserves the original edge source.
 	lastSubtask := ids[len(ids)-1]
 	rows, err := tx.QueryContext(ctx,
-		"SELECT from_task FROM task_edges WHERE to_task = ?", parentID)
+		"SELECT from_task, source FROM task_edges WHERE to_task = ?", parentID)
 	if err != nil {
 		return nil, fmt.Errorf("get parent dependents: %w", err)
 	}
-	var dependents []string
+	var dependents []edgeInfo
 	for rows.Next() {
-		var dep string
-		if err := rows.Scan(&dep); err != nil {
+		var ei edgeInfo
+		if err := rows.Scan(&ei.target, &ei.source); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		dependents = append(dependents, dep)
+		dependents = append(dependents, ei)
 	}
 	rows.Close()
 
 	for _, dep := range dependents {
 		if _, err := tx.ExecContext(ctx,
-			"INSERT OR IGNORE INTO task_edges (from_task, to_task, source) VALUES (?, ?, 'beads')",
-			dep, lastSubtask); err != nil {
-			return nil, fmt.Errorf("rewire edge %s→%s: %w", dep, lastSubtask, err)
+			"INSERT OR IGNORE INTO task_edges (from_task, to_task, source) VALUES (?, ?, ?)",
+			dep.target, lastSubtask, dep.source); err != nil {
+			return nil, fmt.Errorf("rewire edge %s→%s: %w", dep.target, lastSubtask, err)
 		}
-		if _, err := tx.ExecContext(ctx,
-			"DELETE FROM task_edges WHERE from_task = ? AND to_task = ?",
-			dep, parentID); err != nil {
-			return nil, fmt.Errorf("remove old edge %s→%s: %w", dep, parentID, err)
-		}
+	}
+	// Clean up parent's downstream edges
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM task_edges WHERE to_task = ?", parentID); err != nil {
+		return nil, fmt.Errorf("remove parent downstream edges: %w", err)
 	}
 
 	// Mark parent as decomposed

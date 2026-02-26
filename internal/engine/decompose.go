@@ -59,7 +59,6 @@ func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, proje
 		tasks = append(tasks, dag.Task{
 			Title:           step.Title,
 			Description:     step.Description,
-			Status:          "open",
 			ParentID:        parentID,
 			Acceptance:      step.Acceptance,
 			EstimateMinutes: step.Estimate,

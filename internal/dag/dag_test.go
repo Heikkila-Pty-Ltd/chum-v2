@@ -480,13 +480,36 @@ func TestCreateSubtasksAtomic_RewiresEdges(t *testing.T) {
 		t.Fatalf("S2 should depend on S1, dependents of S1 = %v", s1AsDep)
 	}
 
-	// With prereq completed and S1+S2 as open, downstream should NOT be ready
-	// (it depends on S2 which is open)
-	ready, _ := d.GetReadyNodes(ctx, "p")
-	for _, r := range ready {
-		if r.ID == "downstream" {
-			t.Fatal("downstream should not be ready while S2 is open")
+	// Subtasks should be created as "ready"
+	s1, _ := d.GetTask(ctx, ids[0])
+	if s1.Status != "ready" {
+		t.Fatalf("S1 status = %q, want ready", s1.Status)
+	}
+
+	// Parent's upstream edges should be cleaned up (no dangling cruft)
+	parentPrereqDeps, _ := d.GetDependents(ctx, "prereq")
+	for _, dep := range parentPrereqDeps {
+		if dep == "parent" {
+			t.Fatal("parent→prereq edge should be removed after decomposition")
 		}
+	}
+
+	// Parent's downstream edges should also be cleaned up
+	parentDownDeps, _ := d.GetDependents(ctx, "parent")
+	if len(parentDownDeps) != 0 {
+		t.Fatalf("parent should have no dependents after decomposition, got %v", parentDownDeps)
+	}
+
+	// Edge source should be preserved (original edges were 'beads')
+	var source string
+	err = d.DB().QueryRowContext(ctx,
+		"SELECT source FROM task_edges WHERE from_task = ? AND to_task = ?",
+		ids[0], "prereq").Scan(&source)
+	if err != nil {
+		t.Fatalf("query inherited edge source: %v", err)
+	}
+	if source != "beads" {
+		t.Fatalf("inherited edge source = %q, want beads", source)
 	}
 }
 
