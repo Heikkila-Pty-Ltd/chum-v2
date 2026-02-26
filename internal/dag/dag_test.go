@@ -3,6 +3,7 @@ package dag
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -342,9 +343,15 @@ func TestAddEdge_SelfEdgeRejected(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	err := d.AddEdge(ctx, "a", "a")
+	// Create the task first so FK constraints don't mask a broken self-edge guard.
+	d.CreateTask(ctx, Task{ID: "self-1", Project: "p"})
+
+	err := d.AddEdge(ctx, "self-1", "self-1")
 	if err == nil {
 		t.Fatal("expected error for self-edge")
+	}
+	if !strings.Contains(err.Error(), "self-edge") {
+		t.Fatalf("expected self-edge error, got: %v", err)
 	}
 }
 
@@ -398,17 +405,29 @@ func TestDeleteEdgesBySource(t *testing.T) {
 		t.Fatalf("DeleteEdgesBySource: %v", err)
 	}
 
-	// "ds-1 → ds-2" (ast) should be gone; "ds-1 → ds-3" (beads) should remain.
-	// Verify via GetReadyNodes: ds-2 is ready but ds-3 still blocks ds-1.
+	// Phase 1: ds-1 should still be blocked by ds-3 (beads edge remains).
 	d.UpdateTaskStatus(ctx, "ds-1", "ready")
 	d.UpdateTaskStatus(ctx, "ds-3", "open") // dep not completed
 	ready, _ := d.GetReadyNodes(ctx, "p")
 	for _, r := range ready {
 		if r.ID == "ds-1" {
-			// ds-1 depends on ds-3 (beads), which is still "open", so ds-1
-			// should NOT be ready.
 			t.Fatal("ds-1 should still be blocked by ds-3 (beads edge)")
 		}
+	}
+
+	// Phase 2: Complete ds-3 → ds-1 should become ready, proving the
+	// ast edge (ds-1 → ds-2) was actually removed. If it weren't, ds-1
+	// would still be blocked by the uncompleted ds-2.
+	d.UpdateTaskStatus(ctx, "ds-3", "completed")
+	ready, _ = d.GetReadyNodes(ctx, "p")
+	found := false
+	for _, r := range ready {
+		if r.ID == "ds-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("ds-1 should be ready after ds-3 completed (ast edge to ds-2 should be gone)")
 	}
 }
 
