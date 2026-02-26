@@ -266,6 +266,9 @@ func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks [
 		prereqs = append(prereqs, ei)
 	}
 	prereqRows.Close()
+	if err := prereqRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate parent prerequisites: %w", err)
+	}
 
 	for _, prereq := range prereqs {
 		if _, err := tx.ExecContext(ctx,
@@ -298,6 +301,9 @@ func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks [
 		dependents = append(dependents, ei)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate parent dependents: %w", err)
+	}
 
 	for _, dep := range dependents {
 		if _, err := tx.ExecContext(ctx,
