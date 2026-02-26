@@ -246,10 +246,9 @@ func (b *Bridge) signalWorkflow(ctx context.Context, room, sessionID, signalName
 		return fmt.Errorf("signal workflow %s: %w", sid, err)
 	}
 
-	// If the user just sent a cancel signal, clear the active session.
-	if signalName == "plan-cancel" {
-		b.clearActiveSession(room, sid)
-	}
+	// Don't clear the session on cancel — the watchSessionCompletion goroutine
+	// will clean up once the workflow actually exits. Clearing early would let
+	// a new /plan start race with the still-running workflow.
 
 	return nil
 }
