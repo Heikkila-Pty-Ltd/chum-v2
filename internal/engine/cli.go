@@ -40,11 +40,21 @@ type CLIResult struct {
 	Output   string
 }
 
-// RunCLI executes an LLM CLI with the given prompt piped via stdin.
-// Returns ErrRateLimited if the output indicates a rate/usage limit.
+// RunCLI executes an LLM CLI in PLAN mode (--print, stdout capture only).
+// The CLI does NOT modify files — it just returns text output.
 func RunCLI(agent, model, workDir, prompt string) (*CLIResult, error) {
-	cmd := buildCLICommand(agent, model, workDir)
+	cmd := buildPlanCommand(agent, model, workDir)
+	return runWithPrompt(cmd, prompt, agent)
+}
 
+// RunCLIExec executes an LLM CLI in EXECUTE mode (file-modifying).
+// The CLI WILL modify files in workDir. No --print flag.
+func RunCLIExec(agent, model, workDir, prompt string) (*CLIResult, error) {
+	cmd := buildExecCommand(agent, model, workDir)
+	return runWithPrompt(cmd, prompt, agent)
+}
+
+func runWithPrompt(cmd *exec.Cmd, prompt, agent string) (*CLIResult, error) {
 	// Pipe prompt via stdin (not args) to avoid ARG_MAX and /proc leaks
 	tmpFile, err := os.CreateTemp("", "chum-prompt-*.txt")
 	if err != nil {
@@ -82,7 +92,8 @@ func RunCLI(agent, model, workDir, prompt string) (*CLIResult, error) {
 	return result, nil
 }
 
-func buildCLICommand(agent, model, workDir string) *exec.Cmd {
+// buildPlanCommand creates a CLI command for PLANNING (text output only, no file writes).
+func buildPlanCommand(agent, model, workDir string) *exec.Cmd {
 	agent = strings.ToLower(agent)
 	var cmd *exec.Cmd
 	switch {
@@ -94,6 +105,39 @@ func buildCLICommand(agent, model, workDir string) *exec.Cmd {
 		cmd = exec.Command("claude", args...)
 	case strings.HasPrefix(agent, "gemini"):
 		args := []string{"--print"}
+		if model != "" {
+			args = append(args, "--model", model)
+		}
+		cmd = exec.Command("gemini", args...)
+	case strings.HasPrefix(agent, "codex"):
+		args := []string{"--quiet"}
+		if model != "" {
+			args = append(args, "--model", model)
+		}
+		cmd = exec.Command("codex", args...)
+	default:
+		cmd = exec.Command(agent)
+	}
+	cmd.Dir = workDir
+	return cmd
+}
+
+// buildExecCommand creates a CLI command for EXECUTION (file-modifying, unattended).
+func buildExecCommand(agent, model, workDir string) *exec.Cmd {
+	agent = strings.ToLower(agent)
+	var cmd *exec.Cmd
+	switch {
+	case strings.HasPrefix(agent, "claude"):
+		// No --print: Claude will modify files directly.
+		// --dangerously-skip-permissions: unattended file writes in worktree.
+		args := []string{"--dangerously-skip-permissions"}
+		if model != "" {
+			args = append(args, "--model", model)
+		}
+		cmd = exec.Command("claude", args...)
+	case strings.HasPrefix(agent, "gemini"):
+		// No --print: Gemini will modify files directly.
+		args := []string{"--sandbox=false"}
 		if model != "" {
 			args = append(args, "--model", model)
 		}
