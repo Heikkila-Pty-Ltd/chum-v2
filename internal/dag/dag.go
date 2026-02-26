@@ -197,7 +197,9 @@ func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks [
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
 	var ids []string
 	for _, t := range tasks {
@@ -502,7 +504,9 @@ func (d *DAG) SetTaskTargets(ctx context.Context, taskID string, targets []TaskT
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
 	if _, err := tx.ExecContext(ctx, "DELETE FROM task_targets WHERE task_id = ?", taskID); err != nil {
 		return fmt.Errorf("clear targets: %w", err)
@@ -570,9 +574,6 @@ func (d *DAG) GetAllTargetsForStatuses(ctx context.Context, project string, stat
 
 // --- scan helpers ---
 
-type rowScanner interface {
-	Scan(dest ...any) error
-}
 
 func scanTask(row *sql.Row) (Task, error) {
 	var t Task

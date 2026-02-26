@@ -60,15 +60,7 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 		}
 		childCtx := workflow.WithChildOptions(ctx, childOpts)
 
-		req := TaskRequest{
-			TaskID:   c.TaskID,
-			Project:  c.Project,
-			Prompt:   c.Prompt,
-			WorkDir:  c.WorkDir,
-			Agent:    c.Agent,
-			Model:    c.Model,
-			ParentID: c.ParentID,
-		}
+		req := TaskRequest(c)
 
 		// Wait for child workflow to actually start — without this,
 		// the parent completes before the server creates the child

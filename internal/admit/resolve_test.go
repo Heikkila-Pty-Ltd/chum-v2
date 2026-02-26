@@ -111,7 +111,6 @@ func TestResolveTargets_StopwordsSkipped(t *testing.T) {
 }
 
 func TestResolveTargets_ShortTokensSkipped(t *testing.T) {
-	idx := BuildSymbolIndex(testFiles())
 	// Add a short symbol name to the index
 	files := []*astpkg.ParsedFile{
 		{
@@ -122,7 +121,7 @@ func TestResolveTargets_ShortTokensSkipped(t *testing.T) {
 			},
 		},
 	}
-	idx = BuildSymbolIndex(files)
+	idx := BuildSymbolIndex(files)
 	task := dag.Task{
 		ID:          "test-4",
 		Description: "We need to Do something about this, because it is broken and needs fixing right now.",

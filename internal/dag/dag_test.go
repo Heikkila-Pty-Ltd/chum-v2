@@ -173,9 +173,9 @@ func TestListTasks_FiltersByProject(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "a-1", Project: "alpha", Title: "a1"})
-	d.CreateTask(ctx, Task{ID: "b-1", Project: "beta", Title: "b1"})
-	d.CreateTask(ctx, Task{ID: "a-2", Project: "alpha", Title: "a2"})
+	_, _ = d.CreateTask(ctx, Task{ID: "a-1", Project: "alpha", Title: "a1"})
+	_, _ = d.CreateTask(ctx, Task{ID: "b-1", Project: "beta", Title: "b1"})
+	_, _ = d.CreateTask(ctx, Task{ID: "a-2", Project: "alpha", Title: "a2"})
 
 	tasks, err := d.ListTasks(ctx, "alpha")
 	if err != nil {
@@ -191,10 +191,10 @@ func TestListTasks_FiltersByStatus(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "s-1", Project: "p", Status: "ready"})
-	d.CreateTask(ctx, Task{ID: "s-2", Project: "p", Status: "running"})
-	d.CreateTask(ctx, Task{ID: "s-3", Project: "p", Status: "ready"})
-	d.CreateTask(ctx, Task{ID: "s-4", Project: "p", Status: "completed"})
+	_, _ = d.CreateTask(ctx, Task{ID: "s-1", Project: "p", Status: "ready"})
+	_, _ = d.CreateTask(ctx, Task{ID: "s-2", Project: "p", Status: "running"})
+	_, _ = d.CreateTask(ctx, Task{ID: "s-3", Project: "p", Status: "ready"})
+	_, _ = d.CreateTask(ctx, Task{ID: "s-4", Project: "p", Status: "completed"})
 
 	tasks, err := d.ListTasks(ctx, "p", "ready", "completed")
 	if err != nil {
@@ -226,7 +226,7 @@ func TestUpdateTask_UpdatesFields(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "u-1", Project: "p", Title: "old"})
+	_, _ = d.CreateTask(ctx, Task{ID: "u-1", Project: "p", Title: "old"})
 
 	err := d.UpdateTask(ctx, "u-1", map[string]any{
 		"title":       "new",
@@ -254,7 +254,7 @@ func TestUpdateTask_RejectsUnknownField(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "u-2", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "u-2", Project: "p"})
 	err := d.UpdateTask(ctx, "u-2", map[string]any{"bogus": "value"})
 	if err == nil {
 		t.Fatal("expected error for unknown field")
@@ -288,7 +288,7 @@ func TestUpdateTask_LabelsMarshalled(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "lbl-1", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "lbl-1", Project: "p"})
 	err := d.UpdateTask(ctx, "lbl-1", map[string]any{
 		"labels": []string{"frontend", "urgent"},
 	})
@@ -309,7 +309,7 @@ func TestUpdateTaskStatus(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "st-1", Project: "p", Status: "open"})
+	_, _ = d.CreateTask(ctx, Task{ID: "st-1", Project: "p", Status: "open"})
 	if err := d.UpdateTaskStatus(ctx, "st-1", "running"); err != nil {
 		t.Fatalf("UpdateTaskStatus: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestCloseTask(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "cl-1", Project: "p", Status: "running"})
+	_, _ = d.CreateTask(ctx, Task{ID: "cl-1", Project: "p", Status: "running"})
 	if err := d.CloseTask(ctx, "cl-1", "completed"); err != nil {
 		t.Fatalf("CloseTask: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestAddEdge_SelfEdgeRejected(t *testing.T) {
 	ctx := context.Background()
 
 	// Create the task first so FK constraints don't mask a broken self-edge guard.
-	d.CreateTask(ctx, Task{ID: "self-1", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "self-1", Project: "p"})
 
 	err := d.AddEdge(ctx, "self-1", "self-1")
 	if err == nil {
@@ -360,8 +360,8 @@ func TestAddEdge_RemoveEdge(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "e-1", Project: "p"})
-	d.CreateTask(ctx, Task{ID: "e-2", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "e-1", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "e-2", Project: "p"})
 
 	if err := d.AddEdge(ctx, "e-1", "e-2"); err != nil {
 		t.Fatalf("AddEdge: %v", err)
@@ -381,12 +381,12 @@ func TestGetDependents(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "gd-parent", Project: "p"})
-	d.CreateTask(ctx, Task{ID: "gd-child1", Project: "p"})
-	d.CreateTask(ctx, Task{ID: "gd-child2", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "gd-parent", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "gd-child1", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "gd-child2", Project: "p"})
 
-	d.AddEdge(ctx, "gd-child1", "gd-parent") // child1 depends on parent
-	d.AddEdge(ctx, "gd-child2", "gd-parent") // child2 depends on parent
+	_ = d.AddEdge(ctx, "gd-child1", "gd-parent") // child1 depends on parent
+	_ = d.AddEdge(ctx, "gd-child2", "gd-parent") // child2 depends on parent
 
 	deps, err := d.GetDependents(ctx, "gd-parent")
 	if err != nil {
@@ -412,11 +412,11 @@ func TestCreateSubtasksAtomic_RewiresEdges(t *testing.T) {
 	ctx := context.Background()
 
 	// Setup: prereq → parent → downstream
-	d.CreateTask(ctx, Task{ID: "prereq", Project: "p", Status: "completed"})
-	d.CreateTask(ctx, Task{ID: "parent", Project: "p", Status: "running"})
-	d.CreateTask(ctx, Task{ID: "downstream", Project: "p", Status: "ready"})
-	d.AddEdge(ctx, "parent", "prereq")       // parent depends on prereq
-	d.AddEdge(ctx, "downstream", "parent")   // downstream depends on parent
+	_, _ = d.CreateTask(ctx, Task{ID: "prereq", Project: "p", Status: "completed"})
+	_, _ = d.CreateTask(ctx, Task{ID: "parent", Project: "p", Status: "running"})
+	_, _ = d.CreateTask(ctx, Task{ID: "downstream", Project: "p", Status: "ready"})
+	_ = d.AddEdge(ctx, "parent", "prereq")       // parent depends on prereq
+	_ = d.AddEdge(ctx, "downstream", "parent")   // downstream depends on parent
 
 	// Decompose parent into 2 subtasks
 	ids, err := d.CreateSubtasksAtomic(ctx, "parent", []Task{
@@ -518,8 +518,8 @@ func TestAddEdgeWithSource(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "es-1", Project: "p"})
-	d.CreateTask(ctx, Task{ID: "es-2", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "es-1", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "es-2", Project: "p"})
 
 	if err := d.AddEdgeWithSource(ctx, "es-1", "es-2", "ast"); err != nil {
 		t.Fatalf("AddEdgeWithSource: %v", err)
@@ -531,20 +531,20 @@ func TestDeleteEdgesBySource(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "ds-1", Project: "p"})
-	d.CreateTask(ctx, Task{ID: "ds-2", Project: "p"})
-	d.CreateTask(ctx, Task{ID: "ds-3", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "ds-1", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "ds-2", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "ds-3", Project: "p"})
 
-	d.AddEdgeWithSource(ctx, "ds-1", "ds-2", "ast")
-	d.AddEdgeWithSource(ctx, "ds-1", "ds-3", "beads")
+	_ = d.AddEdgeWithSource(ctx, "ds-1", "ds-2", "ast")
+	_ = d.AddEdgeWithSource(ctx, "ds-1", "ds-3", "beads")
 
 	if err := d.DeleteEdgesBySource(ctx, "p", "ast"); err != nil {
 		t.Fatalf("DeleteEdgesBySource: %v", err)
 	}
 
 	// Phase 1: ds-1 should still be blocked by ds-3 (beads edge remains).
-	d.UpdateTaskStatus(ctx, "ds-1", "ready")
-	d.UpdateTaskStatus(ctx, "ds-3", "open") // dep not completed
+	_ = d.UpdateTaskStatus(ctx, "ds-1", "ready")
+	_ = d.UpdateTaskStatus(ctx, "ds-3", "open") // dep not completed
 	ready, _ := d.GetReadyNodes(ctx, "p")
 	for _, r := range ready {
 		if r.ID == "ds-1" {
@@ -555,7 +555,7 @@ func TestDeleteEdgesBySource(t *testing.T) {
 	// Phase 2: Complete ds-3 → ds-1 should become ready, proving the
 	// ast edge (ds-1 → ds-2) was actually removed. If it weren't, ds-1
 	// would still be blocked by the uncompleted ds-2.
-	d.UpdateTaskStatus(ctx, "ds-3", "completed")
+	_ = d.UpdateTaskStatus(ctx, "ds-3", "completed")
 	ready, _ = d.GetReadyNodes(ctx, "p")
 	found := false
 	for _, r := range ready {
@@ -575,8 +575,8 @@ func TestGetReadyNodes_NoDeps(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "r-1", Project: "p", Status: "ready"})
-	d.CreateTask(ctx, Task{ID: "r-2", Project: "p", Status: "open"})
+	_, _ = d.CreateTask(ctx, Task{ID: "r-1", Project: "p", Status: "ready"})
+	_, _ = d.CreateTask(ctx, Task{ID: "r-2", Project: "p", Status: "open"})
 
 	ready, err := d.GetReadyNodes(ctx, "p")
 	if err != nil {
@@ -592,9 +592,9 @@ func TestGetReadyNodes_BlockedByDep(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "dep-a", Project: "p", Status: "open"})
-	d.CreateTask(ctx, Task{ID: "dep-b", Project: "p", Status: "ready"})
-	d.AddEdge(ctx, "dep-b", "dep-a") // b depends on a
+	_, _ = d.CreateTask(ctx, Task{ID: "dep-a", Project: "p", Status: "open"})
+	_, _ = d.CreateTask(ctx, Task{ID: "dep-b", Project: "p", Status: "ready"})
+	_ = d.AddEdge(ctx, "dep-b", "dep-a") // b depends on a
 
 	ready, err := d.GetReadyNodes(ctx, "p")
 	if err != nil {
@@ -611,9 +611,9 @@ func TestGetReadyNodes_UnblockedWhenDepCompleted(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "uc-a", Project: "p", Status: "completed"})
-	d.CreateTask(ctx, Task{ID: "uc-b", Project: "p", Status: "ready"})
-	d.AddEdge(ctx, "uc-b", "uc-a") // b depends on a
+	_, _ = d.CreateTask(ctx, Task{ID: "uc-a", Project: "p", Status: "completed"})
+	_, _ = d.CreateTask(ctx, Task{ID: "uc-b", Project: "p", Status: "ready"})
+	_ = d.AddEdge(ctx, "uc-b", "uc-a") // b depends on a
 
 	ready, err := d.GetReadyNodes(ctx, "p")
 	if err != nil {
@@ -629,8 +629,8 @@ func TestGetReadyNodes_PriorityOrdering(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "pr-low", Project: "p", Status: "ready", Priority: 10})
-	d.CreateTask(ctx, Task{ID: "pr-high", Project: "p", Status: "ready", Priority: 1})
+	_, _ = d.CreateTask(ctx, Task{ID: "pr-low", Project: "p", Status: "ready", Priority: 10})
+	_, _ = d.CreateTask(ctx, Task{ID: "pr-high", Project: "p", Status: "ready", Priority: 1})
 
 	ready, _ := d.GetReadyNodes(ctx, "p")
 	if len(ready) != 2 {
@@ -646,11 +646,11 @@ func TestGetReadyNodes_MultipleDeps_AllMustComplete(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "md-a", Project: "p", Status: "completed"})
-	d.CreateTask(ctx, Task{ID: "md-b", Project: "p", Status: "open"})
-	d.CreateTask(ctx, Task{ID: "md-c", Project: "p", Status: "ready"})
-	d.AddEdge(ctx, "md-c", "md-a")
-	d.AddEdge(ctx, "md-c", "md-b")
+	_, _ = d.CreateTask(ctx, Task{ID: "md-a", Project: "p", Status: "completed"})
+	_, _ = d.CreateTask(ctx, Task{ID: "md-b", Project: "p", Status: "open"})
+	_, _ = d.CreateTask(ctx, Task{ID: "md-c", Project: "p", Status: "ready"})
+	_ = d.AddEdge(ctx, "md-c", "md-a")
+	_ = d.AddEdge(ctx, "md-c", "md-b")
 
 	ready, _ := d.GetReadyNodes(ctx, "p")
 	if len(ready) != 0 {
@@ -658,7 +658,7 @@ func TestGetReadyNodes_MultipleDeps_AllMustComplete(t *testing.T) {
 	}
 
 	// Complete md-b → md-c should now be ready.
-	d.UpdateTaskStatus(ctx, "md-b", "completed")
+	_ = d.UpdateTaskStatus(ctx, "md-b", "completed")
 	ready, _ = d.GetReadyNodes(ctx, "p")
 	if len(ready) != 1 || ready[0].ID != "md-c" {
 		t.Fatalf("ready = %v, want [md-c]", taskIDs(ready))
@@ -670,8 +670,8 @@ func TestGetReadyNodes_FiltersByProject(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "fp-1", Project: "alpha", Status: "ready"})
-	d.CreateTask(ctx, Task{ID: "fp-2", Project: "beta", Status: "ready"})
+	_, _ = d.CreateTask(ctx, Task{ID: "fp-1", Project: "alpha", Status: "ready"})
+	_, _ = d.CreateTask(ctx, Task{ID: "fp-2", Project: "beta", Status: "ready"})
 
 	ready, _ := d.GetReadyNodes(ctx, "alpha")
 	if len(ready) != 1 || ready[0].ID != "fp-1" {
@@ -686,7 +686,7 @@ func TestSetAndGetTaskTargets(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "tgt-1", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "tgt-1", Project: "p"})
 
 	targets := []TaskTarget{
 		{TaskID: "tgt-1", FilePath: "main.go", SymbolName: "main", SymbolKind: "function"},
@@ -710,12 +710,12 @@ func TestSetTaskTargets_Replaces(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "rep-1", Project: "p"})
+	_, _ = d.CreateTask(ctx, Task{ID: "rep-1", Project: "p"})
 
-	d.SetTaskTargets(ctx, "rep-1", []TaskTarget{
+	_ = d.SetTaskTargets(ctx, "rep-1", []TaskTarget{
 		{TaskID: "rep-1", FilePath: "old.go"},
 	})
-	d.SetTaskTargets(ctx, "rep-1", []TaskTarget{
+	_ = d.SetTaskTargets(ctx, "rep-1", []TaskTarget{
 		{TaskID: "rep-1", FilePath: "new.go"},
 	})
 
@@ -733,17 +733,17 @@ func TestGetAllTargetsForStatuses(t *testing.T) {
 	d := newTestDAG(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, Task{ID: "at-1", Project: "p", Status: "ready"})
-	d.CreateTask(ctx, Task{ID: "at-2", Project: "p", Status: "running"})
-	d.CreateTask(ctx, Task{ID: "at-3", Project: "p", Status: "completed"})
+	_, _ = d.CreateTask(ctx, Task{ID: "at-1", Project: "p", Status: "ready"})
+	_, _ = d.CreateTask(ctx, Task{ID: "at-2", Project: "p", Status: "running"})
+	_, _ = d.CreateTask(ctx, Task{ID: "at-3", Project: "p", Status: "completed"})
 
-	d.SetTaskTargets(ctx, "at-1", []TaskTarget{
+	_ = d.SetTaskTargets(ctx, "at-1", []TaskTarget{
 		{TaskID: "at-1", FilePath: "a.go"},
 	})
-	d.SetTaskTargets(ctx, "at-2", []TaskTarget{
+	_ = d.SetTaskTargets(ctx, "at-2", []TaskTarget{
 		{TaskID: "at-2", FilePath: "b.go"},
 	})
-	d.SetTaskTargets(ctx, "at-3", []TaskTarget{
+	_ = d.SetTaskTargets(ctx, "at-3", []TaskTarget{
 		{TaskID: "at-3", FilePath: "c.go"},
 	})
 
