@@ -191,9 +191,18 @@ Output ONLY the JSON array.`, goal.Intent, goal.Why, string(approachJSON))
 		return approaches, nil
 	}
 
-	// Preserve IDs from original approaches
+	// Preserve IDs from original approaches by matching on rank.
+	// The LLM may reorder or change the count, so index-based matching is unsafe.
+	origByRank := make(map[int]string, len(approaches))
+	for _, a := range approaches {
+		if a.Rank > 0 && a.ID != "" {
+			origByRank[a.Rank] = a.ID
+		}
+	}
 	for i := range checked {
-		if i < len(approaches) {
+		if id, ok := origByRank[checked[i].Rank]; ok {
+			checked[i].ID = id
+		} else if i < len(approaches) {
 			checked[i].ID = approaches[i].ID
 		}
 		if checked[i].Status == "" {

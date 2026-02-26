@@ -209,7 +209,13 @@ func main() {
 			ID:        sessionID,
 			TaskQueue: cfg.General.TaskQueue,
 		}
-		run, err := c.ExecuteWorkflow(context.Background(), opts, planning.PlanningWorkflow, req)
+		ceremonyCfg := planning.PlanningCeremonyConfig{
+			MaxResearchRounds: cfg.Planning.MaxResearchRounds,
+			SignalTimeout:     cfg.Planning.SignalTimeout.Duration,
+			SessionTimeout:    cfg.Planning.SessionTimeout.Duration,
+			MaxCycles:         cfg.Planning.MaxCycles,
+		}
+		run, err := c.ExecuteWorkflow(context.Background(), opts, planning.PlanningWorkflow, req, ceremonyCfg)
 		if err != nil {
 			logger.Error("Failed to start planning workflow", "error", err)
 			os.Exit(1)

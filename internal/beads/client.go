@@ -133,7 +133,7 @@ type CreateParams struct {
 	Title       string
 	Description string
 	IssueType   string
-	Priority    int
+	Priority    int // -1 means unset (use CLI default); 0+ passed as -p flag
 	Labels      []string
 	ParentID    string
 }
@@ -150,7 +150,7 @@ func (c *Client) Create(ctx context.Context, params CreateParams) (string, error
 	if params.IssueType != "" {
 		args = append(args, "-t", params.IssueType)
 	}
-	if params.Priority > 0 {
+	if params.Priority >= 0 {
 		args = append(args, "-p", strconv.Itoa(params.Priority))
 	}
 	if params.ParentID != "" {

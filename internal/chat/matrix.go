@@ -34,7 +34,7 @@ type MatrixConfig struct {
 // then use the returned token for subsequent calls.
 func ReadRoomMessages(ctx context.Context, cfg MatrixConfig, since string) ([]InboundMessage, string, error) {
 	endpoint := fmt.Sprintf("%s/_matrix/client/v3/rooms/%s/messages?dir=f&limit=20",
-		cfg.Homeserver,
+		strings.TrimRight(cfg.Homeserver, "/"),
 		url.PathEscape(cfg.RoomID),
 	)
 	if since != "" {
@@ -133,8 +133,9 @@ func resolveMatrixUserID(ctx context.Context, cfg MatrixConfig) (string, error) 
 }
 
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return string(runes[:maxLen]) + "..."
 }

@@ -32,6 +32,7 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("connect to temporal: %w", err)
 	}
+	defer c.Close()
 
 	w := worker.New(c, cfg.General.TaskQueue, worker.Options{})
 

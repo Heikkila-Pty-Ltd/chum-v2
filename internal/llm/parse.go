@@ -81,8 +81,8 @@ func cleanLLMArtifacts(text string) string {
 		"here's my plan",
 		"json output:",
 	}
-	lower := strings.ToLower(text)
 	for _, prefix := range prefixes {
+		lower := strings.ToLower(text)
 		if idx := strings.Index(lower, prefix); idx >= 0 {
 			rest := text[idx:]
 			if nlIdx := strings.IndexByte(rest, '\n'); nlIdx >= 0 {
@@ -158,14 +158,12 @@ func findJSONArray(text string) string {
 
 func repairJSON(text string) string {
 	text = trailingCommaPattern.ReplaceAllString(text, "$1")
-	if !json.Valid([]byte(text)) {
-		attempt := strings.ReplaceAll(text, "'", "\"")
-		if json.Valid([]byte(attempt)) {
-			return attempt
-		}
-	}
 	if json.Valid([]byte(text)) {
 		return text
+	}
+	attempt := strings.ReplaceAll(text, "'", "\"")
+	if json.Valid([]byte(attempt)) {
+		return attempt
 	}
 	return ""
 }

@@ -176,14 +176,6 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 	// realignment returns to approach selection instead of cancelling.
 	// ============================================================
 	var selectedApproach *ResearchedApproach // stored as a copy, not a pointer into the slice
-	maxResearchRounds := cfg.MaxResearchRounds
-	if maxResearchRounds <= 0 {
-		maxResearchRounds = 3
-	}
-	signalTimeout := cfg.SignalTimeout
-	if signalTimeout <= 0 {
-		signalTimeout = 30 * time.Minute
-	}
 	researchRound := 1
 
 	var steps []DecompStep
@@ -208,7 +200,7 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 			timedOut := false
 
 			timerCtx, cancelTimer := workflow.WithCancel(ctx)
-			timerFuture := workflow.NewTimer(timerCtx, signalTimeout)
+			timerFuture := workflow.NewTimer(timerCtx, cfg.SignalTimeout)
 
 			selector.AddReceive(selectCh, func(ch workflow.ReceiveChannel, more bool) {
 				var value string
@@ -232,7 +224,7 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 				var value string
 				ch.Receive(ctx, &value)
 				cancelTimer()
-				if researchRound >= maxResearchRounds {
+				if researchRound >= cfg.MaxResearchRounds {
 					notify("Maximum research rounds reached. Please select an approach or realign.")
 					return
 				}
@@ -356,7 +348,7 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 
 			// Timeout for decomp approval — same as signal timeout
 			decompTimerCtx, decompTimerCancel := workflow.WithCancel(ctx)
-			decompTimerFuture := workflow.NewTimer(decompTimerCtx, signalTimeout)
+			decompTimerFuture := workflow.NewTimer(decompTimerCtx, cfg.SignalTimeout)
 
 			decompSelector.AddReceive(approveDecompCh, func(ch workflow.ReceiveChannel, more bool) {
 				var sig string
