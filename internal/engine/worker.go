@@ -108,7 +108,11 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 		Logger:       logger,
 		AST:          parser,
 		BeadsClients: beadsClients,
-		ChatCfg:      matrixCfg,
+		ChatSend: func(ctx context.Context, roomID, message string) error {
+			sendCfg := matrixCfg
+			sendCfg.RoomID = roomID
+			return chat.SendMatrixMessage(ctx, sendCfg, message)
+		},
 	}
 	w.RegisterActivity(pa.ClarifyGoalActivity)
 	w.RegisterActivity(pa.ResearchApproachesActivity)
@@ -129,19 +133,39 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 		}
 	}()
 
-	// Start chat bridge if planning is enabled and Matrix is configured
+	// Start chat bridge if planning is enabled and Matrix is configured.
+	// Use a cancellable context so the bridge stops when the worker shuts down.
+	bridgeCtx, bridgeCancel := context.WithCancel(context.Background())
+	defer bridgeCancel()
+
 	if cfg.Planning.Enabled && matrixCfg.Homeserver != "" && matrixCfg.AccessToken != "" && matrixCfg.RoomID != "" {
+		// Resolve default agent from first enabled provider
+		defaultAgent := "claude"
+		for _, prov := range cfg.Providers {
+			if prov.Enabled && prov.CLI != "" {
+				defaultAgent = prov.CLI
+				break
+			}
+		}
+
 		bridge := &chat.Bridge{
 			Client:       c,
 			MatrixCfg:    matrixCfg,
 			PollInterval: cfg.Planning.PollInterval.Duration,
 			Logger:       logger,
 			TaskQueue:    cfg.General.TaskQueue,
+			DefaultAgent: defaultAgent,
+			CeremonyCfg: planning.PlanningCeremonyConfig{
+				MaxResearchRounds: cfg.Planning.MaxResearchRounds,
+				SignalTimeout:     cfg.Planning.SignalTimeout.Duration,
+				SessionTimeout:    cfg.Planning.SessionTimeout.Duration,
+				MaxCycles:         cfg.Planning.MaxCycles,
+			},
 		}
 		go func() {
 			time.Sleep(3 * time.Second)
 			logger.Info("Starting chat bridge for planning")
-			if err := bridge.Run(context.Background()); err != nil {
+			if err := bridge.Run(bridgeCtx); err != nil && bridgeCtx.Err() == nil {
 				logger.Error("Chat bridge stopped", "error", err)
 			}
 		}()

@@ -11,11 +11,13 @@ import (
 
 	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
-	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/chat"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 )
+
+// ChatSendFunc sends a message to a Matrix room. Injected to avoid import cycles.
+type ChatSendFunc func(ctx context.Context, roomID, message string) error
 
 // PlanningActivities holds dependencies for planning Temporal activities.
 type PlanningActivities struct {
@@ -24,7 +26,7 @@ type PlanningActivities struct {
 	Logger       *slog.Logger
 	AST          *astpkg.Parser
 	BeadsClients map[string]*beads.Client
-	ChatCfg      chat.MatrixConfig
+	ChatSend     ChatSendFunc
 }
 
 // ClarifyGoalActivity runs an LLM to extract intent, constraints, and rationale from the task.
@@ -121,8 +123,8 @@ Rules:
 		strings.Join(goal.Constraints, ", "),
 		codeContext)
 
-	// Use RunCLIExec so the agent has native file access for deep exploration
-	result, err := llm.RunCLIExec(req.Agent, req.Model, req.WorkDir, prompt)
+	// Research is read-only — use RunCLI (--print) to prevent file mutations.
+	result, err := llm.RunCLI(req.Agent, req.Model, req.WorkDir, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("research CLI: %w", err)
 	}
@@ -141,6 +143,11 @@ Rules:
 		approaches[i].Status = "exploring"
 		if approaches[i].Rank == 0 {
 			approaches[i].Rank = i + 1
+		}
+		// Generate a temporary ID so the approach is addressable before bead storage.
+		// StoreApproachesActivity will overwrite with the real bead ID.
+		if approaches[i].ID == "" {
+			approaches[i].ID = fmt.Sprintf("approach-%d", approaches[i].Rank)
 		}
 	}
 
@@ -261,7 +268,8 @@ Output ONLY the JSON object.`,
 		approach.Title, approach.Description, approach.Tradeoffs,
 		approach.Confidence*100, feedback, codeContext, approach.Rank)
 
-	result, err := llm.RunCLIExec(req.Agent, req.Model, req.WorkDir, prompt)
+	// Deeper research is also read-only — use RunCLI (--print).
+	result, err := llm.RunCLI(req.Agent, req.Model, req.WorkDir, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("deeper research CLI: %w", err)
 	}
@@ -378,12 +386,10 @@ func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, re
 
 // NotifyChatActivity sends a message to a Matrix room.
 func (pa *PlanningActivities) NotifyChatActivity(ctx context.Context, roomID, message string) error {
-	if pa.ChatCfg.Homeserver == "" || pa.ChatCfg.AccessToken == "" {
+	if pa.ChatSend == nil {
 		return nil
 	}
-	cfg := pa.ChatCfg
-	cfg.RoomID = roomID
-	return chat.SendMatrixMessage(ctx, cfg, message)
+	return pa.ChatSend(ctx, roomID, message)
 }
 
 // --- helpers ---

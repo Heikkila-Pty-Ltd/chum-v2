@@ -3,6 +3,8 @@
 // then drives interactive decisions via Matrix chat signals.
 package planning
 
+import "time"
+
 // PlanningRequest is the input to the PlanningWorkflow.
 type PlanningRequest struct {
 	GoalID    string `json:"goal_id"`    // beads issue ID for the goal
@@ -13,6 +15,15 @@ type PlanningRequest struct {
 	RoomID    string `json:"room_id"`    // Matrix room for push notifications
 	Source    string `json:"source"`     // who triggered (matrix-control, cli)
 	SessionID string `json:"session_id"` // workflow-assigned unique ID
+}
+
+// PlanningCeremonyConfig holds ceremony-level knobs passed to the workflow.
+// Populated from config.Planning at workflow start time.
+type PlanningCeremonyConfig struct {
+	MaxResearchRounds int           `json:"max_research_rounds"`
+	SignalTimeout     time.Duration `json:"signal_timeout"`
+	SessionTimeout    time.Duration `json:"session_timeout"`
+	MaxCycles         int           `json:"max_cycles"`
 }
 
 // ClarifiedGoal is the output of goal clarification.

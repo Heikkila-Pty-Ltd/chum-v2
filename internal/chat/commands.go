@@ -18,6 +18,7 @@ const (
 	CommandAnswer
 	CommandDig
 	CommandGo
+	CommandApprove
 	CommandRealign
 	CommandStop
 )
@@ -43,14 +44,10 @@ func ParseCommand(raw string) (Command, bool, error) {
 		return Command{}, false, nil
 	}
 	lower := strings.ToLower(text)
-	switch {
-	case strings.HasPrefix(lower, "/plan"):
-		text = strings.TrimSpace(text[len("/plan"):])
-	case strings.HasPrefix(lower, "plan"):
-		text = strings.TrimSpace(text[len("plan"):])
-	default:
+	if !strings.HasPrefix(lower, "/plan") {
 		return Command{}, false, nil
 	}
+	text = strings.TrimSpace(text[len("/plan"):])
 
 	if text == "" {
 		return Command{Kind: CommandHelp}, true, nil
@@ -164,8 +161,15 @@ func ParseCommand(raw string) (Command, bool, error) {
 		}
 		return cmd, true, nil
 
-	case "go", "approve":
+	case "go":
 		cmd := Command{Kind: CommandGo}
+		if len(args) > 0 {
+			cmd.SessionID, _ = parseSessionToken(args[0])
+		}
+		return cmd, true, nil
+
+	case "approve":
+		cmd := Command{Kind: CommandApprove}
 		if len(args) > 0 {
 			cmd.SessionID, _ = parseSessionToken(args[0])
 		}
@@ -207,6 +211,7 @@ func CommandUsage() string {
 - /plan dig <approach-id> [feedback...]
 - /plan answer [session] <text>
 - /plan go [session]
+- /plan approve [session]
 - /plan realign [session]
 - /plan stop [session] [reason]
 

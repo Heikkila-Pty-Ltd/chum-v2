@@ -20,10 +20,24 @@ import (
 //  6. Decompose selected approach (autonomous, gated)
 //  7. Approval gate (human)
 //  8. Hand to factory
-func PlanningWorkflow(ctx workflow.Context, req PlanningRequest) (*PlanningResult, error) {
+func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCeremonyConfig) (*PlanningResult, error) {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("PlanningWorkflow started",
 		"GoalID", req.GoalID, "Project", req.Project, "SessionID", req.SessionID)
+
+	// Apply defaults for unset config values
+	if cfg.MaxResearchRounds <= 0 {
+		cfg.MaxResearchRounds = 3
+	}
+	if cfg.SignalTimeout <= 0 {
+		cfg.SignalTimeout = 30 * time.Minute
+	}
+	if cfg.SessionTimeout <= 0 {
+		cfg.SessionTimeout = 24 * time.Hour
+	}
+	if cfg.MaxCycles <= 0 {
+		cfg.MaxCycles = 3
+	}
 
 	var pa *PlanningActivities
 
@@ -39,6 +53,13 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest) (*PlanningResul
 		StartToCloseTimeout: 30 * time.Second,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
 	}
+
+	// Enforce session-level timeout (Fix #9: workflow deadline)
+	ctx, sessionCancel := workflow.WithCancel(ctx)
+	workflow.Go(ctx, func(gCtx workflow.Context) {
+		_ = workflow.NewTimer(gCtx, cfg.SessionTimeout).Get(gCtx, nil)
+		sessionCancel()
+	})
 
 	// Register signal channels
 	selectCh := workflow.GetSignalChannel(ctx, SignalNameSelect)
@@ -129,10 +150,18 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest) (*PlanningResul
 	// ============================================================
 	logger.Info("Phase: interactive")
 	var selectedApproach *ResearchedApproach
-	maxResearchRounds := 3
+	maxResearchRounds := cfg.MaxResearchRounds
+	if maxResearchRounds <= 0 {
+		maxResearchRounds = 3
+	}
+	signalTimeout := cfg.SignalTimeout
+	if signalTimeout <= 0 {
+		signalTimeout = 30 * time.Minute
+	}
 	researchRound := 1
+	greenlightReceived := false
 
-	for {
+	for !greenlightReceived {
 		if drainCancel() {
 			return &PlanningResult{GoalID: req.GoalID, Cancelled: true, CancelReason: cancelReason, Approaches: approaches}, nil
 		}
@@ -141,9 +170,9 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest) (*PlanningResul
 		selector := workflow.NewSelector(ctx)
 		timedOut := false
 
-		// Timer for signal timeout (30 min reminder)
+		// Timer for signal timeout (configurable reminder)
 		timerCtx, cancelTimer := workflow.WithCancel(ctx)
-		timerFuture := workflow.NewTimer(timerCtx, 30*time.Minute)
+		timerFuture := workflow.NewTimer(timerCtx, signalTimeout)
 
 		selector.AddReceive(selectCh, func(ch workflow.ReceiveChannel, more bool) {
 			var value string
@@ -237,10 +266,12 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest) (*PlanningResul
 				notify("Realigning. Research will restart with fresh context.\nSend `/plan dig <id>` or wait for new approaches.")
 				return
 			}
-			// GO — proceed to decomposition
+			// GO — proceed to decomposition if an approach is selected
 			if selectedApproach == nil {
-				notify("No approach selected. Use `/plan select <id>` first.")
+				notify("No approach selected. Use `/plan select <id>` first, then `/plan go`.")
+				return
 			}
+			greenlightReceived = true
 		})
 
 		selector.AddReceive(cancelCh, func(ch workflow.ReceiveChannel, more bool) {
@@ -263,22 +294,6 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest) (*PlanningResul
 
 		if timedOut {
 			notify(fmt.Sprintf("Planning session %s is waiting for input. Send `/plan help` for commands.", req.SessionID))
-			continue
-		}
-
-		// If greenlight was received and we have a selected approach, break to decompose
-		if selectedApproach != nil && selectedApproach.Status == "selected" {
-			// Check if greenlight signal was the one that just fired
-			// The greenlight handler sets selectedApproach but doesn't break the loop.
-			// We need an explicit greenlight to proceed.
-			var glDecision string
-			if greenlightCh.ReceiveAsync(&glDecision) {
-				glDecision = strings.ToUpper(strings.TrimSpace(glDecision))
-				if glDecision == "GO" || glDecision == "" {
-					break
-				}
-			}
-			// Not yet greenlighted — keep looping for more signals
 		}
 	}
 

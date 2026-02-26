@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"go.temporal.io/sdk/client"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 )
 
 // Bridge polls a Matrix room for /plan commands and routes them to Temporal
@@ -23,6 +25,8 @@ type Bridge struct {
 	PollInterval time.Duration
 	Logger       *slog.Logger
 	TaskQueue    string
+	DefaultAgent string                       // default LLM agent (e.g. "claude")
+	CeremonyCfg  planning.PlanningCeremonyConfig // ceremony-level knobs
 
 	mu           sync.Mutex
 	activeByRoom map[string]string // roomID → active planning session workflow ID
@@ -106,6 +110,9 @@ func (b *Bridge) handleCommand(ctx context.Context, msg InboundMessage, cmd Comm
 	case CommandGo:
 		return b.signalWorkflow(ctx, msg.Room, cmd.SessionID, "plan-greenlight", "GO")
 
+	case CommandApprove:
+		return b.signalWorkflow(ctx, msg.Room, cmd.SessionID, "plan-approve-decomp", "APPROVED")
+
 	case CommandRealign:
 		return b.signalWorkflow(ctx, msg.Room, cmd.SessionID, "plan-greenlight", "REALIGN")
 
@@ -132,18 +139,22 @@ func (b *Bridge) startPlanning(ctx context.Context, msg InboundMessage, cmd Comm
 		TaskQueue: b.TaskQueue,
 	}
 
-	// Pass PlanningRequest as a map to avoid import cycle with planning package.
-	req := map[string]string{
-		"goal_id":    "",
-		"project":    cmd.Project,
-		"work_dir":   cmd.WorkDir,
-		"agent":      cmd.Agent,
-		"room_id":    msg.Room,
-		"source":     "matrix-control",
-		"session_id": sessionID,
+	agent := cmd.Agent
+	if agent == "" {
+		agent = b.DefaultAgent
 	}
 
-	run, err := b.Client.ExecuteWorkflow(ctx, opts, "PlanningWorkflow", req)
+	req := planning.PlanningRequest{
+		GoalID:    cmd.Value,
+		Project:   cmd.Project,
+		WorkDir:   cmd.WorkDir,
+		Agent:     agent,
+		RoomID:    msg.Room,
+		Source:    "matrix-control",
+		SessionID: sessionID,
+	}
+
+	run, err := b.Client.ExecuteWorkflow(ctx, opts, planning.PlanningWorkflow, req, b.CeremonyCfg)
 	if err != nil {
 		return fmt.Errorf("start planning workflow: %w", err)
 	}

@@ -154,11 +154,33 @@ func TestParseCommand_Stop(t *testing.T) {
 	}
 }
 
+func TestParseCommand_Approve(t *testing.T) {
+	t.Parallel()
+	cmd, matched, err := ParseCommand("/plan approve")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cmd.Kind != CommandApprove {
+		t.Fatalf("expected CommandApprove, got %d", cmd.Kind)
+	}
+}
+
 func TestParseCommand_NotMatched(t *testing.T) {
 	t.Parallel()
 	_, matched, _ := ParseCommand("hello world")
 	if matched {
 		t.Fatal("expected no match for non-plan message")
+	}
+}
+
+func TestParseCommand_BarePlanNotMatched(t *testing.T) {
+	t.Parallel()
+	_, matched, _ := ParseCommand("plan start myproject")
+	if matched {
+		t.Fatal("expected no match for bare 'plan' without slash prefix")
 	}
 }
 
