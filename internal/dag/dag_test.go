@@ -1,0 +1,634 @@
+package dag
+
+import (
+	"context"
+	"database/sql"
+	"testing"
+
+	_ "modernc.org/sqlite"
+)
+
+// newTestDAG returns a DAG backed by an in-memory SQLite database.
+func newTestDAG(t *testing.T) *DAG {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open :memory: db: %v", err)
+	}
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+	d := NewDAG(db)
+	if err := d.EnsureSchema(context.Background()); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+	return d
+}
+
+// --- EnsureSchema ---
+
+func TestEnsureSchema_Idempotent(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	// Calling EnsureSchema a second time should be a no-op.
+	if err := d.EnsureSchema(ctx); err != nil {
+		t.Fatalf("second EnsureSchema call failed: %v", err)
+	}
+}
+
+// --- CreateTask / GetTask ---
+
+func TestCreateTask_GeneratesID(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	id, err := d.CreateTask(ctx, Task{
+		Title:   "test task",
+		Project: "myproject",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if id == "" {
+		t.Fatal("expected generated ID, got empty")
+	}
+}
+
+func TestCreateTask_UsesExplicitID(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	id, err := d.CreateTask(ctx, Task{
+		ID:      "explicit-1",
+		Title:   "explicit",
+		Project: "p",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if id != "explicit-1" {
+		t.Fatalf("ID = %q, want explicit-1", id)
+	}
+}
+
+func TestCreateTask_DefaultsStatusAndType(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	id, _ := d.CreateTask(ctx, Task{ID: "def-1", Project: "p"})
+	got, err := d.GetTask(ctx, id)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.Status != "open" {
+		t.Fatalf("Status = %q, want open", got.Status)
+	}
+	if got.Type != "task" {
+		t.Fatalf("Type = %q, want task", got.Type)
+	}
+}
+
+func TestGetTask_RoundTrips(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	id, _ := d.CreateTask(ctx, Task{
+		ID:              "rt-1",
+		Title:           "roundtrip",
+		Description:     "desc",
+		Status:          "ready",
+		Priority:        5,
+		Type:            "bug",
+		Assignee:        "bot",
+		Labels:          []string{"critical", "backend"},
+		EstimateMinutes: 30,
+		ParentID:        "parent-0",
+		Acceptance:      "tests pass",
+		Project:         "proj",
+		ErrorLog:        "none",
+	})
+
+	got, err := d.GetTask(ctx, id)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.Title != "roundtrip" {
+		t.Fatalf("Title = %q", got.Title)
+	}
+	if got.Description != "desc" {
+		t.Fatalf("Description = %q", got.Description)
+	}
+	if got.Status != "ready" {
+		t.Fatalf("Status = %q", got.Status)
+	}
+	if got.Priority != 5 {
+		t.Fatalf("Priority = %d", got.Priority)
+	}
+	if got.Type != "bug" {
+		t.Fatalf("Type = %q", got.Type)
+	}
+	if got.Assignee != "bot" {
+		t.Fatalf("Assignee = %q", got.Assignee)
+	}
+	if len(got.Labels) != 2 || got.Labels[0] != "critical" || got.Labels[1] != "backend" {
+		t.Fatalf("Labels = %v", got.Labels)
+	}
+	if got.EstimateMinutes != 30 {
+		t.Fatalf("EstimateMinutes = %d", got.EstimateMinutes)
+	}
+	if got.ParentID != "parent-0" {
+		t.Fatalf("ParentID = %q", got.ParentID)
+	}
+	if got.Acceptance != "tests pass" {
+		t.Fatalf("Acceptance = %q", got.Acceptance)
+	}
+	if got.Project != "proj" {
+		t.Fatalf("Project = %q", got.Project)
+	}
+}
+
+func TestGetTask_NotFound(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	_, err := d.GetTask(ctx, "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for nonexistent task")
+	}
+}
+
+// --- ListTasks ---
+
+func TestListTasks_FiltersByProject(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "a-1", Project: "alpha", Title: "a1"})
+	d.CreateTask(ctx, Task{ID: "b-1", Project: "beta", Title: "b1"})
+	d.CreateTask(ctx, Task{ID: "a-2", Project: "alpha", Title: "a2"})
+
+	tasks, err := d.ListTasks(ctx, "alpha")
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("len = %d, want 2", len(tasks))
+	}
+}
+
+func TestListTasks_FiltersByStatus(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "s-1", Project: "p", Status: "ready"})
+	d.CreateTask(ctx, Task{ID: "s-2", Project: "p", Status: "running"})
+	d.CreateTask(ctx, Task{ID: "s-3", Project: "p", Status: "ready"})
+	d.CreateTask(ctx, Task{ID: "s-4", Project: "p", Status: "completed"})
+
+	tasks, err := d.ListTasks(ctx, "p", "ready", "completed")
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(tasks) != 3 {
+		t.Fatalf("len = %d, want 3", len(tasks))
+	}
+}
+
+func TestListTasks_ReturnsEmpty(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	tasks, err := d.ListTasks(ctx, "empty-project")
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("len = %d, want 0", len(tasks))
+	}
+}
+
+// --- UpdateTask ---
+
+func TestUpdateTask_UpdatesFields(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "u-1", Project: "p", Title: "old"})
+
+	err := d.UpdateTask(ctx, "u-1", map[string]any{
+		"title":       "new",
+		"description": "updated desc",
+		"priority":    3,
+	})
+	if err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+
+	got, _ := d.GetTask(ctx, "u-1")
+	if got.Title != "new" {
+		t.Fatalf("Title = %q, want new", got.Title)
+	}
+	if got.Description != "updated desc" {
+		t.Fatalf("Description = %q", got.Description)
+	}
+	if got.Priority != 3 {
+		t.Fatalf("Priority = %d, want 3", got.Priority)
+	}
+}
+
+func TestUpdateTask_RejectsUnknownField(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "u-2", Project: "p"})
+	err := d.UpdateTask(ctx, "u-2", map[string]any{"bogus": "value"})
+	if err == nil {
+		t.Fatal("expected error for unknown field")
+	}
+}
+
+func TestUpdateTask_NotFound(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	err := d.UpdateTask(ctx, "missing", map[string]any{"title": "x"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent task")
+	}
+}
+
+func TestUpdateTask_EmptyFieldsIsNoop(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	err := d.UpdateTask(ctx, "whatever", map[string]any{})
+	if err != nil {
+		t.Fatalf("empty fields should be no-op, got %v", err)
+	}
+}
+
+func TestUpdateTask_LabelsMarshalled(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "lbl-1", Project: "p"})
+	err := d.UpdateTask(ctx, "lbl-1", map[string]any{
+		"labels": []string{"frontend", "urgent"},
+	})
+	if err != nil {
+		t.Fatalf("UpdateTask labels: %v", err)
+	}
+
+	got, _ := d.GetTask(ctx, "lbl-1")
+	if len(got.Labels) != 2 || got.Labels[0] != "frontend" || got.Labels[1] != "urgent" {
+		t.Fatalf("Labels = %v, want [frontend urgent]", got.Labels)
+	}
+}
+
+// --- UpdateTaskStatus / CloseTask ---
+
+func TestUpdateTaskStatus(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "st-1", Project: "p", Status: "open"})
+	if err := d.UpdateTaskStatus(ctx, "st-1", "running"); err != nil {
+		t.Fatalf("UpdateTaskStatus: %v", err)
+	}
+
+	got, _ := d.GetTask(ctx, "st-1")
+	if got.Status != "running" {
+		t.Fatalf("Status = %q, want running", got.Status)
+	}
+}
+
+func TestCloseTask(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "cl-1", Project: "p", Status: "running"})
+	if err := d.CloseTask(ctx, "cl-1", "completed"); err != nil {
+		t.Fatalf("CloseTask: %v", err)
+	}
+
+	got, _ := d.GetTask(ctx, "cl-1")
+	if got.Status != "completed" {
+		t.Fatalf("Status = %q, want completed", got.Status)
+	}
+}
+
+// --- Edges ---
+
+func TestAddEdge_SelfEdgeRejected(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	err := d.AddEdge(ctx, "a", "a")
+	if err == nil {
+		t.Fatal("expected error for self-edge")
+	}
+}
+
+func TestAddEdge_RemoveEdge(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "e-1", Project: "p"})
+	d.CreateTask(ctx, Task{ID: "e-2", Project: "p"})
+
+	if err := d.AddEdge(ctx, "e-1", "e-2"); err != nil {
+		t.Fatalf("AddEdge: %v", err)
+	}
+	// Idempotent — second insert should not error (INSERT OR IGNORE).
+	if err := d.AddEdge(ctx, "e-1", "e-2"); err != nil {
+		t.Fatalf("AddEdge idempotent: %v", err)
+	}
+
+	if err := d.RemoveEdge(ctx, "e-1", "e-2"); err != nil {
+		t.Fatalf("RemoveEdge: %v", err)
+	}
+}
+
+func TestAddEdgeWithSource(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "es-1", Project: "p"})
+	d.CreateTask(ctx, Task{ID: "es-2", Project: "p"})
+
+	if err := d.AddEdgeWithSource(ctx, "es-1", "es-2", "ast"); err != nil {
+		t.Fatalf("AddEdgeWithSource: %v", err)
+	}
+}
+
+func TestDeleteEdgesBySource(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "ds-1", Project: "p"})
+	d.CreateTask(ctx, Task{ID: "ds-2", Project: "p"})
+	d.CreateTask(ctx, Task{ID: "ds-3", Project: "p"})
+
+	d.AddEdgeWithSource(ctx, "ds-1", "ds-2", "ast")
+	d.AddEdgeWithSource(ctx, "ds-1", "ds-3", "beads")
+
+	if err := d.DeleteEdgesBySource(ctx, "p", "ast"); err != nil {
+		t.Fatalf("DeleteEdgesBySource: %v", err)
+	}
+
+	// "ds-1 → ds-2" (ast) should be gone; "ds-1 → ds-3" (beads) should remain.
+	// Verify via GetReadyNodes: ds-2 is ready but ds-3 still blocks ds-1.
+	d.UpdateTaskStatus(ctx, "ds-1", "ready")
+	d.UpdateTaskStatus(ctx, "ds-3", "open") // dep not completed
+	ready, _ := d.GetReadyNodes(ctx, "p")
+	for _, r := range ready {
+		if r.ID == "ds-1" {
+			// ds-1 depends on ds-3 (beads), which is still "open", so ds-1
+			// should NOT be ready.
+			t.Fatal("ds-1 should still be blocked by ds-3 (beads edge)")
+		}
+	}
+}
+
+// --- GetReadyNodes ---
+
+func TestGetReadyNodes_NoDeps(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "r-1", Project: "p", Status: "ready"})
+	d.CreateTask(ctx, Task{ID: "r-2", Project: "p", Status: "open"})
+
+	ready, err := d.GetReadyNodes(ctx, "p")
+	if err != nil {
+		t.Fatalf("GetReadyNodes: %v", err)
+	}
+	if len(ready) != 1 || ready[0].ID != "r-1" {
+		t.Fatalf("ready = %v, want [r-1]", taskIDs(ready))
+	}
+}
+
+func TestGetReadyNodes_BlockedByDep(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "dep-a", Project: "p", Status: "open"})
+	d.CreateTask(ctx, Task{ID: "dep-b", Project: "p", Status: "ready"})
+	d.AddEdge(ctx, "dep-b", "dep-a") // b depends on a
+
+	ready, err := d.GetReadyNodes(ctx, "p")
+	if err != nil {
+		t.Fatalf("GetReadyNodes: %v", err)
+	}
+	// dep-b is "ready" but blocked by dep-a (not completed).
+	if len(ready) != 0 {
+		t.Fatalf("expected no ready nodes, got %v", taskIDs(ready))
+	}
+}
+
+func TestGetReadyNodes_UnblockedWhenDepCompleted(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "uc-a", Project: "p", Status: "completed"})
+	d.CreateTask(ctx, Task{ID: "uc-b", Project: "p", Status: "ready"})
+	d.AddEdge(ctx, "uc-b", "uc-a") // b depends on a
+
+	ready, err := d.GetReadyNodes(ctx, "p")
+	if err != nil {
+		t.Fatalf("GetReadyNodes: %v", err)
+	}
+	if len(ready) != 1 || ready[0].ID != "uc-b" {
+		t.Fatalf("ready = %v, want [uc-b]", taskIDs(ready))
+	}
+}
+
+func TestGetReadyNodes_PriorityOrdering(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "pr-low", Project: "p", Status: "ready", Priority: 10})
+	d.CreateTask(ctx, Task{ID: "pr-high", Project: "p", Status: "ready", Priority: 1})
+
+	ready, _ := d.GetReadyNodes(ctx, "p")
+	if len(ready) != 2 {
+		t.Fatalf("len = %d, want 2", len(ready))
+	}
+	if ready[0].ID != "pr-high" {
+		t.Fatalf("expected pr-high first (priority 1), got %q", ready[0].ID)
+	}
+}
+
+func TestGetReadyNodes_MultipleDeps_AllMustComplete(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "md-a", Project: "p", Status: "completed"})
+	d.CreateTask(ctx, Task{ID: "md-b", Project: "p", Status: "open"})
+	d.CreateTask(ctx, Task{ID: "md-c", Project: "p", Status: "ready"})
+	d.AddEdge(ctx, "md-c", "md-a")
+	d.AddEdge(ctx, "md-c", "md-b")
+
+	ready, _ := d.GetReadyNodes(ctx, "p")
+	if len(ready) != 0 {
+		t.Fatalf("expected 0 ready (md-b still open), got %v", taskIDs(ready))
+	}
+
+	// Complete md-b → md-c should now be ready.
+	d.UpdateTaskStatus(ctx, "md-b", "completed")
+	ready, _ = d.GetReadyNodes(ctx, "p")
+	if len(ready) != 1 || ready[0].ID != "md-c" {
+		t.Fatalf("ready = %v, want [md-c]", taskIDs(ready))
+	}
+}
+
+func TestGetReadyNodes_FiltersByProject(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "fp-1", Project: "alpha", Status: "ready"})
+	d.CreateTask(ctx, Task{ID: "fp-2", Project: "beta", Status: "ready"})
+
+	ready, _ := d.GetReadyNodes(ctx, "alpha")
+	if len(ready) != 1 || ready[0].ID != "fp-1" {
+		t.Fatalf("ready = %v, want [fp-1]", taskIDs(ready))
+	}
+}
+
+// --- TaskTargets ---
+
+func TestSetAndGetTaskTargets(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "tgt-1", Project: "p"})
+
+	targets := []TaskTarget{
+		{TaskID: "tgt-1", FilePath: "main.go", SymbolName: "main", SymbolKind: "function"},
+		{TaskID: "tgt-1", FilePath: "lib.go", SymbolName: "Foo", SymbolKind: "struct"},
+	}
+	if err := d.SetTaskTargets(ctx, "tgt-1", targets); err != nil {
+		t.Fatalf("SetTaskTargets: %v", err)
+	}
+
+	got, err := d.GetTaskTargets(ctx, "tgt-1")
+	if err != nil {
+		t.Fatalf("GetTaskTargets: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+}
+
+func TestSetTaskTargets_Replaces(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "rep-1", Project: "p"})
+
+	d.SetTaskTargets(ctx, "rep-1", []TaskTarget{
+		{TaskID: "rep-1", FilePath: "old.go"},
+	})
+	d.SetTaskTargets(ctx, "rep-1", []TaskTarget{
+		{TaskID: "rep-1", FilePath: "new.go"},
+	})
+
+	got, _ := d.GetTaskTargets(ctx, "rep-1")
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].FilePath != "new.go" {
+		t.Fatalf("FilePath = %q, want new.go", got[0].FilePath)
+	}
+}
+
+func TestGetAllTargetsForStatuses(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "at-1", Project: "p", Status: "ready"})
+	d.CreateTask(ctx, Task{ID: "at-2", Project: "p", Status: "running"})
+	d.CreateTask(ctx, Task{ID: "at-3", Project: "p", Status: "completed"})
+
+	d.SetTaskTargets(ctx, "at-1", []TaskTarget{
+		{TaskID: "at-1", FilePath: "a.go"},
+	})
+	d.SetTaskTargets(ctx, "at-2", []TaskTarget{
+		{TaskID: "at-2", FilePath: "b.go"},
+	})
+	d.SetTaskTargets(ctx, "at-3", []TaskTarget{
+		{TaskID: "at-3", FilePath: "c.go"},
+	})
+
+	got, err := d.GetAllTargetsForStatuses(ctx, "p", "ready", "running")
+	if err != nil {
+		t.Fatalf("GetAllTargetsForStatuses: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2 task IDs", len(got))
+	}
+	if _, ok := got["at-1"]; !ok {
+		t.Fatal("missing at-1 targets")
+	}
+	if _, ok := got["at-2"]; !ok {
+		t.Fatal("missing at-2 targets")
+	}
+	if _, ok := got["at-3"]; ok {
+		t.Fatal("at-3 (completed) should not be included")
+	}
+}
+
+func TestGetAllTargetsForStatuses_EmptyStatuses(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	got, err := d.GetAllTargetsForStatuses(ctx, "p")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil, got %v", got)
+	}
+}
+
+// --- helpers ---
+
+func taskIDs(tasks []Task) []string {
+	ids := make([]string, len(tasks))
+	for i, t := range tasks {
+		ids[i] = t.ID
+	}
+	return ids
+}
