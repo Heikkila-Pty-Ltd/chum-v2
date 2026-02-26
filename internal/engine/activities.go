@@ -87,6 +87,9 @@ RULES:
 		return nil, fmt.Errorf("parse plan JSON: %w", err)
 	}
 
+	// Normalize: fill gaps from partial/stochastic LLM output
+	NormalizePlan(&plan, req.Prompt)
+
 	if issues := plan.Validate(); len(issues) > 0 {
 		return nil, fmt.Errorf("plan validation failed: %s", strings.Join(issues, "; "))
 	}
