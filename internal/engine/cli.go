@@ -55,6 +55,9 @@ func RunCLIExec(agent, model, workDir, prompt string) (*CLIResult, error) {
 }
 
 func runWithPrompt(cmd *exec.Cmd, prompt, agent string) (*CLIResult, error) {
+	// Strip CLAUDECODE env var so spawned Claude sessions don't detect nesting.
+	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE")
+
 	// Pipe prompt via stdin (not args) to avoid ARG_MAX and /proc leaks
 	tmpFile, err := os.CreateTemp("", "chum-prompt-*.txt")
 	if err != nil {
@@ -90,6 +93,18 @@ func runWithPrompt(cmd *exec.Cmd, prompt, agent string) (*CLIResult, error) {
 	}
 
 	return result, nil
+}
+
+// filterEnv returns a copy of env with the named variable removed.
+func filterEnv(env []string, name string) []string {
+	prefix := name + "="
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // buildPlanCommand creates a CLI command for PLANNING (text output only, no file writes).

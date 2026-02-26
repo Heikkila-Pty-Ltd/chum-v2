@@ -30,7 +30,6 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	}
 	execOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 45 * time.Minute,
-		HeartbeatTimeout:    2 * time.Minute,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 	dodOpts := workflow.ActivityOptions{

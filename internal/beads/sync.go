@@ -50,10 +50,11 @@ func SyncToDAG(ctx context.Context, client *Client, d *dag.DAG, project string, 
 			}
 			// Update changed fields
 			fields := map[string]any{
-				"title":       issue.Title,
-				"description": issue.Description,
-				"acceptance":  issue.AcceptanceCriteria,
-				"priority":    issue.Priority,
+				"title":            issue.Title,
+				"description":      issue.Description,
+				"acceptance":       issue.AcceptanceCriteria,
+				"priority":         issue.Priority,
+				"estimate_minutes": issue.EstimatedMinutes,
 			}
 			if issue.Labels != nil {
 				fields["labels"] = issue.Labels
@@ -74,15 +75,16 @@ func SyncToDAG(ctx context.Context, client *Client, d *dag.DAG, project string, 
 		}
 
 		task := dag.Task{
-			ID:          issue.ID,
-			Title:       issue.Title,
-			Description: buildDescription(issue),
-			Status:      status,
-			Priority:    issue.Priority,
-			Type:        issue.IssueType,
-			Labels:      issue.Labels,
-			Acceptance:  issue.AcceptanceCriteria,
-			Project:     project,
+			ID:              issue.ID,
+			Title:           issue.Title,
+			Description:     buildDescription(issue),
+			Status:          status,
+			Priority:        issue.Priority,
+			Type:            issue.IssueType,
+			Labels:          issue.Labels,
+			Acceptance:      issue.AcceptanceCriteria,
+			EstimateMinutes: issue.EstimatedMinutes,
+			Project:         project,
 		}
 		if _, err := d.CreateTask(ctx, task); err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("create %s: %v", issue.ID, err))

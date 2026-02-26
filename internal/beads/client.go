@@ -7,12 +7,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 )
 
-const DefaultBinary = "bd"
+// DefaultBinary is the default bd CLI binary name.
+// Override with BD_BINARY env var if multiple versions are installed.
+var DefaultBinary = defaultBinaryPath()
+
+func defaultBinaryPath() string {
+	if v := os.Getenv("BD_BINARY"); v != "" {
+		return v
+	}
+	return "bd"
+}
 
 // Issue is a beads issue — the source-of-truth for task definitions.
 type Issue struct {
@@ -26,6 +36,7 @@ type Issue struct {
 	Dependencies       []Dependency `json:"dependencies,omitempty"`
 	AcceptanceCriteria string       `json:"acceptance_criteria,omitempty"`
 	Design             string       `json:"design,omitempty"`
+	EstimatedMinutes   int          `json:"estimated_minutes,omitempty"`
 }
 
 // Dependency represents an issue dependency edge.
@@ -53,7 +64,7 @@ func NewClient(workDir string) (*Client, error) {
 	return &Client{
 		binary:  DefaultBinary,
 		workDir: workDir,
-		flags:   []string{"--no-daemon", "--no-auto-import", "--no-auto-flush"},
+		flags:   []string{"--sandbox"},
 	}, nil
 }
 
@@ -156,17 +167,63 @@ func extractJSON(out []byte) []byte {
 	if json.Valid([]byte(s)) {
 		return []byte(s)
 	}
-	// Find first { or [ and try to parse from there
+	// Find the first balanced JSON object or array, tolerating
+	// leading/trailing non-JSON output from the bd CLI.
 	for i := 0; i < len(s); i++ {
-		if s[i] != '{' && s[i] != '[' {
+		open := s[i]
+		var close byte
+		switch open {
+		case '{':
+			close = '}'
+		case '[':
+			close = ']'
+		default:
 			continue
 		}
-		candidate := strings.TrimSpace(s[i:])
-		if json.Valid([]byte(candidate)) {
-			return []byte(candidate)
+		if end := findBalancedEnd(s, i, open, close); end > i {
+			candidate := s[i : end+1]
+			if json.Valid([]byte(candidate)) {
+				return []byte(candidate)
+			}
 		}
 	}
 	return nil
+}
+
+// findBalancedEnd returns the index of the closing bracket that balances
+// the opener at position start, respecting JSON string escaping.
+// Returns -1 if no balanced close is found.
+func findBalancedEnd(s string, start int, open, close byte) int {
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		ch := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		if ch == open {
+			depth++
+		} else if ch == close {
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 func compact(out []byte) string {
