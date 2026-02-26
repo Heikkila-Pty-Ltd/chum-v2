@@ -66,7 +66,7 @@ func main() {
 			}
 
 			// Phase 1: Import from beads
-			client, err := beads.NewClient(project.Workspace)
+			client, err := beads.NewReadOnlyClient(project.Workspace)
 			if err != nil {
 				logger.Error("Beads client failed", "project", projectName, "error", err)
 				continue

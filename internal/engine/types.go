@@ -65,6 +65,7 @@ const (
 	CloseCompleted   CloseReason = "completed"
 	CloseDoDFailed   CloseReason = "dod_failed"
 	CloseNeedsReview CloseReason = "needs_review"
+	CloseDecomposed  CloseReason = "decomposed"
 )
 
 // CloseDetail is persisted for auditability in task error_log.
