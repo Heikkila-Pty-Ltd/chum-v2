@@ -43,10 +43,17 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 
 	// Spawn AgentWorkflow for each candidate
 	for _, c := range candidates {
+		// Mark task as "running" BEFORE spawning child to prevent double-dispatch
+		markCtx := workflow.WithActivityOptions(ctx, scanOpts)
+		if err := workflow.ExecuteActivity(markCtx, da.MarkTaskRunningActivity, c.TaskID).Get(ctx, nil); err != nil {
+			logger.Error("Failed to mark task running, skipping", "TaskID", c.TaskID, "error", err)
+			continue
+		}
+
 		childOpts := workflow.ChildWorkflowOptions{
-			WorkflowID:                 fmt.Sprintf("chum-agent-%s", c.TaskID),
-			WorkflowExecutionTimeout:   2 * time.Hour,
-			ParentClosePolicy:          enums.PARENT_CLOSE_POLICY_ABANDON,
+			WorkflowID:               fmt.Sprintf("chum-agent-%s", c.TaskID),
+			WorkflowExecutionTimeout: 2 * time.Hour,
+			ParentClosePolicy:        enums.PARENT_CLOSE_POLICY_ABANDON,
 		}
 		childCtx := workflow.WithChildOptions(ctx, childOpts)
 
@@ -59,9 +66,15 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 			Model:   c.Model,
 		}
 
-		// Fire-and-forget — the child runs independently
-		workflow.ExecuteChildWorkflow(childCtx, AgentWorkflow, req)
-		logger.Info("Dispatched agent", "TaskID", c.TaskID, "Agent", c.Agent)
+		// Wait for child workflow to actually start — without this,
+		// the parent completes before the server creates the child
+		childFuture := workflow.ExecuteChildWorkflow(childCtx, AgentWorkflow, req)
+		var childExecution workflow.Execution
+		if err := childFuture.GetChildWorkflowExecution().Get(ctx, &childExecution); err != nil {
+			logger.Error("Failed to start agent workflow", "TaskID", c.TaskID, "error", err)
+			continue
+		}
+		logger.Info("Dispatched agent", "TaskID", c.TaskID, "Agent", c.Agent, "ChildWorkflowID", childExecution.ID)
 	}
 
 	return nil
@@ -81,6 +94,12 @@ type DispatchCandidate struct {
 type DispatchActivities struct {
 	DAG    *dag.DAG
 	Config *config.Config
+}
+
+// MarkTaskRunningActivity marks a task as "running" in the DAG.
+// Called before spawning the child workflow to prevent double-dispatch.
+func (da *DispatchActivities) MarkTaskRunningActivity(ctx context.Context, taskID string) error {
+	return da.DAG.UpdateTaskStatus(ctx, taskID, "running")
 }
 
 // ScanCandidatesActivity discovers ready tasks across all enabled projects.

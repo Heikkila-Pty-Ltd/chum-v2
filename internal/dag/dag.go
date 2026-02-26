@@ -219,6 +219,11 @@ func (d *DAG) CloseTask(ctx context.Context, id, status string) error {
 	return d.UpdateTask(ctx, id, map[string]any{"status": status})
 }
 
+// UpdateTaskStatus sets a task's status (alias for CloseTask with clearer naming).
+func (d *DAG) UpdateTaskStatus(ctx context.Context, id, status string) error {
+	return d.UpdateTask(ctx, id, map[string]any{"status": status})
+}
+
 // GetReadyNodes returns tasks with status="ready" whose dependencies are all "completed".
 func (d *DAG) GetReadyNodes(ctx context.Context, project string) ([]Task, error) {
 	query := `SELECT ` + taskColumns + ` FROM tasks t

@@ -12,5 +12,8 @@ chum
 .vscode/
 *.swp
 
+# Beads (issue tracker — not tracked in main repo)
+.beads/
+
 # OS
 .DS_Store
