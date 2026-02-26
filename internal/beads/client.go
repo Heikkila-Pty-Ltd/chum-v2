@@ -128,6 +128,49 @@ func (c *Client) Close(ctx context.Context, issueID, reason string) error {
 	return err
 }
 
+// CreateParams holds parameters for creating a new beads issue.
+type CreateParams struct {
+	Title       string
+	Description string
+	IssueType   string
+	Priority    int
+	Labels      []string
+	ParentID    string
+}
+
+// Create creates a new issue in beads and returns its ID.
+func (c *Client) Create(ctx context.Context, params CreateParams) (string, error) {
+	if c.readOnly {
+		return "", errors.New("beads client is read-only")
+	}
+	args := []string{"create", params.Title, "--json"}
+	if params.Description != "" {
+		args = append(args, "-d", params.Description)
+	}
+	if params.IssueType != "" {
+		args = append(args, "-t", params.IssueType)
+	}
+	if params.Priority > 0 {
+		args = append(args, "-p", strconv.Itoa(params.Priority))
+	}
+	if params.ParentID != "" {
+		args = append(args, "--parent", params.ParentID)
+	}
+	for _, label := range params.Labels {
+		args = append(args, "--add-label", label)
+	}
+	out, err := c.run(ctx, args...)
+	if err != nil {
+		return "", err
+	}
+	// Extract the issue ID from the JSON output
+	issue, err := decodeSingleIssue(out)
+	if err != nil {
+		return "", fmt.Errorf("parse created issue: %w", err)
+	}
+	return issue.ID, nil
+}
+
 // Update updates fields on an issue in beads.
 // Supported keys: "status", "title", "description", "acceptance", "priority", "estimate".
 func (c *Client) Update(ctx context.Context, issueID string, fields map[string]string) error {

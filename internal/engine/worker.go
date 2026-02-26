@@ -14,8 +14,10 @@ import (
 
 	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/chat"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 )
 
 // StartWorker connects to Temporal, registers workflows/activities,
@@ -92,6 +94,32 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	}
 	w.RegisterActivity(da)
 
+	// Register planning workflow + activities
+	w.RegisterWorkflow(planning.PlanningWorkflow)
+
+	matrixCfg := chat.MatrixConfig{
+		Homeserver:  cfg.General.MatrixHomeserver,
+		RoomID:      cfg.General.MatrixRoomID,
+		AccessToken: cfg.General.MatrixAccessToken,
+	}
+	pa := &planning.PlanningActivities{
+		DAG:          d,
+		Config:       cfg,
+		Logger:       logger,
+		AST:          parser,
+		BeadsClients: beadsClients,
+		ChatCfg:      matrixCfg,
+	}
+	w.RegisterActivity(pa.ClarifyGoalActivity)
+	w.RegisterActivity(pa.ResearchApproachesActivity)
+	w.RegisterActivity(pa.GoalCheckActivity)
+	w.RegisterActivity(pa.StoreApproachesActivity)
+	w.RegisterActivity(pa.DeeperResearchActivity)
+	w.RegisterActivity(pa.AnswerQuestionActivity)
+	w.RegisterActivity(pa.DecomposeApproachActivity)
+	w.RegisterActivity(pa.CreatePlanSubtasksActivity)
+	w.RegisterActivity(pa.NotifyChatActivity)
+
 	// Register dispatcher schedule (idempotent — skips if already exists)
 	go func() {
 		// Wait for worker to be ready before registering schedules
@@ -100,6 +128,24 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 			logger.Error("Failed to register dispatcher schedule", "error", err)
 		}
 	}()
+
+	// Start chat bridge if planning is enabled and Matrix is configured
+	if cfg.Planning.Enabled && matrixCfg.Homeserver != "" && matrixCfg.AccessToken != "" && matrixCfg.RoomID != "" {
+		bridge := &chat.Bridge{
+			Client:       c,
+			MatrixCfg:    matrixCfg,
+			PollInterval: cfg.Planning.PollInterval.Duration,
+			Logger:       logger,
+			TaskQueue:    cfg.General.TaskQueue,
+		}
+		go func() {
+			time.Sleep(3 * time.Second)
+			logger.Info("Starting chat bridge for planning")
+			if err := bridge.Run(context.Background()); err != nil {
+				logger.Error("Chat bridge stopped", "error", err)
+			}
+		}()
+	}
 
 	logger.Info("Starting CHUM v2 worker",
 		"task_queue", cfg.General.TaskQueue,
