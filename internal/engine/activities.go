@@ -21,11 +21,11 @@ import (
 
 // Activities holds dependencies for Temporal activity methods.
 type Activities struct {
-	DAG         *dag.DAG
-	Config      *config.Config
-	Logger      *slog.Logger
-	AST         *astpkg.Parser
-	BeadsClient *beads.Client // nil if beads unavailable
+	DAG          *dag.DAG
+	Config       *config.Config
+	Logger       *slog.Logger
+	AST          *astpkg.Parser
+	BeadsClients map[string]*beads.Client // project name → beads client (nil entries OK)
 }
 
 // --- 1. SetupWorktreeActivity ---
@@ -199,17 +199,27 @@ func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID str
 	}
 
 	// Writeback to beads (best-effort, non-fatal)
-	if a.BeadsClient == nil {
+	if len(a.BeadsClients) == 0 {
+		return nil
+	}
+	// Look up task's project to route to the correct beads client.
+	task, err := a.DAG.GetTask(ctx, taskID)
+	if err != nil {
+		logger.Warn("Beads writeback skipped: cannot resolve task project", "taskID", taskID, "error", err)
+		return nil
+	}
+	bc, ok := a.BeadsClients[task.Project]
+	if !ok || bc == nil {
 		return nil
 	}
 	switch detail.Reason {
 	case CloseCompleted:
 		reason := fmt.Sprintf("Completed by CHUM. PR #%d", detail.PRNumber)
-		if err := a.BeadsClient.Close(ctx, taskID, reason); err != nil {
+		if err := bc.Close(ctx, taskID, reason); err != nil {
 			logger.Warn("Beads writeback failed", "taskID", taskID, "error", err)
 		}
 	case CloseDecomposed:
-		if err := a.BeadsClient.Update(ctx, taskID, map[string]string{
+		if err := bc.Update(ctx, taskID, map[string]string{
 			"status": "decomposed",
 		}); err != nil {
 			logger.Warn("Beads decomposed writeback failed", "taskID", taskID, "error", err)
