@@ -43,7 +43,7 @@ func TestMatrixSenderSend(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		gotBody = string(body)
 		w.WriteHeader(200)
-		w.Write([]byte(`{"event_id":"$test"}`))
+		_, _ = w.Write([]byte(`{"event_id":"$test"}`))
 	}))
 	defer srv.Close()
 
