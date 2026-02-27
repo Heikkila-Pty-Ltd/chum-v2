@@ -136,5 +136,8 @@ func RestartDoltActivity(_ context.Context, dataDir, host string, port int) erro
 
 // AlertDoltFailureActivity sends a failure alert via Matrix.
 func (a *DoltHealthActivities) AlertDoltFailureActivity(ctx context.Context, roomID, message string) error {
+	if a.ChatSend == nil {
+		return nil
+	}
 	return a.ChatSend.Send(ctx, roomID, message)
 }

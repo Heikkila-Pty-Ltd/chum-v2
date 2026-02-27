@@ -37,6 +37,6 @@ func SendMatrixMessage(ctx context.Context, cfg MatrixConfig, message string) er
 	// This function exists for bridge.go's Send method — new code should use
 	// notify.ChatSender directly.
 	mc := NewMatrixClient(cfg.Homeserver, cfg.AccessToken)
-	_, err := mc.sendMessage(ctx, cfg.RoomID, message)
+	_, err := mc.SendMessage(ctx, cfg.RoomID, message)
 	return err
 }

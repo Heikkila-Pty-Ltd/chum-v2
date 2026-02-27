@@ -121,8 +121,8 @@ func (m *MatrixClient) doGet(ctx context.Context, endpoint string) ([]byte, erro
 	return body, nil
 }
 
-// sendMessage sends a text message to a Matrix room.
-func (m *MatrixClient) sendMessage(ctx context.Context, roomID, message string) (string, error) {
+// SendMessage sends a text message to a Matrix room.
+func (m *MatrixClient) SendMessage(ctx context.Context, roomID, message string) (string, error) {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return "", nil

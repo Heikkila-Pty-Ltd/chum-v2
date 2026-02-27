@@ -17,11 +17,14 @@ func (a *Activities) NotifyActivity(ctx context.Context, message string) error {
 		return nil
 	}
 
-	if a.Config == nil {
-		logger.Warn("NotifyActivity skipped: config missing")
+	if a.ChatSend == nil {
+		logger.Warn("NotifyActivity skipped: no ChatSender configured")
 		return nil
 	}
 
-	roomID := a.Config.General.MatrixRoomID
+	roomID := ""
+	if a.Config != nil {
+		roomID = a.Config.General.MatrixRoomID
+	}
 	return a.ChatSend.Send(ctx, roomID, msg)
 }

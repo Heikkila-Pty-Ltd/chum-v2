@@ -399,6 +399,9 @@ func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, re
 
 // NotifyChatActivity sends a message to a Matrix room.
 func (pa *PlanningActivities) NotifyChatActivity(ctx context.Context, roomID, message string) error {
+	if pa.ChatSend == nil {
+		return nil
+	}
 	return pa.ChatSend.Send(ctx, roomID, message)
 }
 

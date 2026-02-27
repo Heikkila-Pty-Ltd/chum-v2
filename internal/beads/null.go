@@ -22,6 +22,8 @@ func (n *NullStore) Ready(_ context.Context, _ int) ([]Issue, error) {
 	return nil, nil
 }
 
+// Show returns a stub Issue with only the ID populated.
+// Callers should not rely on other fields being set.
 func (n *NullStore) Show(_ context.Context, issueID string) (Issue, error) {
 	return Issue{ID: issueID}, nil
 }

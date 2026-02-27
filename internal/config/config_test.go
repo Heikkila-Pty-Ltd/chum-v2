@@ -81,9 +81,6 @@ enabled = true
 	if cfg.Planning.PollInterval.Duration != 10*time.Second {
 		t.Errorf("expected default poll_interval 10s, got %v", cfg.Planning.PollInterval.Duration)
 	}
-	if cfg.Planning.GroomingInterval.Duration != 5*time.Minute {
-		t.Errorf("expected default grooming_interval 5m, got %v", cfg.Planning.GroomingInterval.Duration)
-	}
 }
 
 func TestLoadCustomValues(t *testing.T) {

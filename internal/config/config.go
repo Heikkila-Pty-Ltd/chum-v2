@@ -36,8 +36,6 @@ type Planning struct {
 	MaxResearchRounds int      `toml:"max_research_rounds"`
 	PollInterval      Duration `toml:"poll_interval"`
 	AllowedSenders    []string `toml:"allowed_senders"` // Matrix user IDs allowed to issue /plan commands (empty = allow all)
-	GroomingEnabled   bool     `toml:"grooming_enabled"`
-	GroomingInterval  Duration `toml:"grooming_interval"`
 }
 
 // General holds scheduler-level settings.
@@ -133,9 +131,6 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Planning.PollInterval.Duration == 0 {
 		cfg.Planning.PollInterval.Duration = 10 * time.Second
-	}
-	if cfg.Planning.GroomingInterval.Duration == 0 {
-		cfg.Planning.GroomingInterval.Duration = 5 * time.Minute
 	}
 	return &cfg, nil
 }

@@ -30,6 +30,7 @@ type Bridge struct {
 	mu           sync.Mutex
 	activeByRoom map[string]string // roomID → active planning session workflow ID
 	sinceToken   string
+	mc           *MatrixClient // long-lived client for sending; initialized in Run
 }
 
 // Run starts the polling loop. Blocks until ctx is cancelled.
@@ -38,10 +39,12 @@ func (b *Bridge) Run(ctx context.Context) error {
 		b.PollInterval = 10 * time.Second
 	}
 
+	// Create a long-lived MatrixClient for sending messages (shared txnCounter).
+	b.mc = NewMatrixClient(b.MatrixCfg.Homeserver, b.MatrixCfg.AccessToken)
+
 	// Resolve the bot's own Matrix user ID so we can filter self-echo.
 	if b.BotUserID == "" {
-		mc := NewMatrixClient(b.MatrixCfg.Homeserver, b.MatrixCfg.AccessToken)
-		if uid, err := mc.WhoAmI(ctx); err != nil {
+		if uid, err := b.mc.WhoAmI(ctx); err != nil {
 			b.Logger.Warn("Failed to resolve bot user ID — self-echo filtering disabled", "error", err)
 		} else {
 			b.BotUserID = uid
@@ -254,6 +257,10 @@ func (b *Bridge) send(ctx context.Context, message string) error {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return nil
+	}
+	if b.mc != nil {
+		_, err := b.mc.SendMessage(ctx, b.MatrixCfg.RoomID, message)
+		return err
 	}
 	return SendMatrixMessage(ctx, b.MatrixCfg, message)
 }

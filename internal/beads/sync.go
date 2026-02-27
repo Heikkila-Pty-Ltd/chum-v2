@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 // SyncResult summarizes a sync operation.
@@ -33,7 +34,7 @@ func SyncToDAG(ctx context.Context, client *Client, d *dag.DAG, project string, 
 	var result SyncResult
 	for _, issue := range issues {
 		// Skip completed/closed — we only ingest work that needs doing
-		if issue.Status == "closed" || issue.Status == "completed" || issue.Status == "done" {
+		if issue.Status == "closed" || issue.Status == types.StatusCompleted || issue.Status == "done" {
 			result.Skipped++
 			continue
 		}
@@ -70,8 +71,8 @@ func SyncToDAG(ctx context.Context, client *Client, d *dag.DAG, project string, 
 
 		// Create new task
 		status := issue.Status
-		if status == "" || status == "open" {
-			status = "open" // beads "open" → DAG "open" (not yet ready)
+		if status == "" || status == types.StatusOpen {
+			status = types.StatusOpen // beads "open" → DAG "open" (not yet ready)
 		}
 
 		task := dag.Task{

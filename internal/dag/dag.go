@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 	_ "modernc.org/sqlite"
 )
 
@@ -165,7 +167,7 @@ func (d *DAG) CreateTask(ctx context.Context, t Task) (string, error) {
 	}
 	status := t.Status
 	if status == "" {
-		status = "open"
+		status = types.StatusOpen
 	}
 	taskType := t.Type
 	if taskType == "" {
@@ -216,7 +218,7 @@ func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks [
 		}
 		status := t.Status
 		if status == "" {
-			status = "open"
+			status = types.StatusOpen
 		}
 		taskType := t.Type
 		if taskType == "" {
@@ -320,8 +322,8 @@ func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks [
 
 	// Mark parent as decomposed
 	if _, err := tx.ExecContext(ctx,
-		"UPDATE tasks SET status = 'decomposed', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-		parentID); err != nil {
+		"UPDATE tasks SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		types.StatusDecomposed, parentID); err != nil {
 		return nil, fmt.Errorf("mark parent decomposed: %w", err)
 	}
 
@@ -419,15 +421,15 @@ func (d *DAG) UpdateTaskStatus(ctx context.Context, id, status string) error {
 // GetReadyNodes returns tasks with status="ready" whose dependencies are all "completed".
 func (d *DAG) GetReadyNodes(ctx context.Context, project string) ([]Task, error) {
 	query := `SELECT ` + taskColumns + ` FROM tasks t
-		WHERE t.project = ? AND t.status = 'ready'
+		WHERE t.project = ? AND t.status = ?
 		AND NOT EXISTS (
 			SELECT 1 FROM task_edges e
 			LEFT JOIN tasks dep ON dep.id = e.to_task
 			WHERE e.from_task = t.id
-			AND (dep.id IS NULL OR dep.status != 'completed')
+			AND (dep.id IS NULL OR dep.status != ?)
 		)
 		ORDER BY t.priority ASC, t.created_at ASC`
-	rows, err := d.db.QueryContext(ctx, query, project)
+	rows, err := d.db.QueryContext(ctx, query, project, types.StatusReady, types.StatusCompleted)
 	if err != nil {
 		return nil, fmt.Errorf("get ready nodes: %w", err)
 	}

@@ -23,6 +23,9 @@ type ChatSender interface {
 // --- MatrixSender ---
 
 // MatrixSender sends messages via the Matrix Client-Server API.
+// This is the canonical implementation for activity notifications.
+// The chat.MatrixClient has a parallel implementation used by the bridge
+// for combined read/write operations — both maintain their own txnCounter.
 type MatrixSender struct {
 	Homeserver  string
 	AccessToken string
@@ -45,7 +48,7 @@ func (m *MatrixSender) Send(ctx context.Context, roomID, message string) error {
 		return nil
 	}
 
-	txnID := fmt.Sprintf("chum-%d-%d", time.Now().UnixNano(), atomic.AddUint64(&m.txnCounter, 1))
+	txnID := fmt.Sprintf("chum-notify-%d-%d", time.Now().UnixNano(), atomic.AddUint64(&m.txnCounter, 1))
 	path := fmt.Sprintf("%s/_matrix/client/v3/rooms/%s/send/m.room.message/%s",
 		strings.TrimRight(m.Homeserver, "/"),
 		url.PathEscape(roomID),

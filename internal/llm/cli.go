@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
@@ -138,12 +139,25 @@ var providers = map[string]providerConfig{
 	},
 }
 
+// providerPrefixes returns provider keys sorted by length descending,
+// so longer prefixes match before shorter ones (e.g. "codex" before "code").
+func providerPrefixes() []string {
+	keys := make([]string, 0, len(providers))
+	for k := range providers {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return len(keys[i]) > len(keys[j])
+	})
+	return keys
+}
+
 // normalizeCLIName extracts the canonical CLI binary name from an agent string.
 func normalizeCLIName(agent string) string {
 	agent = strings.ToLower(agent)
-	for prefix, cfg := range providers {
+	for _, prefix := range providerPrefixes() {
 		if strings.HasPrefix(agent, prefix) {
-			return cfg.binary
+			return providers[prefix].binary
 		}
 	}
 	return agent
@@ -151,8 +165,9 @@ func normalizeCLIName(agent string) string {
 
 func buildCommand(agent, model, workDir string, modeFlags func(providerConfig) []string) *exec.Cmd {
 	lower := strings.ToLower(agent)
-	for prefix, cfg := range providers {
+	for _, prefix := range providerPrefixes() {
 		if strings.HasPrefix(lower, prefix) {
+			cfg := providers[prefix]
 			args := append([]string{}, modeFlags(cfg)...)
 			if model != "" {
 				args = append(args, "--model", model)
