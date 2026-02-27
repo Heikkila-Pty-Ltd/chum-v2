@@ -15,10 +15,9 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/notify"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
-
-// ChatSendFunc sends a message to a Matrix room. Injected to avoid import cycles.
-type ChatSendFunc func(ctx context.Context, roomID, message string) error
 
 // PlanningActivities holds dependencies for planning Temporal activities.
 type PlanningActivities struct {
@@ -26,8 +25,8 @@ type PlanningActivities struct {
 	Config       *config.Config
 	Logger       *slog.Logger
 	AST          *astpkg.Parser
-	BeadsClients map[string]*beads.Client
-	ChatSend     ChatSendFunc
+	BeadsClients map[string]beads.Store
+	ChatSend     notify.ChatSender
 }
 
 // ClarifyGoalActivity runs an LLM to extract intent, constraints, and rationale from the task.
@@ -137,7 +136,7 @@ Rules:
 
 	approaches, err := parseApproaches(jsonStr)
 	if err != nil {
-		logger.Error("Research JSON parse failed", "json_excerpt", truncate(jsonStr, 500), "error", err)
+		logger.Error("Research JSON parse failed", "json_excerpt", types.Truncate(jsonStr, 500), "error", err)
 		return nil, fmt.Errorf("parse research output: %w", err)
 	}
 
@@ -386,7 +385,7 @@ func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, re
 			Acceptance:      step.Acceptance,
 			EstimateMinutes: step.Estimate,
 			Project:         req.Project,
-			Status:          "ready",
+			Status:          types.StatusReady,
 		})
 	}
 
@@ -400,15 +399,12 @@ func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, re
 
 // NotifyChatActivity sends a message to a Matrix room.
 func (pa *PlanningActivities) NotifyChatActivity(ctx context.Context, roomID, message string) error {
-	if pa.ChatSend == nil {
-		return nil
-	}
-	return pa.ChatSend(ctx, roomID, message)
+	return pa.ChatSend.Send(ctx, roomID, message)
 }
 
 // --- helpers ---
 
-func (pa *PlanningActivities) beadsClient(project string) *beads.Client {
+func (pa *PlanningActivities) beadsClient(project string) beads.Store {
 	if pa.BeadsClients == nil {
 		return nil
 	}
@@ -473,9 +469,3 @@ func parseApproaches(jsonStr string) ([]ResearchedApproach, error) {
 	return nil, fmt.Errorf("no approach array found in object keys")
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
-}

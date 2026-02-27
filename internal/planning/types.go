@@ -3,7 +3,11 @@
 // then drives interactive decisions via Matrix chat signals.
 package planning
 
-import "time"
+import (
+	"time"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
+)
 
 // PlanningRequest is the input to the PlanningWorkflow.
 type PlanningRequest struct {
@@ -52,13 +56,8 @@ type QuestionAnswer struct {
 	Round    int    `json:"round"`
 }
 
-// DecompStep is a sub-task from decomposition (reuses engine type contract).
-type DecompStep struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Acceptance  string `json:"acceptance"`
-	Estimate    int    `json:"estimate_minutes"`
-}
+// DecompStep is a sub-task from decomposition (shared type).
+type DecompStep = types.DecompStep
 
 // PlanningResult is the final output of the PlanningWorkflow.
 type PlanningResult struct {

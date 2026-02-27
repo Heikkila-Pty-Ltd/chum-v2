@@ -15,6 +15,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/engine"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 
 	"go.temporal.io/sdk/client"
 )
@@ -143,7 +144,7 @@ func main() {
 			os.Exit(1)
 		}
 		if status == "" {
-			status = "ready"
+			status = types.StatusReady
 		}
 		task := dag.Task{
 			Title:       title,
@@ -185,10 +186,7 @@ func main() {
 		}
 		fmt.Printf("CHUM v2 — starting planning ceremony for %s\n", project)
 
-		c, err := client.Dial(client.Options{
-			HostPort:  cfg.General.TemporalHostPort,
-			Namespace: cfg.General.TemporalNamespace,
-		})
+		c, err := engine.DialTemporal(cfg, nil)
 		if err != nil {
 			logger.Error("Failed to connect to Temporal", "error", err)
 			os.Exit(1)

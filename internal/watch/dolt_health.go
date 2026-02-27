@@ -12,6 +12,8 @@ import (
 
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/notify"
 )
 
 // DoltHealthConfig holds settings for the Dolt health check schedule.
@@ -79,7 +81,7 @@ func DoltHealthCheckWorkflow(ctx workflow.Context, cfg DoltHealthConfig) error {
 // DoltHealthActivities holds dependencies for health check activities.
 type DoltHealthActivities struct {
 	Logger   *slog.Logger
-	ChatSend func(ctx context.Context, roomID, message string) error
+	ChatSend notify.ChatSender
 }
 
 // CheckDoltHealthActivity tests TCP connectivity to Dolt.
@@ -134,9 +136,5 @@ func RestartDoltActivity(_ context.Context, dataDir, host string, port int) erro
 
 // AlertDoltFailureActivity sends a failure alert via Matrix.
 func (a *DoltHealthActivities) AlertDoltFailureActivity(ctx context.Context, roomID, message string) error {
-	if a.ChatSend == nil {
-		a.Logger.Warn("Dolt health alert (no chat configured)", "message", message)
-		return nil
-	}
-	return a.ChatSend(ctx, roomID, message)
+	return a.ChatSend.Send(ctx, roomID, message)
 }

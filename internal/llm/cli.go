@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 // ErrRateLimited is returned when the LLM CLI output indicates a rate/usage limit.
@@ -92,18 +94,10 @@ func RunWithPrompt(cmd *exec.Cmd, prompt, agent string) (*CLIResult, error) {
 		if IsRateLimited(result.Output) {
 			return result, fmt.Errorf("%w: %s", ErrRateLimited, agent)
 		}
-		return result, fmt.Errorf("CLI %s exited with code %d: %s", agent, result.ExitCode, truncateOutput(result.Output, 200))
+		return result, fmt.Errorf("CLI %s exited with code %d: %s", agent, result.ExitCode, types.Truncate(strings.TrimSpace(result.Output), 200))
 	}
 
 	return result, nil
-}
-
-func truncateOutput(s string, maxLen int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }
 
 // FilterEnv returns a copy of env with the named variable removed.
@@ -118,62 +112,67 @@ func filterEnv(env []string, name string) []string {
 	return out
 }
 
-// BuildPlanCommand creates a CLI command for PLANNING (text output only).
-func BuildPlanCommand(agent, model, workDir string) *exec.Cmd {
+// providerConfig defines how to invoke a specific LLM CLI.
+type providerConfig struct {
+	binary    string
+	planFlags []string
+	execFlags []string
+}
+
+// providers maps agent name prefixes to their CLI configurations.
+var providers = map[string]providerConfig{
+	"claude": {
+		binary:    "claude",
+		planFlags: []string{"--print", "--output-format", "json"},
+		execFlags: []string{"--dangerously-skip-permissions"},
+	},
+	"gemini": {
+		binary:    "gemini",
+		planFlags: []string{"--print"},
+		execFlags: []string{"--sandbox=false"},
+	},
+	"codex": {
+		binary:    "codex",
+		planFlags: []string{"--quiet"},
+		execFlags: []string{"--quiet", "--full-auto"},
+	},
+}
+
+// normalizeCLIName extracts the canonical CLI binary name from an agent string.
+func normalizeCLIName(agent string) string {
 	agent = strings.ToLower(agent)
-	var cmd *exec.Cmd
-	switch {
-	case strings.HasPrefix(agent, "claude"):
-		args := []string{"--print", "--output-format", "json"}
-		if model != "" {
-			args = append(args, "--model", model)
+	for prefix, cfg := range providers {
+		if strings.HasPrefix(agent, prefix) {
+			return cfg.binary
 		}
-		cmd = exec.Command("claude", args...)
-	case strings.HasPrefix(agent, "gemini"):
-		args := []string{"--print"}
-		if model != "" {
-			args = append(args, "--model", model)
-		}
-		cmd = exec.Command("gemini", args...)
-	case strings.HasPrefix(agent, "codex"):
-		args := []string{"--quiet"}
-		if model != "" {
-			args = append(args, "--model", model)
-		}
-		cmd = exec.Command("codex", args...)
-	default:
-		cmd = exec.Command(agent)
 	}
+	return agent
+}
+
+func buildCommand(agent, model, workDir string, modeFlags func(providerConfig) []string) *exec.Cmd {
+	lower := strings.ToLower(agent)
+	for prefix, cfg := range providers {
+		if strings.HasPrefix(lower, prefix) {
+			args := append([]string{}, modeFlags(cfg)...)
+			if model != "" {
+				args = append(args, "--model", model)
+			}
+			cmd := exec.Command(cfg.binary, args...)
+			cmd.Dir = workDir
+			return cmd
+		}
+	}
+	cmd := exec.Command(agent)
 	cmd.Dir = workDir
 	return cmd
 }
 
+// BuildPlanCommand creates a CLI command for PLANNING (text output only).
+func BuildPlanCommand(agent, model, workDir string) *exec.Cmd {
+	return buildCommand(agent, model, workDir, func(p providerConfig) []string { return p.planFlags })
+}
+
 // BuildExecCommand creates a CLI command for EXECUTION (file-modifying).
 func BuildExecCommand(agent, model, workDir string) *exec.Cmd {
-	agent = strings.ToLower(agent)
-	var cmd *exec.Cmd
-	switch {
-	case strings.HasPrefix(agent, "claude"):
-		args := []string{"--dangerously-skip-permissions"}
-		if model != "" {
-			args = append(args, "--model", model)
-		}
-		cmd = exec.Command("claude", args...)
-	case strings.HasPrefix(agent, "gemini"):
-		args := []string{"--sandbox=false"}
-		if model != "" {
-			args = append(args, "--model", model)
-		}
-		cmd = exec.Command("gemini", args...)
-	case strings.HasPrefix(agent, "codex"):
-		args := []string{"--quiet", "--full-auto"}
-		if model != "" {
-			args = append(args, "--model", model)
-		}
-		cmd = exec.Command("codex", args...)
-	default:
-		cmd = exec.Command(agent)
-	}
-	cmd.Dir = workDir
-	return cmd
+	return buildCommand(agent, model, workDir, func(p providerConfig) []string { return p.execFlags })
 }

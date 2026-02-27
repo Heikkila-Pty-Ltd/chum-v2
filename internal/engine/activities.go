@@ -17,6 +17,9 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/notify"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 // Activities holds dependencies for Temporal activity methods.
@@ -25,7 +28,8 @@ type Activities struct {
 	Config       *config.Config
 	Logger       *slog.Logger
 	AST          *astpkg.Parser
-	BeadsClients map[string]*beads.Client // project name → beads client (nil entries OK)
+	BeadsClients map[string]beads.Store
+	ChatSend     notify.ChatSender
 }
 
 // --- 1. SetupWorktreeActivity ---
@@ -51,7 +55,7 @@ func (a *Activities) ExecuteActivity(ctx context.Context, req TaskRequest) (*Exe
 	logger.Info("Executing task", "TaskID", req.TaskID, "Agent", req.Agent)
 
 	// --- Preflight 1: CLI binary exists ---
-	cliName := normalizeCLIName(req.Agent)
+	cliName := llm.NormalizeCLIName(req.Agent)
 	if _, err := exec.LookPath(cliName); err != nil {
 		return nil, fmt.Errorf("PREFLIGHT: CLI %q not found on PATH — cannot execute", cliName)
 	}
@@ -76,7 +80,7 @@ func (a *Activities) ExecuteActivity(ctx context.Context, req TaskRequest) (*Exe
 			cmd.Dir = req.WorkDir
 			if out, err := cmd.CombinedOutput(); err != nil {
 				return nil, fmt.Errorf("PREFLIGHT: project doesn't build before coding — %s failed: %s",
-					buildCmd, truncate(string(out), 300))
+					buildCmd, types.Truncate(string(out), 300))
 			}
 			logger.Info("Preflight: baseline build OK")
 		}
@@ -102,11 +106,11 @@ Implement this task by modifying the necessary files. Do not explain, just code.
 
 	if result.ExitCode != 0 {
 		return nil, fmt.Errorf("agent exited with code %d: %s",
-			result.ExitCode, truncate(result.Output, 500))
+			result.ExitCode, types.Truncate(result.Output, 500))
 	}
 
 	// Auto-commit any changes the agent made
-	commitMsg := fmt.Sprintf("chum: %s\n\nTask: %s", truncate(req.Prompt, 72), req.TaskID)
+	commitMsg := fmt.Sprintf("chum: %s\n\nTask: %s", types.Truncate(req.Prompt, 72), req.TaskID)
 	committed, err := gitpkg.CommitAll(ctx, req.WorkDir, commitMsg)
 	if err != nil {
 		logger.Warn("Auto-commit failed", "error", err)
@@ -198,18 +202,15 @@ func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID str
 		return err
 	}
 
-	// Writeback to beads (best-effort, non-fatal)
-	if len(a.BeadsClients) == 0 {
-		return nil
-	}
-	// Look up task's project to route to the correct beads client.
+	// Writeback to beads (best-effort, non-fatal).
+	// NullStore handles the case where bd is unavailable.
 	task, err := a.DAG.GetTask(ctx, taskID)
 	if err != nil {
 		logger.Warn("Beads writeback skipped: cannot resolve task project", "taskID", taskID, "error", err)
 		return nil
 	}
 	bc, ok := a.BeadsClients[task.Project]
-	if !ok || bc == nil {
+	if !ok {
 		return nil
 	}
 	switch detail.Reason {
@@ -220,7 +221,7 @@ func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID str
 		}
 	case CloseDecomposed:
 		if err := bc.Update(ctx, taskID, map[string]string{
-			"status": "decomposed",
+			"status": types.StatusDecomposed,
 		}); err != nil {
 			logger.Warn("Beads decomposed writeback failed", "taskID", taskID, "error", err)
 		}
@@ -283,24 +284,3 @@ func fallbackFileList(ctx context.Context, workDir string) string {
 }
 
 // --- helpers ---
-
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
-// normalizeCLIName extracts the canonical CLI binary name from an agent string.
-func normalizeCLIName(agent string) string {
-	agent = strings.ToLower(agent)
-	switch {
-	case strings.HasPrefix(agent, "claude"):
-		return "claude"
-	case strings.HasPrefix(agent, "gemini"):
-		return "gemini"
-	case strings.HasPrefix(agent, "codex"):
-		return "codex"
-	}
-	return agent
-}

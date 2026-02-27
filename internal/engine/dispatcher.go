@@ -14,6 +14,7 @@ import (
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 // DispatcherWorkflow scans the DAG for ready tasks and spawns AgentWorkflow
@@ -97,7 +98,7 @@ type DispatchActivities struct {
 // MarkTaskRunningActivity marks a task as "running" in the DAG.
 // Called before spawning the child workflow to prevent double-dispatch.
 func (da *DispatchActivities) MarkTaskRunningActivity(ctx context.Context, taskID string) error {
-	return da.DAG.UpdateTaskStatus(ctx, taskID, "running")
+	return da.DAG.UpdateTaskStatus(ctx, taskID, types.StatusRunning)
 }
 
 // ScanCandidatesActivity discovers ready tasks across all enabled projects.

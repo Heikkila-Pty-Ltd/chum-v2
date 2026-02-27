@@ -7,6 +7,7 @@ import (
 
 	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 // CodebaseParser abstracts AST parsing for testability.
@@ -48,7 +49,7 @@ func RunGate(ctx context.Context, d *dag.DAG, parser CodebaseParser, project, wo
 	}
 
 	// Step 2: Process 'open' tasks → validate and promote
-	openTasks, err := d.ListTasks(ctx, project, "open")
+	openTasks, err := d.ListTasks(ctx, project, types.StatusOpen)
 	if err != nil {
 		return result, fmt.Errorf("list open tasks: %w", err)
 	}
@@ -56,7 +57,7 @@ func RunGate(ctx context.Context, d *dag.DAG, parser CodebaseParser, project, wo
 		vr := ValidateStructure(task)
 		if !vr.Pass {
 			if err := d.UpdateTask(ctx, task.ID, map[string]any{
-				"status":    "needs_refinement",
+				"status":    types.StatusNeedsRefinement,
 				"error_log": vr.Reason,
 			}); err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("mark %s needs_refinement: %v", task.ID, err))
@@ -75,7 +76,7 @@ func RunGate(ctx context.Context, d *dag.DAG, parser CodebaseParser, project, wo
 		}
 
 		// Promote to ready
-		if err := d.UpdateTask(ctx, task.ID, map[string]any{"status": "ready"}); err != nil {
+		if err := d.UpdateTask(ctx, task.ID, map[string]any{"status": types.StatusReady}); err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("promote %s: %v", task.ID, err))
 			continue
 		}
@@ -84,7 +85,7 @@ func RunGate(ctx context.Context, d *dag.DAG, parser CodebaseParser, project, wo
 	}
 
 	// Step 3: Re-check ready tasks for staleness
-	readyTasks, err := d.ListTasks(ctx, project, "ready")
+	readyTasks, err := d.ListTasks(ctx, project, types.StatusReady)
 	if err != nil {
 		return result, fmt.Errorf("list ready tasks: %w", err)
 	}
@@ -107,7 +108,7 @@ func RunGate(ctx context.Context, d *dag.DAG, parser CodebaseParser, project, wo
 
 		if CheckStaleness(oldTargets, index) {
 			if err := d.UpdateTask(ctx, task.ID, map[string]any{
-				"status":    "stale",
+				"status":    types.StatusStale,
 				"error_log": "referenced code has changed since task was promoted",
 			}); err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("mark %s stale: %v", task.ID, err))
@@ -119,11 +120,11 @@ func RunGate(ctx context.Context, d *dag.DAG, parser CodebaseParser, project, wo
 	}
 
 	// Step 4: Compute conflict fences for ready + running tasks
-	allActive, err := d.ListTasks(ctx, project, "ready", "running")
+	allActive, err := d.ListTasks(ctx, project, types.StatusReady, types.StatusRunning)
 	if err != nil {
 		return result, fmt.Errorf("list active tasks: %w", err)
 	}
-	activeTargets, err := d.GetAllTargetsForStatuses(ctx, project, "ready", "running")
+	activeTargets, err := d.GetAllTargetsForStatuses(ctx, project, types.StatusReady, types.StatusRunning)
 	if err != nil {
 		return result, fmt.Errorf("get active targets: %w", err)
 	}
