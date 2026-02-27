@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -109,6 +110,11 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.General.DoltPort == 0 {
 		cfg.General.DoltPort = 3307
+	}
+	// Resolve DoltDataDir relative to the config file's directory.
+	if cfg.General.DoltDataDir != "" && !filepath.IsAbs(cfg.General.DoltDataDir) {
+		configDir, _ := filepath.Abs(filepath.Dir(path))
+		cfg.General.DoltDataDir = filepath.Join(configDir, cfg.General.DoltDataDir)
 	}
 	// Planning defaults
 	if cfg.Planning.MaxCycles == 0 {

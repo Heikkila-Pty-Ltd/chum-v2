@@ -251,8 +251,10 @@ func registerDispatcherSchedule(c client.Client, cfg *config.Config, logger *slo
 	})
 	if err != nil {
 		// Schedule may already exist from a previous run
-		if strings.Contains(err.Error(), "already exists") ||
-			strings.Contains(err.Error(), "AlreadyExists") {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "already exists") ||
+			strings.Contains(errMsg, "already registered") ||
+			strings.Contains(errMsg, "AlreadyExists") {
 			logger.Info("Dispatcher schedule already exists", "interval", tickInterval)
 			return nil
 		}
@@ -295,8 +297,10 @@ func registerDoltHealthSchedule(c client.Client, cfg *config.Config, logger *slo
 		Overlap: enumspb.SCHEDULE_OVERLAP_POLICY_SKIP,
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "already exists") ||
-			strings.Contains(err.Error(), "AlreadyExists") {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "already exists") ||
+			strings.Contains(errMsg, "already registered") ||
+			strings.Contains(errMsg, "AlreadyExists") {
 			logger.Info("Dolt health schedule already exists", "interval", interval)
 			return nil
 		}

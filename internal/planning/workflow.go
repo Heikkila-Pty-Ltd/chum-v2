@@ -51,9 +51,10 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 	researchOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: 15 * time.Minute,
 		RetryPolicy: &temporal.RetryPolicy{
-			MaximumAttempts:    2,
-			InitialInterval:    5 * time.Second,
+			MaximumAttempts:    5,
+			InitialInterval:    30 * time.Second,
 			BackoffCoefficient: 2.0,
+			MaximumInterval:    5 * time.Minute,
 		},
 	}
 	notifyOpts := workflow.ActivityOptions{

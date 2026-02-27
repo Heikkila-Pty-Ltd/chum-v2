@@ -88,11 +88,10 @@ func RunWithPrompt(cmd *exec.Cmd, prompt, agent string) (*CLIResult, error) {
 		}
 	}
 
-	if IsRateLimited(result.Output) {
-		return result, fmt.Errorf("%w: %s", ErrRateLimited, agent)
-	}
-
 	if result.ExitCode != 0 {
+		if IsRateLimited(result.Output) {
+			return result, fmt.Errorf("%w: %s", ErrRateLimited, agent)
+		}
 		return result, fmt.Errorf("CLI %s exited with code %d: %s", agent, result.ExitCode, truncateOutput(result.Output, 200))
 	}
 
