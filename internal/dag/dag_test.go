@@ -27,6 +27,16 @@ func newTestDAG(t *testing.T) *DAG {
 	return d
 }
 
+// --- TaskStore interface ---
+
+func TestDAG_SatisfiesTaskStore(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	// Compile-time check is in store.go (var _ TaskStore = (*DAG)(nil)),
+	// but this runtime test verifies the concrete value works.
+	var _ TaskStore = d
+}
+
 // --- EnsureSchema ---
 
 func TestEnsureSchema_Idempotent(t *testing.T) {

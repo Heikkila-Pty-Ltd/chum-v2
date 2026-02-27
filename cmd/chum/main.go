@@ -15,6 +15,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/engine"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
+	syncpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/sync"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 
 	"go.temporal.io/sdk/client"
@@ -76,7 +77,7 @@ func main() {
 				logger.Error("Beads client failed", "project", projectName, "error", err)
 				continue
 			}
-			syncResult, err := beads.SyncToDAG(context.Background(), client, d, projectName, logger)
+			syncResult, err := syncpkg.SyncToDAG(context.Background(), client, d, projectName, logger)
 			if err != nil {
 				logger.Error("Sync failed", "project", projectName, "error", err)
 				continue
@@ -114,7 +115,7 @@ func main() {
 
 	case "init":
 		fmt.Printf("CHUM v2 — creating Temporal namespace %q\n", cfg.General.TemporalNamespace)
-		if err := engine.EnsureNamespace(cfg, logger); err != nil {
+		if err := engine.EnsureNamespace(context.Background(), cfg, logger); err != nil {
 			logger.Error("Namespace creation failed", "error", err)
 			fmt.Println("  Hint: make sure Temporal server is running and temporal CLI is on PATH")
 			os.Exit(1)
@@ -127,16 +128,20 @@ func main() {
 			os.Exit(1)
 		}
 		var project, title, description, status string
-		for i := 3; i < len(os.Args)-1; i++ {
+		for i := 3; i < len(os.Args); i++ {
 			switch os.Args[i] {
 			case "--project":
-				project = os.Args[i+1]
+				project = requireFlagValue(os.Args, i)
+				i++
 			case "--title":
-				title = os.Args[i+1]
+				title = requireFlagValue(os.Args, i)
+				i++
 			case "--description":
-				description = os.Args[i+1]
+				description = requireFlagValue(os.Args, i)
+				i++
 			case "--status":
-				status = os.Args[i+1]
+				status = requireFlagValue(os.Args, i)
+				i++
 			}
 		}
 		if title == "" || project == "" {
@@ -162,14 +167,17 @@ func main() {
 	case "plan":
 		// CLI fallback for planning ceremony (when Matrix is not available)
 		var project, agent, goalID string
-		for i := 2; i < len(os.Args)-1; i++ {
+		for i := 2; i < len(os.Args); i++ {
 			switch os.Args[i] {
 			case "--project":
-				project = os.Args[i+1]
+				project = requireFlagValue(os.Args, i)
+				i++
 			case "--agent":
-				agent = os.Args[i+1]
+				agent = requireFlagValue(os.Args, i)
+				i++
 			case "--goal":
-				goalID = os.Args[i+1]
+				goalID = requireFlagValue(os.Args, i)
+				i++
 			}
 		}
 		if project == "" || goalID == "" {
@@ -236,4 +244,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage: chum [serve|sync|tasks|task create|plan|init] [--config path]\n")
 		os.Exit(1)
 	}
+}
+
+// requireFlagValue returns args[i+1] or exits with an error if missing.
+func requireFlagValue(args []string, i int) string {
+	if i+1 >= len(args) {
+		fmt.Fprintf(os.Stderr, "Error: %s requires a value\n", args[i])
+		os.Exit(1)
+	}
+	return args[i+1]
 }

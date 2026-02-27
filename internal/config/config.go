@@ -51,6 +51,10 @@ type General struct {
 	MatrixAccessToken string   `toml:"matrix_access_token"`
 	MatrixHomeserver  string   `toml:"matrix_homeserver"`
 
+	ExecTimeout  Duration `toml:"exec_timeout"`   // LLM execution timeout (default: 45m)
+	ShortTimeout Duration `toml:"short_timeout"`  // short ops like push/PR (default: 2m)
+	ReviewTimeout Duration `toml:"review_timeout"` // review activity timeout (default: 10m)
+
 	DoltHealthCheckEnabled  bool     `toml:"dolt_health_check_enabled"`
 	DoltHealthCheckInterval Duration `toml:"dolt_health_check_interval"`
 	DoltDataDir             string   `toml:"dolt_data_dir"`
@@ -101,6 +105,15 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.General.DBPath == "" {
 		cfg.General.DBPath = "chum.db"
+	}
+	if cfg.General.ExecTimeout.Duration == 0 {
+		cfg.General.ExecTimeout.Duration = 45 * time.Minute
+	}
+	if cfg.General.ShortTimeout.Duration == 0 {
+		cfg.General.ShortTimeout.Duration = 2 * time.Minute
+	}
+	if cfg.General.ReviewTimeout.Duration == 0 {
+		cfg.General.ReviewTimeout.Duration = 10 * time.Minute
 	}
 	if cfg.General.DoltHealthCheckInterval.Duration == 0 {
 		cfg.General.DoltHealthCheckInterval.Duration = 30 * time.Second

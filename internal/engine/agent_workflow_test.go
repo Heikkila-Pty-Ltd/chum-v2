@@ -7,6 +7,7 @@ import (
 	"time"
 
 	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 	"github.com/stretchr/testify/mock"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
@@ -21,7 +22,7 @@ func TestAgentWorkflow_ExecFailure_ClosesAndCleans(t *testing.T) {
 
 	var a *Activities
 	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-1").Return("/tmp/wt-task-1", nil)
-	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return(&DecompResult{Atomic: true}, nil)
+	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return(&types.DecompResult{Atomic: true}, nil)
 	env.OnActivity(a.ExecuteActivity, mock.Anything, mock.Anything).Return((*ExecResult)(nil), errors.New("exec failed"))
 	env.OnActivity(a.CloseTaskWithDetailActivity, mock.Anything, "task-1", mock.Anything).Return(nil)
 	env.OnActivity(a.NotifyActivity, mock.Anything, mock.Anything).Return(nil)
@@ -51,7 +52,7 @@ func TestAgentWorkflow_DoDFailure_ClosesAndCleans(t *testing.T) {
 
 	var a *Activities
 	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-2").Return("/tmp/wt-task-2", nil)
-	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return(&DecompResult{Atomic: true}, nil)
+	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return(&types.DecompResult{Atomic: true}, nil)
 	env.OnActivity(a.ExecuteActivity, mock.Anything, mock.Anything).Return(&ExecResult{
 		ExitCode: 0,
 		Output:   "ok",
@@ -88,7 +89,7 @@ func TestAgentWorkflow_SuccessPath_Completes(t *testing.T) {
 
 	var a *Activities
 	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-3").Return("/tmp/wt-task-3", nil)
-	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return(&DecompResult{Atomic: true}, nil)
+	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return(&types.DecompResult{Atomic: true}, nil)
 	env.OnActivity(a.ExecuteActivity, mock.Anything, mock.Anything).Return(&ExecResult{
 		ExitCode: 0,
 		Output:   "ok",
@@ -176,8 +177,8 @@ func TestAgentWorkflow_Decomposition_ClosesParent(t *testing.T) {
 
 	var a *Activities
 	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-decomp").Return("/tmp/wt-task-decomp", nil)
-	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return(&DecompResult{
-		Steps: []DecompStep{
+	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return(&types.DecompResult{
+		Steps: []types.DecompStep{
 			{Title: "Step 1", Description: "Do thing 1", Acceptance: "Done 1", Estimate: 15},
 			{Title: "Step 2", Description: "Do thing 2", Acceptance: "Done 2", Estimate: 30},
 		},
@@ -211,7 +212,7 @@ func TestAgentWorkflow_DecompFailure_HardFails(t *testing.T) {
 
 	var a *Activities
 	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-df").Return("/tmp/wt-task-df", nil)
-	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return((*DecompResult)(nil), errors.New("LLM unavailable"))
+	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return((*types.DecompResult)(nil), errors.New("LLM unavailable"))
 	// No ExecuteActivity mock — decomposition failure must NOT fall through
 	env.OnActivity(a.CloseTaskWithDetailActivity, mock.Anything, "task-df", mock.Anything).Return(nil)
 	env.OnActivity(a.NotifyActivity, mock.Anything, mock.Anything).Return(nil)

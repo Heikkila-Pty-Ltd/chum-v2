@@ -168,6 +168,61 @@ func TestDurationUnmarshalInvalid(t *testing.T) {
 	}
 }
 
+func TestTimeoutDefaults(t *testing.T) {
+	t.Parallel()
+	content := `[general]`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chum.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if cfg.General.ExecTimeout.Duration != 45*time.Minute {
+		t.Errorf("expected default exec_timeout 45m, got %v", cfg.General.ExecTimeout.Duration)
+	}
+	if cfg.General.ShortTimeout.Duration != 2*time.Minute {
+		t.Errorf("expected default short_timeout 2m, got %v", cfg.General.ShortTimeout.Duration)
+	}
+	if cfg.General.ReviewTimeout.Duration != 10*time.Minute {
+		t.Errorf("expected default review_timeout 10m, got %v", cfg.General.ReviewTimeout.Duration)
+	}
+}
+
+func TestTimeoutCustomValues(t *testing.T) {
+	t.Parallel()
+	content := `
+[general]
+exec_timeout = "1h"
+short_timeout = "5m"
+review_timeout = "20m"
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chum.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if cfg.General.ExecTimeout.Duration != 1*time.Hour {
+		t.Errorf("expected exec_timeout 1h, got %v", cfg.General.ExecTimeout.Duration)
+	}
+	if cfg.General.ShortTimeout.Duration != 5*time.Minute {
+		t.Errorf("expected short_timeout 5m, got %v", cfg.General.ShortTimeout.Duration)
+	}
+	if cfg.General.ReviewTimeout.Duration != 20*time.Minute {
+		t.Errorf("expected review_timeout 20m, got %v", cfg.General.ReviewTimeout.Duration)
+	}
+}
+
 func TestDoltDefaults(t *testing.T) {
 	t.Parallel()
 	content := `[general]`

@@ -32,7 +32,7 @@ func (r GateResult) String() string {
 // RunGate is the admission gate entry point. It validates open tasks,
 // resolves their code targets, checks for staleness, and computes
 // conflict fences.
-func RunGate(ctx context.Context, d *dag.DAG, parser CodebaseParser, project, workspace string, logger *slog.Logger) (GateResult, error) {
+func RunGate(ctx context.Context, d dag.TaskStore, parser CodebaseParser, project, workspace string, logger *slog.Logger) (GateResult, error) {
 	var result GateResult
 
 	// Step 0: Parse codebase to build symbol index

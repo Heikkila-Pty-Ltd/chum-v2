@@ -2,9 +2,11 @@
 package engine
 
 import (
+	"time"
+
 	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
-	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
+
 
 // TaskRequest is the input to the AgentWorkflow.
 // Tasks arrive fully planned and scoped from beads — description, acceptance
@@ -17,6 +19,11 @@ type TaskRequest struct {
 	Agent    string `json:"agent"`      // CLI name (claude, gemini, codex)
 	Model    string `json:"model"`      // optional model override
 	ParentID string `json:"parent_id"`  // non-empty for subtasks (skip decomposition)
+
+	// Timeouts (zero = use defaults). Populated from config by dispatcher.
+	ExecTimeout   time.Duration `json:"exec_timeout,omitempty"`
+	ShortTimeout  time.Duration `json:"short_timeout,omitempty"`
+	ReviewTimeout time.Duration `json:"review_timeout,omitempty"`
 }
 
 // ExecResult is the output of the execute activity.
@@ -79,9 +86,3 @@ type CloseDetail struct {
 	ReviewURL string      `json:"review_url"`
 	PRNumber  int         `json:"pr_number"`
 }
-
-// DecompStep is a single sub-task produced by decomposition.
-type DecompStep = types.DecompStep
-
-// DecompResult is the output of the decomposition activity.
-type DecompResult = types.DecompResult

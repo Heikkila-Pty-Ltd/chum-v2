@@ -9,6 +9,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 // AgentWorkflow is the core CHUM execution loop:
@@ -23,21 +24,34 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 
 	var a *Activities
 
-	// --- Activity options ---
+	// --- Activity options (from config via dispatcher, with defaults) ---
+	shortTimeout := req.ShortTimeout
+	if shortTimeout <= 0 {
+		shortTimeout = 2 * time.Minute
+	}
+	execTimeout := req.ExecTimeout
+	if execTimeout <= 0 {
+		execTimeout = 45 * time.Minute
+	}
+	reviewTimeout := req.ReviewTimeout
+	if reviewTimeout <= 0 {
+		reviewTimeout = 10 * time.Minute
+	}
+
 	shortOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 2 * time.Minute,
+		StartToCloseTimeout: shortTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 	execOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 45 * time.Minute,
+		StartToCloseTimeout: execTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 	dodOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 10 * time.Minute,
+		StartToCloseTimeout: reviewTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 	reviewOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 10 * time.Minute,
+		StartToCloseTimeout: reviewTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 
@@ -85,7 +99,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			logger.Info("Subtask — skipping decomposition", "ParentID", req.ParentID)
 		} else {
 			decompCtx := workflow.WithActivityOptions(ctx, dodOpts)
-			var decompResult DecompResult
+			var decompResult types.DecompResult
 			if err := workflow.ExecuteActivity(decompCtx, a.DecomposeActivity, req).Get(ctx, &decompResult); err != nil {
 				logger.Error("Decomposition failed", "error", err)
 				if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{

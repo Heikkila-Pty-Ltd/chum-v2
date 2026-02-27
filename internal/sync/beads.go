@@ -1,20 +1,22 @@
-package beads
+// Package sync coordinates data flow between external sources and the DAG.
+package sync
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
 
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 // SyncResult summarizes a sync operation.
 type SyncResult struct {
-	Created  int
-	Updated  int
-	Skipped  int
-	Errors   []string
+	Created int
+	Updated int
+	Skipped int
+	Errors  []string
 }
 
 func (r SyncResult) String() string {
@@ -25,7 +27,7 @@ func (r SyncResult) String() string {
 // SyncToDAG reads issues from beads and upserts them into the DAG.
 // Only imports issues with status "open" or "ready" — completed/closed issues
 // are ignored. This is a one-way sync: beads → DAG.
-func SyncToDAG(ctx context.Context, client *Client, d *dag.DAG, project string, logger *slog.Logger) (SyncResult, error) {
+func SyncToDAG(ctx context.Context, client *beads.Client, d *dag.DAG, project string, logger *slog.Logger) (SyncResult, error) {
 	issues, err := client.List(ctx, 0) // all issues
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("bd list: %w", err)
@@ -108,7 +110,7 @@ func SyncToDAG(ctx context.Context, client *Client, d *dag.DAG, project string, 
 	return result, nil
 }
 
-func buildDescription(issue Issue) string {
+func buildDescription(issue beads.Issue) string {
 	desc := issue.Description
 	if issue.Design != "" {
 		desc += "\n\nDesign:\n" + issue.Design

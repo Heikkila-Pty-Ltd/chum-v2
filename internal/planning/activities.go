@@ -21,12 +21,13 @@ import (
 
 // PlanningActivities holds dependencies for planning Temporal activities.
 type PlanningActivities struct {
-	DAG          *dag.DAG
+	DAG          dag.TaskStore
 	Config       *config.Config
 	Logger       *slog.Logger
 	AST          *astpkg.Parser
 	BeadsClients map[string]beads.Store
 	ChatSend     notify.ChatSender
+	LLM          llm.Runner
 }
 
 // ClarifyGoalActivity runs an LLM to extract intent, constraints, and rationale from the task.
@@ -67,7 +68,7 @@ Rules:
 - why: The motivation behind the goal (not just what, but why)
 - Output ONLY the JSON object. No commentary.`, goalDesc, codeContext)
 
-	result, err := llm.RunCLI(req.Agent, req.Model, req.WorkDir, prompt)
+	result, err := pa.LLM.Plan(ctx, req.Agent, req.Model, req.WorkDir, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("clarify goal CLI: %w", err)
 	}
@@ -124,7 +125,7 @@ Rules:
 		codeContext)
 
 	// Research is read-only — use RunCLI (--print) to prevent file mutations.
-	result, err := llm.RunCLI(req.Agent, req.Model, req.WorkDir, prompt)
+	result, err := pa.LLM.Plan(ctx, req.Agent, req.Model, req.WorkDir, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("research CLI: %w", err)
 	}
@@ -177,7 +178,7 @@ OUTPUT CONTRACT (strict JSON array — same structure as input, with potentially
 
 Output ONLY the JSON array.`, goal.Intent, goal.Why, string(approachJSON))
 
-	result, err := llm.RunCLI(req.Agent, req.Model, req.WorkDir, prompt)
+	result, err := pa.LLM.Plan(ctx, req.Agent, req.Model, req.WorkDir, prompt)
 	if err != nil {
 		return approaches, fmt.Errorf("goal check CLI: %w", err)
 	}
@@ -280,7 +281,7 @@ Output ONLY the JSON object.`,
 		approach.Confidence*100, feedback, codeContext, approach.Rank)
 
 	// Deeper research is also read-only — use RunCLI (--print).
-	result, err := llm.RunCLI(req.Agent, req.Model, req.WorkDir, prompt)
+	result, err := pa.LLM.Plan(ctx, req.Agent, req.Model, req.WorkDir, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("deeper research CLI: %w", err)
 	}
@@ -321,7 +322,7 @@ QUESTION: %s
 Answer the question thoroughly, referencing specific code and approaches where relevant.
 Be concise but complete. No JSON needed — just a clear text answer.`, goal.Intent, string(approachJSON), codeContext, question)
 
-	result, err := llm.RunCLI(req.Agent, req.Model, req.WorkDir, prompt)
+	result, err := pa.LLM.Plan(ctx, req.Agent, req.Model, req.WorkDir, prompt)
 	if err != nil {
 		return "", fmt.Errorf("answer question CLI: %w", err)
 	}
@@ -329,7 +330,7 @@ Be concise but complete. No JSON needed — just a clear text answer.`, goal.Int
 }
 
 // DecomposeApproachActivity breaks a selected approach into implementation subtasks.
-func (pa *PlanningActivities) DecomposeApproachActivity(ctx context.Context, req PlanningRequest, approach ResearchedApproach) ([]DecompStep, error) {
+func (pa *PlanningActivities) DecomposeApproachActivity(ctx context.Context, req PlanningRequest, approach ResearchedApproach) ([]types.DecompStep, error) {
 	logger := activity.GetLogger(ctx)
 	logger.Info("Decomposing approach", "Title", approach.Title)
 
@@ -352,7 +353,7 @@ Rules:
 - Each step needs clear acceptance criteria
 - Output ONLY the JSON object.`, approach.Title, approach.Description, codeContext)
 
-	result, err := llm.RunCLI(req.Agent, req.Model, req.WorkDir, prompt)
+	result, err := pa.LLM.Plan(ctx, req.Agent, req.Model, req.WorkDir, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("decompose CLI: %w", err)
 	}
@@ -363,7 +364,7 @@ Rules:
 	}
 
 	var decomp struct {
-		Steps []DecompStep `json:"steps"`
+		Steps []types.DecompStep `json:"steps"`
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &decomp); err != nil {
 		return nil, fmt.Errorf("parse decomposition: %w", err)
@@ -373,7 +374,7 @@ Rules:
 }
 
 // CreatePlanSubtasksActivity creates DAG tasks from planning decomposition steps.
-func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, req PlanningRequest, steps []DecompStep) ([]string, error) {
+func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, req PlanningRequest, steps []types.DecompStep) ([]string, error) {
 	logger := activity.GetLogger(ctx)
 
 	var tasks []dag.Task

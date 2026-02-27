@@ -9,19 +9,20 @@ import (
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/admit"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 // DecomposeActivity runs the LLM in plan mode to break a task into sub-steps.
 // Returns Atomic=true (empty Steps) if the task is already concrete enough.
-func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*DecompResult, error) {
+func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*types.DecompResult, error) {
 	logger := activity.GetLogger(ctx)
 	logger.Info("Decomposing task", "TaskID", req.TaskID)
 
 	codeContext := a.buildCodebaseContext(ctx, req.WorkDir)
 	prompt := buildDecompPrompt(req.Prompt, codeContext)
 
-	result, err := RunCLI(req.Agent, req.Model, req.WorkDir, prompt)
+	result, err := a.LLM.Plan(ctx, req.Agent, req.Model, req.WorkDir, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("decompose CLI: %w", err)
 	}
@@ -29,16 +30,16 @@ func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*D
 		return nil, fmt.Errorf("decompose CLI exited %d: %s", result.ExitCode, types.Truncate(result.Output, 500))
 	}
 
-	jsonStr := ExtractJSON(result.Output)
+	jsonStr := llm.ExtractJSON(result.Output)
 	if jsonStr == "" {
 		logger.Warn("Decomposition produced no JSON, treating as atomic")
-		return &DecompResult{Atomic: true}, nil
+		return &types.DecompResult{Atomic: true}, nil
 	}
 
-	var decomp DecompResult
+	var decomp types.DecompResult
 	if err := json.Unmarshal([]byte(jsonStr), &decomp); err != nil {
 		logger.Warn("Failed to parse decomposition JSON, treating as atomic", "error", err)
-		return &DecompResult{Atomic: true}, nil
+		return &types.DecompResult{Atomic: true}, nil
 	}
 
 	if len(decomp.Steps) == 0 {
@@ -53,7 +54,7 @@ func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*D
 // wires sequential dependencies, rewires parent dependents to the last
 // subtask, and marks the parent as "decomposed" — all atomically.
 // If any step fails, the entire operation is rolled back (no partial children).
-func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, project string, steps []DecompStep) ([]string, error) {
+func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, project string, steps []types.DecompStep) ([]string, error) {
 	logger := activity.GetLogger(ctx)
 
 	var tasks []dag.Task

@@ -2,6 +2,8 @@ package engine
 
 import (
 	"testing"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 func TestBuildDecompPrompt_ContainsTask(t *testing.T) {
@@ -18,15 +20,15 @@ func TestBuildDecompPrompt_ContainsTask(t *testing.T) {
 }
 
 func TestDecompResult_EmptyStepsIsAtomic(t *testing.T) {
-	r := DecompResult{Steps: nil}
+	r := types.DecompResult{Steps: nil}
 	if len(r.Steps) != 0 {
 		t.Error("expected no steps")
 	}
 }
 
 func TestDecompResult_WithSteps(t *testing.T) {
-	r := DecompResult{
-		Steps: []DecompStep{
+	r := types.DecompResult{
+		Steps: []types.DecompStep{
 			{Title: "Step 1", Description: "Do thing 1", Acceptance: "Thing 1 done", Estimate: 15},
 			{Title: "Step 2", Description: "Do thing 2", Acceptance: "Thing 2 done", Estimate: 30},
 		},
