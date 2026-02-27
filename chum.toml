@@ -11,7 +11,9 @@ matrix_access_token = ""
 matrix_homeserver = "https://matrix.org"
 dolt_health_check_enabled = true
 dolt_health_check_interval = "30s"
-dolt_data_dir = "/home/ubuntu/projects/chum/.beads/dolt/beads_chum"
+dolt_data_dir = ".beads/dolt/beads_chum"
+dolt_host = "127.0.0.1"
+dolt_port = 3307
 
 [projects.chum]
 enabled = true

@@ -53,6 +53,8 @@ type General struct {
 	DoltHealthCheckEnabled  bool     `toml:"dolt_health_check_enabled"`
 	DoltHealthCheckInterval Duration `toml:"dolt_health_check_interval"`
 	DoltDataDir             string   `toml:"dolt_data_dir"`
+	DoltHost                string   `toml:"dolt_host"`
+	DoltPort                int      `toml:"dolt_port"`
 }
 
 // Project configures a single managed project.
@@ -101,6 +103,12 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.General.DoltHealthCheckInterval.Duration == 0 {
 		cfg.General.DoltHealthCheckInterval.Duration = 30 * time.Second
+	}
+	if cfg.General.DoltHost == "" {
+		cfg.General.DoltHost = "127.0.0.1"
+	}
+	if cfg.General.DoltPort == 0 {
+		cfg.General.DoltPort = 3307
 	}
 	// Planning defaults
 	if cfg.Planning.MaxCycles == 0 {

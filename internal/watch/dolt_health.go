@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
@@ -92,22 +93,30 @@ func CheckDoltHealthActivity(_ context.Context, host string, port int) (bool, er
 	return true, nil
 }
 
-// RestartDoltActivity kills any existing Dolt server and starts a new one.
-func RestartDoltActivity(ctx context.Context, dataDir, host string, port int) error {
-	// Kill existing dolt sql-server processes
-	_ = exec.CommandContext(ctx, "pkill", "-f", "dolt sql-server").Run()
+// RestartDoltActivity kills the Dolt server bound to the specified port
+// and starts a new one from the data directory.
+func RestartDoltActivity(_ context.Context, dataDir, host string, port int) error {
+	if dataDir == "" {
+		return fmt.Errorf("dolt_data_dir is not configured")
+	}
+
+	// Kill only the dolt process listening on this specific port.
+	portStr := fmt.Sprintf("%d", port)
+	_ = exec.Command("pkill", "-f", fmt.Sprintf("dolt sql-server.*--port %s", portStr)).Run()
 	time.Sleep(1 * time.Second)
 
-	// Start dolt sql-server detached
-	cmd := exec.CommandContext(ctx, "nohup", "dolt", "sql-server",
+	// Start dolt sql-server in its own session so it survives worker shutdown.
+	// Use exec.Command (no context) to avoid SIGKILL on activity cancellation.
+	cmd := exec.Command("dolt", "sql-server",
 		"--host", host,
-		"--port", fmt.Sprintf("%d", port),
+		"--port", portStr,
 	)
 	cmd.Dir = dataDir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start dolt: %w", err)
 	}
-	// Detach — don't wait for the process
+	// Release — the process runs independently of this activity.
 	go func() { _ = cmd.Wait() }()
 
 	// Wait for server to come up

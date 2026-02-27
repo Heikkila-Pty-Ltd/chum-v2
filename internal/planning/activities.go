@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"go.temporal.io/sdk/activity"
@@ -451,10 +452,17 @@ func parseApproaches(jsonStr string) ([]ResearchedApproach, error) {
 
 	// Last resort: try to unmarshal each value as a single approach
 	// (some LLMs return {"1": {...}, "2": {...}} keyed by rank).
+	// Sort keys to preserve LLM's intended ordering.
+	keys := make([]string, 0, len(wrapper))
+	for k := range wrapper {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
 	var singles []ResearchedApproach
-	for _, v := range wrapper {
+	for _, k := range keys {
 		var single ResearchedApproach
-		if err := json.Unmarshal(v, &single); err == nil && single.Title != "" {
+		if err := json.Unmarshal(wrapper[k], &single); err == nil && single.Title != "" {
 			singles = append(singles, single)
 		}
 	}

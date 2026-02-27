@@ -272,8 +272,8 @@ func registerDoltHealthSchedule(c client.Client, cfg *config.Config, logger *slo
 
 	healthCfg := watch.DoltHealthConfig{
 		DoltDataDir: cfg.General.DoltDataDir,
-		Host:        "127.0.0.1",
-		Port:        3307,
+		Host:        cfg.General.DoltHost,
+		Port:        cfg.General.DoltPort,
 		MaxRestarts: 3,
 		AlertRoomID: cfg.General.MatrixRoomID,
 	}
