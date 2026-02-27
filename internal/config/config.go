@@ -49,6 +49,10 @@ type General struct {
 	MatrixRoomID      string   `toml:"matrix_room_id"`
 	MatrixAccessToken string   `toml:"matrix_access_token"`
 	MatrixHomeserver  string   `toml:"matrix_homeserver"`
+
+	DoltHealthCheckEnabled  bool     `toml:"dolt_health_check_enabled"`
+	DoltHealthCheckInterval Duration `toml:"dolt_health_check_interval"`
+	DoltDataDir             string   `toml:"dolt_data_dir"`
 }
 
 // Project configures a single managed project.
@@ -94,6 +98,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.General.DBPath == "" {
 		cfg.General.DBPath = "chum.db"
+	}
+	if cfg.General.DoltHealthCheckInterval.Duration == 0 {
+		cfg.General.DoltHealthCheckInterval.Duration = 30 * time.Second
 	}
 	// Planning defaults
 	if cfg.Planning.MaxCycles == 0 {

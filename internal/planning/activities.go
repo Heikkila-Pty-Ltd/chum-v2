@@ -134,8 +134,9 @@ Rules:
 		return nil, fmt.Errorf("research produced no JSON output")
 	}
 
-	var approaches []ResearchedApproach
-	if err := json.Unmarshal([]byte(jsonStr), &approaches); err != nil {
+	approaches, err := parseApproaches(jsonStr)
+	if err != nil {
+		logger.Error("Research JSON parse failed", "json_excerpt", truncate(jsonStr, 500), "error", err)
 		return nil, fmt.Errorf("parse research output: %w", err)
 	}
 
@@ -421,4 +422,52 @@ func (pa *PlanningActivities) buildCodebaseContext(ctx context.Context, workDir 
 		}
 	}
 	return "(codebase context unavailable)"
+}
+
+// parseApproaches unmarshals LLM output that may be a JSON array directly
+// or wrapped in an object (e.g. {"approaches": [...]}).
+func parseApproaches(jsonStr string) ([]ResearchedApproach, error) {
+	data := []byte(jsonStr)
+
+	// Try direct array first.
+	var approaches []ResearchedApproach
+	if err := json.Unmarshal(data, &approaches); err == nil && len(approaches) > 0 {
+		return approaches, nil
+	}
+
+	// Try object wrapper — LLMs commonly wrap arrays in {"approaches": [...]} or similar.
+	var wrapper map[string]json.RawMessage
+	if err := json.Unmarshal(data, &wrapper); err != nil {
+		return nil, fmt.Errorf("neither array nor object: %w", err)
+	}
+
+	// Look for any key whose value is an array of approaches.
+	for _, v := range wrapper {
+		var arr []ResearchedApproach
+		if err := json.Unmarshal(v, &arr); err == nil && len(arr) > 0 {
+			return arr, nil
+		}
+	}
+
+	// Last resort: try to unmarshal each value as a single approach
+	// (some LLMs return {"1": {...}, "2": {...}} keyed by rank).
+	var singles []ResearchedApproach
+	for _, v := range wrapper {
+		var single ResearchedApproach
+		if err := json.Unmarshal(v, &single); err == nil && single.Title != "" {
+			singles = append(singles, single)
+		}
+	}
+	if len(singles) > 0 {
+		return singles, nil
+	}
+
+	return nil, fmt.Errorf("no approach array found in object keys")
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
