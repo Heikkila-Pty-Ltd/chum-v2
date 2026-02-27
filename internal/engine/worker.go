@@ -19,6 +19,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/watch"
 )
 
 // StartWorker connects to Temporal, registers workflows/activities,
@@ -126,12 +127,32 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	w.RegisterActivity(pa.CreatePlanSubtasksActivity)
 	w.RegisterActivity(pa.NotifyChatActivity)
 
+	// Register Dolt health check workflow + activities
+	w.RegisterWorkflow(watch.DoltHealthCheckWorkflow)
+	doltActivities := &watch.DoltHealthActivities{
+		Logger: logger,
+		ChatSend: func(ctx context.Context, roomID, message string) error {
+			sendCfg := matrixCfg
+			sendCfg.RoomID = roomID
+			return chat.SendMatrixMessage(ctx, sendCfg, message)
+		},
+	}
+	w.RegisterActivity(watch.CheckDoltHealthActivity)
+	w.RegisterActivity(watch.RestartDoltActivity)
+	w.RegisterActivity(doltActivities.AlertDoltFailureActivity)
+
 	// Register dispatcher schedule (idempotent — skips if already exists)
 	go func() {
 		// Wait for worker to be ready before registering schedules
 		time.Sleep(3 * time.Second)
 		if err := registerDispatcherSchedule(c, cfg, logger); err != nil {
 			logger.Error("Failed to register dispatcher schedule", "error", err)
+		}
+		// Register Dolt health check schedule if enabled
+		if cfg.General.DoltHealthCheckEnabled {
+			if err := registerDoltHealthSchedule(c, cfg, logger); err != nil {
+				logger.Error("Failed to register dolt health schedule", "error", err)
+			}
 		}
 	}()
 
@@ -239,6 +260,50 @@ func registerDispatcherSchedule(c client.Client, cfg *config.Config, logger *slo
 	}
 
 	logger.Info("Dispatcher schedule registered", "interval", tickInterval)
+	return nil
+}
+
+// registerDoltHealthSchedule creates the Temporal schedule for Dolt health checks.
+func registerDoltHealthSchedule(c client.Client, cfg *config.Config, logger *slog.Logger) error {
+	interval := cfg.General.DoltHealthCheckInterval.Duration
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+
+	healthCfg := watch.DoltHealthConfig{
+		DoltDataDir: cfg.General.DoltDataDir,
+		Host:        cfg.General.DoltHost,
+		Port:        cfg.General.DoltPort,
+		MaxRestarts: 3,
+		AlertRoomID: cfg.General.MatrixRoomID,
+	}
+
+	schedClient := c.ScheduleClient()
+	_, err := schedClient.Create(context.Background(), client.ScheduleOptions{
+		ID: "chum-v2-dolt-health",
+		Spec: client.ScheduleSpec{
+			Intervals: []client.ScheduleIntervalSpec{
+				{Every: interval},
+			},
+		},
+		Action: &client.ScheduleWorkflowAction{
+			Workflow:  watch.DoltHealthCheckWorkflow,
+			Args:      []interface{}{healthCfg},
+			TaskQueue: cfg.General.TaskQueue,
+			ID:        "chum-v2-dolt-health-run",
+		},
+		Overlap: enumspb.SCHEDULE_OVERLAP_POLICY_SKIP,
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "already exists") ||
+			strings.Contains(err.Error(), "AlreadyExists") {
+			logger.Info("Dolt health schedule already exists", "interval", interval)
+			return nil
+		}
+		return fmt.Errorf("create dolt health schedule: %w", err)
+	}
+
+	logger.Info("Dolt health check schedule registered", "interval", interval)
 	return nil
 }
 

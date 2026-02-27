@@ -156,8 +156,8 @@ func (c *Client) Create(ctx context.Context, params CreateParams) (string, error
 	if params.ParentID != "" {
 		args = append(args, "--parent", params.ParentID)
 	}
-	for _, label := range params.Labels {
-		args = append(args, "--add-label", label)
+	if len(params.Labels) > 0 {
+		args = append(args, "--labels", strings.Join(params.Labels, ","))
 	}
 	out, err := c.run(ctx, args...)
 	if err != nil {

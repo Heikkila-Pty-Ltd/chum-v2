@@ -36,34 +36,45 @@ func ExtractJSON(text string) string {
 }
 
 // UnwrapClaudeJSON handles Claude's --output-format json envelope.
+// The CLI returns either:
+//   - {"type":"result","result":"text content"}            (result as string)
+//   - {"type":"result","result":[{"type":"text","text":"..."}]} (result as array)
 func UnwrapClaudeJSON(text string) string {
 	text = strings.TrimSpace(text)
 	if !strings.HasPrefix(text, "{") || !strings.Contains(text, `"type"`) {
 		return text
 	}
-	var envelope struct {
+
+	// Try result-as-string format first (Claude CLI --output-format json).
+	var strEnvelope struct {
+		Type   string `json:"type"`
+		Result string `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(text), &strEnvelope); err == nil && strEnvelope.Type == "result" && strEnvelope.Result != "" {
+		return strEnvelope.Result
+	}
+
+	// Try result-as-array format (Claude API style).
+	var arrEnvelope struct {
 		Type   string `json:"type"`
 		Result []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"result"`
 	}
-	if err := json.Unmarshal([]byte(text), &envelope); err != nil {
-		return text
-	}
-	if envelope.Type != "result" || len(envelope.Result) == 0 {
-		return text
-	}
-	var parts []string
-	for _, r := range envelope.Result {
-		if r.Type == "text" && r.Text != "" {
-			parts = append(parts, r.Text)
+	if err := json.Unmarshal([]byte(text), &arrEnvelope); err == nil && arrEnvelope.Type == "result" && len(arrEnvelope.Result) > 0 {
+		var parts []string
+		for _, r := range arrEnvelope.Result {
+			if r.Type == "text" && r.Text != "" {
+				parts = append(parts, r.Text)
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n")
 		}
 	}
-	if len(parts) == 0 {
-		return text
-	}
-	return strings.Join(parts, "\n")
+
+	return text
 }
 
 var codeFencePattern = regexp.MustCompile("(?i)```(?:json[c]?)?\\s*\n?")
