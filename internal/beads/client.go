@@ -200,6 +200,15 @@ func (c *Client) Update(ctx context.Context, issueID string, fields map[string]s
 	return err
 }
 
+// Children returns child issues of the given parent.
+func (c *Client) Children(ctx context.Context, parentID string) ([]Issue, error) {
+	out, err := c.run(ctx, "list", "--json", "--parent", parentID)
+	if err != nil {
+		return nil, err
+	}
+	return decodeIssueList(out)
+}
+
 func (c *Client) run(ctx context.Context, args ...string) ([]byte, error) {
 	fullArgs := make([]string, 0, len(c.flags)+len(args))
 	fullArgs = append(fullArgs, c.flags...)

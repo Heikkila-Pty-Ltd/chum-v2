@@ -9,6 +9,7 @@ import (
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/admit"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 // DecomposeActivity runs the LLM in plan mode to break a task into sub-steps.
@@ -25,7 +26,7 @@ func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*D
 		return nil, fmt.Errorf("decompose CLI: %w", err)
 	}
 	if result.ExitCode != 0 {
-		return nil, fmt.Errorf("decompose CLI exited %d: %s", result.ExitCode, truncate(result.Output, 500))
+		return nil, fmt.Errorf("decompose CLI exited %d: %s", result.ExitCode, types.Truncate(result.Output, 500))
 	}
 
 	jsonStr := ExtractJSON(result.Output)

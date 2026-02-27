@@ -1,7 +1,10 @@
 // Package engine implements the Temporal workflows and activities for CHUM v2.
 package engine
 
-import gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
+import (
+	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
+)
 
 // TaskRequest is the input to the AgentWorkflow.
 // Tasks arrive fully planned and scoped from beads — description, acceptance
@@ -78,15 +81,7 @@ type CloseDetail struct {
 }
 
 // DecompStep is a single sub-task produced by decomposition.
-type DecompStep struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Acceptance  string `json:"acceptance"`
-	Estimate    int    `json:"estimate_minutes"`
-}
+type DecompStep = types.DecompStep
 
 // DecompResult is the output of the decomposition activity.
-type DecompResult struct {
-	Steps  []DecompStep `json:"steps"`
-	Atomic bool         `json:"atomic"` // true when steps is empty (task needs no decomposition)
-}
+type DecompResult = types.DecompResult

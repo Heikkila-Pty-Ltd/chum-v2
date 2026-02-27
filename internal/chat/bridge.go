@@ -1,26 +1,17 @@
 package chat
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
-	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go.temporal.io/sdk/client"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 )
-
-func atomicAddTxn() uint64 {
-	return atomic.AddUint64(&matrixTxnCounter, 1)
-}
 
 // Bridge polls a Matrix room for /plan commands and routes them to Temporal
 // workflow signals. It also sends push notifications from workflows to chat.
@@ -39,6 +30,7 @@ type Bridge struct {
 	mu           sync.Mutex
 	activeByRoom map[string]string // roomID → active planning session workflow ID
 	sinceToken   string
+	mc           *MatrixClient // long-lived client for sending; initialized in Run
 }
 
 // Run starts the polling loop. Blocks until ctx is cancelled.
@@ -47,9 +39,12 @@ func (b *Bridge) Run(ctx context.Context) error {
 		b.PollInterval = 10 * time.Second
 	}
 
+	// Create a long-lived MatrixClient for sending messages (shared txnCounter).
+	b.mc = NewMatrixClient(b.MatrixCfg.Homeserver, b.MatrixCfg.AccessToken)
+
 	// Resolve the bot's own Matrix user ID so we can filter self-echo.
 	if b.BotUserID == "" {
-		if uid, err := resolveMatrixUserID(ctx, b.MatrixCfg); err != nil {
+		if uid, err := b.mc.WhoAmI(ctx); err != nil {
 			b.Logger.Warn("Failed to resolve bot user ID — self-echo filtering disabled", "error", err)
 		} else {
 			b.BotUserID = uid
@@ -263,6 +258,10 @@ func (b *Bridge) send(ctx context.Context, message string) error {
 	if message == "" {
 		return nil
 	}
+	if b.mc != nil {
+		_, err := b.mc.SendMessage(ctx, b.MatrixCfg.RoomID, message)
+		return err
+	}
 	return SendMatrixMessage(ctx, b.MatrixCfg, message)
 }
 
@@ -301,40 +300,3 @@ func (b *Bridge) clearActiveSession(room, sessionID string) {
 	}
 }
 
-// matrixTxnCounter is an atomic counter to ensure unique transaction IDs
-// even when multiple messages are sent within the same nanosecond.
-var matrixTxnCounter uint64
-
-// SendMatrixMessage sends a text message to a Matrix room using the Client-Server API.
-func SendMatrixMessage(ctx context.Context, cfg MatrixConfig, message string) error {
-	txnID := fmt.Sprintf("chum-plan-%d-%d", time.Now().UnixNano(), atomicAddTxn())
-	path := fmt.Sprintf("%s/_matrix/client/v3/rooms/%s/send/m.room.message/%s",
-		strings.TrimRight(cfg.Homeserver, "/"),
-		url.PathEscape(cfg.RoomID),
-		txnID,
-	)
-
-	payload := map[string]string{
-		"msgtype": "m.text",
-		"body":    message,
-	}
-	body, _ := json.Marshal(payload)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, path, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create matrix message request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+cfg.AccessToken)
-	req.Header.Set("Content-Type", "application/json")
-
-	httpClient := &http.Client{Timeout: 8 * time.Second}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("send matrix message: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("matrix send HTTP %d", resp.StatusCode)
-	}
-	return nil
-}
