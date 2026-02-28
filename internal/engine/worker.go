@@ -17,6 +17,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/chat"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/notify"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/watch"
@@ -87,7 +88,7 @@ func buildChatSender(cfg *config.Config, logger *slog.Logger) notify.ChatSender 
 }
 
 // registerEngineWorkflows registers the core agent and dispatcher workflows/activities.
-func registerEngineWorkflows(w worker.Worker, d *dag.DAG, cfg *config.Config,
+func registerEngineWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Config,
 	logger *slog.Logger, parser *astpkg.Parser,
 	beadsClients map[string]beads.Store, chatSender notify.ChatSender) {
 
@@ -101,6 +102,7 @@ func registerEngineWorkflows(w worker.Worker, d *dag.DAG, cfg *config.Config,
 		AST:          parser,
 		BeadsClients: beadsClients,
 		ChatSend:     chatSender,
+		LLM:          llm.CLIRunner{},
 	}
 	w.RegisterActivity(a.SetupWorktreeActivity)
 	w.RegisterActivity(a.ExecuteActivity)
@@ -132,7 +134,7 @@ func registerEngineWorkflows(w worker.Worker, d *dag.DAG, cfg *config.Config,
 }
 
 // registerPlanningWorkflows registers the planning ceremony workflow and activities.
-func registerPlanningWorkflows(w worker.Worker, d *dag.DAG, cfg *config.Config,
+func registerPlanningWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Config,
 	logger *slog.Logger, parser *astpkg.Parser,
 	beadsClients map[string]beads.Store, chatSender notify.ChatSender) {
 
@@ -145,6 +147,7 @@ func registerPlanningWorkflows(w worker.Worker, d *dag.DAG, cfg *config.Config,
 		AST:          parser,
 		BeadsClients: beadsClients,
 		ChatSend:     chatSender,
+		LLM:          llm.CLIRunner{},
 	}
 	w.RegisterActivity(pa.ClarifyGoalActivity)
 	w.RegisterActivity(pa.ResearchApproachesActivity)
@@ -281,11 +284,11 @@ func startBridge(ctx context.Context, c client.Client, cfg *config.Config, logge
 
 // EnsureNamespace creates the Temporal namespace if it doesn't exist.
 // Uses temporal CLI — requires Temporal server to be running.
-func EnsureNamespace(cfg *config.Config, logger *slog.Logger) error {
+func EnsureNamespace(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	ns := cfg.General.TemporalNamespace
 	host := cfg.General.TemporalHostPort
 
-	cmd := exec.CommandContext(context.Background(),
+	cmd := exec.CommandContext(ctx,
 		"temporal", "operator", "namespace", "create",
 		"--address", host,
 		"--namespace", ns,

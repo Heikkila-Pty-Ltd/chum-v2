@@ -24,12 +24,13 @@ import (
 
 // Activities holds dependencies for Temporal activity methods.
 type Activities struct {
-	DAG          *dag.DAG
+	DAG          dag.TaskStore
 	Config       *config.Config
 	Logger       *slog.Logger
 	AST          *astpkg.Parser
 	BeadsClients map[string]beads.Store
 	ChatSend     notify.ChatSender
+	LLM          llm.Runner
 }
 
 // --- 1. SetupWorktreeActivity ---
@@ -99,7 +100,7 @@ CODEBASE:
 
 Implement this task by modifying the necessary files. Do not explain, just code.`, req.Prompt, codeContext)
 
-	result, err := RunCLIExec(req.Agent, req.Model, req.WorkDir, prompt)
+	result, err := a.LLM.Exec(ctx, req.Agent, req.Model, req.WorkDir, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("execute CLI: %w", err)
 	}

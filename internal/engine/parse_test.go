@@ -3,6 +3,8 @@ package engine
 import (
 	"strings"
 	"testing"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 )
 
 func TestExtractJSONVariants(t *testing.T) {
@@ -63,15 +65,15 @@ func TestExtractJSONVariants(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := ExtractJSON(tc.input)
+			got := llm.ExtractJSON(tc.input)
 			if tc.expectNil {
 				if got != "" {
-					t.Fatalf("ExtractJSON(%q) = %q, want empty", tc.input, got)
+					t.Fatalf("llm.ExtractJSON(%q) = %q, want empty", tc.input, got)
 				}
 				return
 			}
 			if got == "" {
-				t.Fatalf("ExtractJSON(%q) returned empty", tc.input)
+				t.Fatalf("llm.ExtractJSON(%q) returned empty", tc.input)
 			}
 			for _, want := range tc.contains {
 				if !strings.Contains(got, want) {

@@ -79,18 +79,21 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 
 // DispatchCandidate is a ready task that should be dispatched.
 type DispatchCandidate struct {
-	TaskID   string
-	Project  string
-	Prompt   string
-	WorkDir  string
-	Agent    string
-	Model    string
-	ParentID string
+	TaskID        string
+	Project       string
+	Prompt        string
+	WorkDir       string
+	Agent         string
+	Model         string
+	ParentID      string
+	ExecTimeout   time.Duration
+	ShortTimeout  time.Duration
+	ReviewTimeout time.Duration
 }
 
 // DispatchActivities holds dependencies for dispatch-related activities.
 type DispatchActivities struct {
-	DAG    *dag.DAG
+	DAG    dag.TaskStore
 	Config *config.Config
 	Logger *slog.Logger
 }
@@ -134,13 +137,16 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 			}
 
 			candidates = append(candidates, DispatchCandidate{
-				TaskID:   t.ID,
-				Project:  projectName,
-				Prompt:   prompt,
-				WorkDir:  project.Workspace,
-				Agent:    agent,
-				Model:    model,
-				ParentID: t.ParentID,
+				TaskID:        t.ID,
+				Project:       projectName,
+				Prompt:        prompt,
+				WorkDir:       project.Workspace,
+				Agent:         agent,
+				Model:         model,
+				ParentID:      t.ParentID,
+				ExecTimeout:   da.Config.General.ExecTimeout.Duration,
+				ShortTimeout:  da.Config.General.ShortTimeout.Duration,
+				ReviewTimeout: da.Config.General.ReviewTimeout.Duration,
 			})
 		}
 	}

@@ -48,7 +48,7 @@ func (a *Activities) RunReviewActivity(ctx context.Context, workDir string, prNu
 	}
 
 	prompt := buildReviewPrompt(prNumber, round, diffText)
-	result, err := RunCLI(reviewerAgent, reviewerModel, workDir, prompt)
+	result, err := a.LLM.Plan(ctx, reviewerAgent, reviewerModel, workDir, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("review CLI: %w", err)
 	}
@@ -302,7 +302,7 @@ PR diff:
 }
 
 func parseReviewSignal(output string) (signal string, body string, invalid bool) {
-	output = unwrapClaudeJSON(output)
+	output = llm.UnwrapClaudeJSON(output)
 	lines := strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n")
 	first := -1
 	for i, line := range lines {
@@ -372,7 +372,7 @@ func reviewStateToOutcome(state string) ReviewOutcome {
 func listPRReviews(ctx context.Context, workDir string, prNumber int) ([]ghReview, error) {
 	repoSlug, err := repoSlugFromWorkDir(ctx, workDir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list PR reviews: %w", err)
 	}
 
 	out, err := runCommand(ctx, workDir, "gh", "api", fmt.Sprintf("repos/%s/pulls/%d/reviews", repoSlug, prNumber))

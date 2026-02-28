@@ -5,8 +5,6 @@ package planning
 
 import (
 	"time"
-
-	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 // PlanningRequest is the input to the PlanningWorkflow.
@@ -55,9 +53,6 @@ type QuestionAnswer struct {
 	Answer   string `json:"answer"`
 	Round    int    `json:"round"`
 }
-
-// DecompStep is a sub-task from decomposition (shared type).
-type DecompStep = types.DecompStep
 
 // PlanningResult is the final output of the PlanningWorkflow.
 type PlanningResult struct {

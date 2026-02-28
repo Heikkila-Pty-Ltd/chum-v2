@@ -6,6 +6,18 @@ import (
 	"testing"
 )
 
+func TestCheckDoltHealthActivity_IPv6Address(t *testing.T) {
+	// Verify IPv6 addresses don't panic or produce malformed addresses.
+	// We can't connect but the function should return cleanly.
+	healthy, err := CheckDoltHealthActivity(t.Context(), "::1", 19999)
+	if err != nil {
+		t.Fatalf("unexpected error with IPv6 address: %v", err)
+	}
+	if healthy {
+		t.Fatal("expected unhealthy for unreachable IPv6 port")
+	}
+}
+
 func TestCheckDoltHealthActivity_Unreachable(t *testing.T) {
 	// Use a port that's almost certainly not listening
 	healthy, err := CheckDoltHealthActivity(t.Context(), "127.0.0.1", 19999)

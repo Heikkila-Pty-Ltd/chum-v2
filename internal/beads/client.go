@@ -125,7 +125,10 @@ func (c *Client) Close(ctx context.Context, issueID, reason string) error {
 		args = append(args, "--reason", reason)
 	}
 	_, err := c.run(ctx, args...)
-	return err
+	if err != nil {
+		return fmt.Errorf("close issue %s: %w", issueID, err)
+	}
+	return nil
 }
 
 // CreateParams holds parameters for creating a new beads issue.
@@ -197,7 +200,10 @@ func (c *Client) Update(ctx context.Context, issueID string, fields map[string]s
 		}
 	}
 	_, err := c.run(ctx, args...)
-	return err
+	if err != nil {
+		return fmt.Errorf("update issue %s: %w", issueID, err)
+	}
+	return nil
 }
 
 // Children returns child issues of the given parent.

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os/exec"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -86,7 +87,7 @@ type DoltHealthActivities struct {
 
 // CheckDoltHealthActivity tests TCP connectivity to Dolt.
 func CheckDoltHealthActivity(_ context.Context, host string, port int) (bool, error) {
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
 	if err != nil {
 		return false, nil
@@ -125,7 +126,7 @@ func RestartDoltActivity(_ context.Context, dataDir, host string, port int) erro
 	time.Sleep(3 * time.Second)
 
 	// Verify
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
 	if err != nil {
 		return fmt.Errorf("dolt not reachable after restart: %w", err)

@@ -7,6 +7,8 @@ import (
 
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 // PlanningWorkflow orchestrates the planning ceremony.
@@ -194,7 +196,7 @@ func PlanningWorkflow(ctx workflow.Context, req PlanningRequest, cfg PlanningCer
 	var selectedApproach *ResearchedApproach // stored as a copy, not a pointer into the slice
 	researchRound := 1
 
-	var steps []DecompStep
+	var steps []types.DecompStep
 	handoffReady := false
 
 	for cycle := 0; cycle < cfg.MaxCycles && !handoffReady; cycle++ {
@@ -485,7 +487,7 @@ func formatSingleApproach(a ResearchedApproach) string {
 		a.Rank, a.Title, a.Confidence*100, a.Description, a.Tradeoffs)
 }
 
-func formatDecompSummary(title string, steps []DecompStep) string {
+func formatDecompSummary(title string, steps []types.DecompStep) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Decomposition for: %s\n\n", title)
 	for i, s := range steps {
