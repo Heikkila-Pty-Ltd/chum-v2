@@ -102,13 +102,22 @@ func SyncToDAG(ctx context.Context, client IssueLister, d *dag.DAG, project stri
 		logger.Info("Imported task from beads", "id", issue.ID, "title", issue.Title)
 	}
 
-	// Import dependency edges
+	// Import dependency edges — only when both endpoints exist in the DAG.
+	// Skipped issues (closed/completed/done) won't be in the DAG, so edges
+	// pointing to them would violate foreign key constraints.
 	for _, issue := range issues {
 		for _, dep := range issue.Dependencies {
-			if dep.DependsOnID != "" {
-				if err := d.AddEdge(ctx, issue.ID, dep.DependsOnID); err != nil {
-					result.Errors = append(result.Errors, fmt.Sprintf("edge %s→%s: %v", issue.ID, dep.DependsOnID, err))
-				}
+			if dep.DependsOnID == "" {
+				continue
+			}
+			if _, err := d.GetTask(ctx, issue.ID); err != nil {
+				continue // source not in DAG (was skipped)
+			}
+			if _, err := d.GetTask(ctx, dep.DependsOnID); err != nil {
+				continue // target not in DAG (was skipped)
+			}
+			if err := d.AddEdge(ctx, issue.ID, dep.DependsOnID); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("edge %s→%s: %v", issue.ID, dep.DependsOnID, err))
 			}
 		}
 	}

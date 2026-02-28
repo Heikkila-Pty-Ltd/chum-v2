@@ -186,6 +186,35 @@ func TestSyncToDAG_ImportsDependencyEdges(t *testing.T) {
 	}
 }
 
+func TestSyncToDAG_SkipsEdgeToClosedDependency(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	// An open issue depends on a closed issue — the closed issue won't be
+	// in the DAG, so the edge should be silently skipped (no FK violation).
+	client := &stubLister{issues: []beads.Issue{
+		{ID: "closed-1", Title: "Done Task", Status: "closed"},
+		{ID: "open-1", Title: "Open Task", Status: "open", Dependencies: []beads.Dependency{
+			{IssueID: "open-1", DependsOnID: "closed-1"},
+		}},
+	}}
+
+	result, err := SyncToDAG(ctx, client, d, "proj", testLogger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Created != 1 {
+		t.Errorf("Created = %d, want 1", result.Created)
+	}
+	if result.Skipped != 1 {
+		t.Errorf("Skipped = %d, want 1", result.Skipped)
+	}
+	if len(result.Errors) != 0 {
+		t.Errorf("Errors = %v, want none", result.Errors)
+	}
+}
+
 func TestSyncToDAG_ListError(t *testing.T) {
 	t.Parallel()
 	d := newTestDAG(t)
