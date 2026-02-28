@@ -3,6 +3,7 @@
 package llm
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -47,15 +48,15 @@ type CLIResult struct {
 
 // RunCLI executes an LLM CLI in PLAN mode (--print, stdout capture only).
 // The CLI does NOT modify files — it just returns text output.
-func RunCLI(agent, model, workDir, prompt string) (*CLIResult, error) {
-	cmd := BuildPlanCommand(agent, model, workDir)
+func RunCLI(ctx context.Context, agent, model, workDir, prompt string) (*CLIResult, error) {
+	cmd := BuildPlanCommand(ctx, agent, model, workDir)
 	return RunWithPrompt(cmd, prompt, agent)
 }
 
 // RunCLIExec executes an LLM CLI in EXECUTE mode (file-modifying).
 // The CLI WILL modify files in workDir. No --print flag.
-func RunCLIExec(agent, model, workDir, prompt string) (*CLIResult, error) {
-	cmd := BuildExecCommand(agent, model, workDir)
+func RunCLIExec(ctx context.Context, agent, model, workDir, prompt string) (*CLIResult, error) {
+	cmd := BuildExecCommand(ctx, agent, model, workDir)
 	return RunWithPrompt(cmd, prompt, agent)
 }
 
@@ -163,7 +164,7 @@ func normalizeCLIName(agent string) string {
 	return agent
 }
 
-func buildCommand(agent, model, workDir string, modeFlags func(providerConfig) []string) *exec.Cmd {
+func buildCommand(ctx context.Context, agent, model, workDir string, modeFlags func(providerConfig) []string) *exec.Cmd {
 	lower := strings.ToLower(agent)
 	for _, prefix := range providerPrefixes() {
 		if strings.HasPrefix(lower, prefix) {
@@ -172,22 +173,22 @@ func buildCommand(agent, model, workDir string, modeFlags func(providerConfig) [
 			if model != "" {
 				args = append(args, "--model", model)
 			}
-			cmd := exec.Command(cfg.binary, args...)
+			cmd := exec.CommandContext(ctx, cfg.binary, args...)
 			cmd.Dir = workDir
 			return cmd
 		}
 	}
-	cmd := exec.Command(agent)
+	cmd := exec.CommandContext(ctx, agent)
 	cmd.Dir = workDir
 	return cmd
 }
 
 // BuildPlanCommand creates a CLI command for PLANNING (text output only).
-func BuildPlanCommand(agent, model, workDir string) *exec.Cmd {
-	return buildCommand(agent, model, workDir, func(p providerConfig) []string { return p.planFlags })
+func BuildPlanCommand(ctx context.Context, agent, model, workDir string) *exec.Cmd {
+	return buildCommand(ctx, agent, model, workDir, func(p providerConfig) []string { return p.planFlags })
 }
 
 // BuildExecCommand creates a CLI command for EXECUTION (file-modifying).
-func BuildExecCommand(agent, model, workDir string) *exec.Cmd {
-	return buildCommand(agent, model, workDir, func(p providerConfig) []string { return p.execFlags })
+func BuildExecCommand(ctx context.Context, agent, model, workDir string) *exec.Cmd {
+	return buildCommand(ctx, agent, model, workDir, func(p providerConfig) []string { return p.execFlags })
 }

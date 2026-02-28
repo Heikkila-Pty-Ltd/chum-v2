@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"strings"
@@ -71,7 +72,7 @@ func TestRunWithPromptRateLimited(t *testing.T) {
 func TestBuildPlanCommandShape(t *testing.T) {
 	t.Parallel()
 
-	cmd := BuildPlanCommand("claude", "claude-sonnet", "/tmp")
+	cmd := BuildPlanCommand(context.Background(), "claude", "claude-sonnet", "/tmp")
 	args := strings.Join(cmd.Args, " ")
 
 	if !strings.Contains(args, "--print") {
@@ -88,7 +89,7 @@ func TestBuildPlanCommandShape(t *testing.T) {
 func TestBuildExecCommandShape(t *testing.T) {
 	t.Parallel()
 
-	cmd := BuildExecCommand("claude", "claude-sonnet", "/tmp")
+	cmd := BuildExecCommand(context.Background(), "claude", "claude-sonnet", "/tmp")
 	args := strings.Join(cmd.Args, " ")
 
 	if strings.Contains(args, "--print") {

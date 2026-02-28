@@ -13,12 +13,12 @@ type Runner interface {
 // CLIRunner implements Runner by shelling out to LLM CLI binaries.
 type CLIRunner struct{}
 
-func (CLIRunner) Plan(_ context.Context, agent, model, workDir, prompt string) (*CLIResult, error) {
-	return RunCLI(agent, model, workDir, prompt)
+func (CLIRunner) Plan(ctx context.Context, agent, model, workDir, prompt string) (*CLIResult, error) {
+	return RunCLI(ctx, agent, model, workDir, prompt)
 }
 
-func (CLIRunner) Exec(_ context.Context, agent, model, workDir, prompt string) (*CLIResult, error) {
-	return RunCLIExec(agent, model, workDir, prompt)
+func (CLIRunner) Exec(ctx context.Context, agent, model, workDir, prompt string) (*CLIResult, error) {
+	return RunCLIExec(ctx, agent, model, workDir, prompt)
 }
 
 // NormalizeCLIName extracts the canonical CLI binary name from an agent string.

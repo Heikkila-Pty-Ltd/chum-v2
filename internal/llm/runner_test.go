@@ -1,6 +1,9 @@
 package llm
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestNormalizeCLIName(t *testing.T) {
 	t.Parallel()
@@ -37,7 +40,7 @@ func TestProviderRegistryCoversKnownAgents(t *testing.T) {
 
 func TestBuildPlanCommandNotNil(t *testing.T) {
 	t.Parallel()
-	cmd := BuildPlanCommand("claude", "", "/tmp")
+	cmd := BuildPlanCommand(context.Background(), "claude", "", "/tmp")
 	if cmd == nil {
 		t.Fatal("BuildPlanCommand returned nil")
 	}
@@ -48,7 +51,7 @@ func TestBuildPlanCommandNotNil(t *testing.T) {
 
 func TestBuildExecCommandNotNil(t *testing.T) {
 	t.Parallel()
-	cmd := BuildExecCommand("gemini", "gemini-pro", "/tmp")
+	cmd := BuildExecCommand(context.Background(), "gemini", "gemini-pro", "/tmp")
 	if cmd == nil {
 		t.Fatal("BuildExecCommand returned nil")
 	}
