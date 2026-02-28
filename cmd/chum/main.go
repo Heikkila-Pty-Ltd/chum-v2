@@ -15,7 +15,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/engine"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
-	syncpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/sync"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beadsync"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 
 	"go.temporal.io/sdk/client"
@@ -77,7 +77,7 @@ func main() {
 				logger.Error("Beads client failed", "project", projectName, "error", err)
 				continue
 			}
-			syncResult, err := syncpkg.SyncToDAG(context.Background(), client, d, projectName, logger)
+			syncResult, err := beadsync.SyncToDAG(context.Background(), client, d, projectName, logger)
 			if err != nil {
 				logger.Error("Sync failed", "project", projectName, "error", err)
 				continue

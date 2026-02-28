@@ -1,5 +1,5 @@
-// Package sync coordinates data flow between external sources and the DAG.
-package sync
+// Package beadsync coordinates data flow between external sources and the DAG.
+package beadsync
 
 import (
 	"context"
