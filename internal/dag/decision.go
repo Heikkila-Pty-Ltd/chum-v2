@@ -173,10 +173,15 @@ func (d *DAG) SelectAlternative(ctx context.Context, decisionID, alternativeID s
 	var label string
 	if err := tx.QueryRowContext(ctx,
 		"SELECT label FROM decision_alternatives WHERE id = ?",
-		alternativeID).Scan(&label); err == nil && label != "" {
-		_, _ = tx.ExecContext(ctx,
+		alternativeID).Scan(&label); err != nil {
+		return fmt.Errorf("read selected label: %w", err)
+	}
+	if label != "" {
+		if _, err := tx.ExecContext(ctx,
 			"UPDATE decisions SET outcome = ? WHERE id = ?",
-			label, decisionID)
+			label, decisionID); err != nil {
+			return fmt.Errorf("update decision outcome: %w", err)
+		}
 	}
 
 	return tx.Commit()

@@ -786,6 +786,79 @@ func TestGetAllTargetsForStatuses_EmptyStatuses(t *testing.T) {
 	}
 }
 
+func TestCreateTask_WithMetadata(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	meta := map[string]string{"source": "jarvis", "priority_reason": "user_request"}
+	_, err := d.CreateTask(ctx, Task{
+		ID:       "meta-1",
+		Title:    "task with metadata",
+		Project:  "p",
+		Metadata: meta,
+	})
+	if err != nil {
+		t.Fatalf("CreateTask with metadata: %v", err)
+	}
+
+	got, err := d.GetTask(ctx, "meta-1")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.Metadata == nil {
+		t.Fatal("expected non-nil metadata")
+	}
+	if got.Metadata["source"] != "jarvis" {
+		t.Fatalf("Metadata[source] = %q, want jarvis", got.Metadata["source"])
+	}
+	if got.Metadata["priority_reason"] != "user_request" {
+		t.Fatalf("Metadata[priority_reason] = %q", got.Metadata["priority_reason"])
+	}
+}
+
+func TestCreateTask_NilMetadataRoundTrips(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	_, err := d.CreateTask(ctx, Task{ID: "meta-nil", Title: "no meta", Project: "p"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	got, err := d.GetTask(ctx, "meta-nil")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.Metadata != nil {
+		t.Fatalf("expected nil metadata, got %v", got.Metadata)
+	}
+}
+
+func TestUpdateTask_Metadata(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	_, _ = d.CreateTask(ctx, Task{ID: "meta-upd", Title: "update meta", Project: "p"})
+
+	err := d.UpdateTask(ctx, "meta-upd", map[string]any{
+		"metadata": map[string]string{"updated": "true"},
+	})
+	if err != nil {
+		t.Fatalf("UpdateTask metadata: %v", err)
+	}
+
+	got, err := d.GetTask(ctx, "meta-upd")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.Metadata == nil || got.Metadata["updated"] != "true" {
+		t.Fatalf("Metadata after update = %v", got.Metadata)
+	}
+}
+
 // --- helpers ---
 
 func taskIDs(tasks []Task) []string {

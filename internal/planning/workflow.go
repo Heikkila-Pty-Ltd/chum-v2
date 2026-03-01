@@ -64,7 +64,8 @@ type ceremony struct {
 	approveDecompCh workflow.ReceiveChannel
 	cancelCh      workflow.ReceiveChannel
 
-	// Shared mutable state
+	// Shared mutable state — safe without mutex because Temporal workflow
+	// goroutines are cooperatively scheduled (single-threaded replay).
 	cancelled        bool
 	cancelReason     string
 	goal             ClarifiedGoal
