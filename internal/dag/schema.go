@@ -66,13 +66,16 @@ const decisionAlternativesTableSchema = `CREATE TABLE IF NOT EXISTS decision_alt
 	FOREIGN KEY (decision_id) REFERENCES decisions(id) ON DELETE CASCADE
 );`
 
+const indexDecisionsTaskID = `CREATE INDEX IF NOT EXISTS idx_decisions_task_id ON decisions(task_id);`
+const indexAlternativesDecisionID = `CREATE INDEX IF NOT EXISTS idx_alternatives_decision_id ON decision_alternatives(decision_id);`
+
 const taskColumns = `id, title, description, status, priority, type, assignee, labels,
 	estimate_minutes, parent_id, acceptance, project, error_log, metadata, created_at, updated_at`
 
 // EnsureSchema creates the tasks, task_edges, and task_targets tables
 // if they don't exist, and runs any necessary migrations.
 func (d *DAG) EnsureSchema(ctx context.Context) error {
-	for _, ddl := range []string{taskTableSchema, edgeTableSchema, taskTargetsSchema, decisionsTableSchema, decisionAlternativesTableSchema} {
+	for _, ddl := range []string{taskTableSchema, edgeTableSchema, taskTargetsSchema, decisionsTableSchema, decisionAlternativesTableSchema, indexDecisionsTaskID, indexAlternativesDecisionID} {
 		if _, err := d.db.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("ensure schema: %w", err)
 		}
@@ -89,6 +92,14 @@ func (d *DAG) EnsureSchema(ctx context.Context) error {
 // migrateAddColumn adds a column to a table if it doesn't already exist.
 // Uses PRAGMA table_info to check for the column's presence before ALTER TABLE.
 func (d *DAG) migrateAddColumn(ctx context.Context, table, column, typedef string) error {
+	// Validate identifiers to prevent SQL injection (internal callers only, but defense in depth).
+	for _, ident := range []string{table, column} {
+		for _, ch := range ident {
+			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_') {
+				return fmt.Errorf("invalid identifier %q", ident)
+			}
+		}
+	}
 	rows, err := d.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
 	if err != nil {
 		return fmt.Errorf("pragma table_info(%s): %w", table, err)

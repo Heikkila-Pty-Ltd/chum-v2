@@ -69,6 +69,7 @@ func score(arm Arm, totalVisits int, exploration float64) float64 {
 		totalVisits = visits
 	}
 
+	// Prior is additive: acts as a constant bonus to bias selection toward preferred arms.
 	exploit := arm.TotalReward / float64(visits)
 	explore := exploration * math.Sqrt(math.Log(float64(totalVisits+1))/float64(visits))
 	return exploit + explore + arm.Prior

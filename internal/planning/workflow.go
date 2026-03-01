@@ -328,8 +328,8 @@ func (c *ceremony) interactiveSelect(ctx workflow.Context, cycle int) error {
 			for i := range c.approaches {
 				if c.approaches[i].ID == value || (c.approaches[i].Rank > 0 && fmt.Sprintf("%d", c.approaches[i].Rank) == value) {
 					c.approaches[i].Status = "selected"
-					copy := c.approaches[i]
-					c.selectedApproach = &copy
+					picked := c.approaches[i]
+					c.selectedApproach = &picked
 					found = true
 					logger.Info("Approach selected", "ID", c.approaches[i].ID, "Title", c.approaches[i].Title)
 					c.notify(fmt.Sprintf("Selected approach %d: %s\nSend `/plan go` to greenlight decomposition, or `/plan dig %s` for deeper research.",
@@ -385,8 +385,8 @@ func (c *ceremony) interactiveSelect(ctx workflow.Context, cycle int) error {
 					c.approaches[i] = updated
 					if wasSelected {
 						c.approaches[i].Status = "selected"
-						copy := c.approaches[i]
-						c.selectedApproach = &copy
+						picked := c.approaches[i]
+						c.selectedApproach = &picked
 					}
 					break
 				}
