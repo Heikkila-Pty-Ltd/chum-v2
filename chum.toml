@@ -14,6 +14,7 @@ dolt_health_check_interval = "30s"
 dolt_data_dir = ".beads/dolt/beads_chum"
 dolt_host = "127.0.0.1"
 dolt_port = 3307
+jarvis_port = 9780
 
 [projects.chum]
 enabled = true

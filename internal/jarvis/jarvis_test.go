@@ -197,3 +197,13 @@ func TestSubmitWithPriority(t *testing.T) {
 		t.Errorf("priority = %d, want 1", task.Priority)
 	}
 }
+
+func TestTriggerDispatchWithoutTemporal(t *testing.T) {
+	d := testDAG(t)
+	e := NewEngine(d, nil, "test-queue", map[string]string{"chum": "/tmp/chum"}, testLogger())
+
+	err := e.TriggerDispatch(context.Background())
+	if err == nil {
+		t.Fatal("expected error when temporal client is nil")
+	}
+}

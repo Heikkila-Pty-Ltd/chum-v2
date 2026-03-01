@@ -18,7 +18,6 @@ type API struct {
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/jarvis/submit", a.handleSubmit)
-	mux.HandleFunc("POST /api/jarvis/dispatch", a.handleDispatch)
 	mux.HandleFunc("GET /api/jarvis/status/{taskID}", a.handleStatus)
 	mux.HandleFunc("GET /api/jarvis/pending/{project}", a.handlePending)
 	mux.HandleFunc("GET /api/jarvis/health", a.handleHealth)
@@ -48,25 +47,6 @@ func (a *API) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.jsonOK(w, map[string]string{"task_id": id})
-}
-
-func (a *API) handleDispatch(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		TaskID  string      `json:"task_id"`
-		Request WorkRequest `json:"request"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		a.jsonError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if err := a.Engine.Dispatch(r.Context(), body.TaskID, body.Request); err != nil {
-		a.Logger.Error("Dispatch failed", "error", err)
-		a.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	a.jsonOK(w, map[string]string{"status": "dispatched"})
 }
 
 func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {

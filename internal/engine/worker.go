@@ -23,6 +23,17 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/watch"
 )
 
+// WorkerHook is called during worker setup to register additional workflows/activities.
+type WorkerHook func(w worker.Worker, c client.Client, d *dag.DAG, cfg *config.Config, logger *slog.Logger)
+
+var workerHooks []WorkerHook
+
+// RegisterWorkerHook adds a hook that runs during worker setup.
+// Call before StartWorker.
+func RegisterWorkerHook(hook WorkerHook) {
+	workerHooks = append(workerHooks, hook)
+}
+
 // StartWorker connects to Temporal, registers workflows/activities,
 // registers the dispatcher schedule, and starts the worker.
 func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
@@ -41,6 +52,11 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	registerEngineWorkflows(w, d, cfg, logger, parser, beadsClients, chatSender)
 	registerPlanningWorkflows(w, d, cfg, logger, parser, beadsClients, chatSender)
 	registerHealthWorkflows(w, logger, chatSender)
+
+	// Allow external packages to register additional workflows/activities.
+	for _, hook := range workerHooks {
+		hook(w, c, d, cfg, logger)
+	}
 
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 	defer shutdownCancel()

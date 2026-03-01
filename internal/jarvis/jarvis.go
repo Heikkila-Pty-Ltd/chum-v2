@@ -49,22 +49,18 @@ type WorkRequest struct {
 	// ParentTaskID links subtasks for decomposed work.
 	ParentTaskID string `json:"parent_task_id,omitempty"`
 
-	// Callback is an optional webhook URL to POST results to.
-	Callback string `json:"callback,omitempty"`
-
 	// Timeout overrides the default execution timeout.
 	Timeout time.Duration `json:"timeout,omitempty"`
 }
 
 // WorkResult is returned when a work request completes.
 type WorkResult struct {
-	TaskID    string         `json:"task_id"`
-	Status    string         `json:"status"` // completed, failed, needs_review, decomposed
-	PRNumber  int            `json:"pr_number,omitempty"`
-	ReviewURL string         `json:"review_url,omitempty"`
-	Error     string         `json:"error,omitempty"`
-	Duration  time.Duration  `json:"duration,omitempty"`
-	SubTasks  []string       `json:"sub_tasks,omitempty"`
+	TaskID   string `json:"task_id"`
+	Status   string `json:"status"` // ready, running, completed, failed, needs_review, decomposed
+	PRNumber int    `json:"pr_number,omitempty"`
+	ReviewURL string `json:"review_url,omitempty"`
+	Error    string `json:"error,omitempty"`
+	SubTasks []string `json:"sub_tasks,omitempty"`
 }
 
 // Engine is the Jarvis-CHUM integration. It wraps the DAG and Temporal
@@ -88,9 +84,9 @@ func NewEngine(d dag.TaskStore, tc client.Client, taskQueue string, workDirs map
 	}
 }
 
-// Submit creates a task in the DAG and optionally triggers immediate dispatch.
-// Returns the task ID. The task will be picked up by the dispatcher on its
-// next tick, or immediately if dispatch=true.
+// Submit creates a task in the DAG as "ready". The task will be picked up
+// by CHUM's dispatcher on its next tick (usually within 2 minutes).
+// Returns the task ID.
 func (e *Engine) Submit(ctx context.Context, req WorkRequest) (string, error) {
 	workDir := e.workDirs[req.Project]
 	if workDir == "" {
@@ -138,74 +134,48 @@ func (e *Engine) Submit(ctx context.Context, req WorkRequest) (string, error) {
 	return id, nil
 }
 
-// SubmitAndDispatch creates a task and immediately starts the agent workflow,
-// bypassing the dispatcher tick interval. Use for urgent work.
+// SubmitAndDispatch creates a task and immediately triggers the dispatcher
+// workflow to pick it up, bypassing the tick interval. Use for urgent work.
 func (e *Engine) SubmitAndDispatch(ctx context.Context, req WorkRequest) (string, error) {
 	id, err := e.Submit(ctx, req)
 	if err != nil {
 		return "", err
 	}
 
-	if err := e.Dispatch(ctx, id, req); err != nil {
-		return id, fmt.Errorf("task %s created but dispatch failed: %w", id, err)
+	if err := e.TriggerDispatch(ctx); err != nil {
+		// Task is still in the DAG — it'll be picked up on the next tick.
+		e.logger.Warn("Immediate dispatch trigger failed, task will be picked up on next tick",
+			"task_id", id, "error", err)
 	}
 
 	return id, nil
 }
 
-// Dispatch starts the agent workflow for an existing task immediately.
-func (e *Engine) Dispatch(ctx context.Context, taskID string, req WorkRequest) error {
-	workDir := e.workDirs[req.Project]
-	if workDir == "" {
-		return fmt.Errorf("unknown project %q", req.Project)
-	}
-
-	// Mark task as running to prevent double-dispatch.
-	if err := e.dag.UpdateTaskStatus(ctx, taskID, types.StatusRunning); err != nil {
-		return fmt.Errorf("mark running: %w", err)
-	}
-
-	agent := req.Agent
-	if agent == "" {
-		agent = "claude"
-	}
-
-	execTimeout := req.Timeout
-	if execTimeout <= 0 {
-		execTimeout = 45 * time.Minute
+// TriggerDispatch starts a one-off dispatcher workflow run. This causes
+// the dispatcher to scan for ready tasks (including just-submitted ones)
+// immediately rather than waiting for the next scheduled tick.
+func (e *Engine) TriggerDispatch(ctx context.Context) error {
+	if e.temporal == nil {
+		return fmt.Errorf("temporal client not available")
 	}
 
 	wfOpts := client.StartWorkflowOptions{
-		ID:                       fmt.Sprintf("jarvis-agent-%s", taskID),
+		ID:                       fmt.Sprintf("jarvis-dispatch-trigger-%d", time.Now().UnixNano()),
 		TaskQueue:                e.taskQueue,
-		WorkflowExecutionTimeout: 2 * time.Hour,
+		WorkflowExecutionTimeout: 5 * time.Minute,
 	}
 
-	// Use JarvisAgentWorkflow which wraps AgentWorkflow with result tracking.
-	wfReq := JarvisTaskRequest{
-		TaskID:      taskID,
-		Project:     req.Project,
-		Prompt:      req.Description,
-		WorkDir:     workDir,
-		Agent:       agent,
-		ExecTimeout: execTimeout,
-		Source:      req.Source,
-		Callback:    req.Callback,
-	}
-
-	run, err := e.temporal.ExecuteWorkflow(ctx, wfOpts, JarvisAgentWorkflow, wfReq)
+	// Start DispatcherWorkflow by registered name. The workflow is registered
+	// as "DispatcherWorkflow" by the engine package.
+	run, err := e.temporal.ExecuteWorkflow(ctx, wfOpts, "DispatcherWorkflow", struct{}{})
 	if err != nil {
-		// Revert status on dispatch failure.
-		_ = e.dag.UpdateTaskStatus(ctx, taskID, types.StatusReady)
-		return fmt.Errorf("start workflow: %w", err)
+		return fmt.Errorf("trigger dispatch: %w", err)
 	}
 
-	e.logger.Info("Jarvis dispatched agent",
-		"task_id", taskID,
+	e.logger.Info("Triggered immediate dispatch",
 		"workflow_id", run.GetID(),
 		"run_id", run.GetRunID(),
 	)
-
 	return nil
 }
 
@@ -222,19 +192,17 @@ func (e *Engine) GetStatus(ctx context.Context, taskID string) (WorkResult, erro
 	}
 
 	// Parse error_log for close details if task is done.
-	if task.Status == types.StatusCompleted || task.Status == types.StatusFailed {
-		if task.ErrorLog != "" {
-			var detail struct {
-				PRNumber  int    `json:"pr_number"`
-				ReviewURL string `json:"review_url"`
-				SubReason string `json:"sub_reason"`
-			}
-			if json.Unmarshal([]byte(task.ErrorLog), &detail) == nil {
-				result.PRNumber = detail.PRNumber
-				result.ReviewURL = detail.ReviewURL
-				if task.Status == types.StatusFailed {
-					result.Error = detail.SubReason
-				}
+	if task.ErrorLog != "" {
+		var detail struct {
+			PRNumber  int    `json:"pr_number"`
+			ReviewURL string `json:"review_url"`
+			SubReason string `json:"sub_reason"`
+		}
+		if json.Unmarshal([]byte(task.ErrorLog), &detail) == nil {
+			result.PRNumber = detail.PRNumber
+			result.ReviewURL = detail.ReviewURL
+			if task.Status != string(types.StatusCompleted) {
+				result.Error = detail.SubReason
 			}
 		}
 	}
@@ -271,32 +239,25 @@ func (e *Engine) ListPending(ctx context.Context, project string) ([]WorkResult,
 	return results, nil
 }
 
-// WaitForResult blocks until the workflow for the given task completes,
+// WaitForResult blocks until the task reaches a terminal status,
 // then returns the result. Use with a context timeout.
 func (e *Engine) WaitForResult(ctx context.Context, taskID string) (WorkResult, error) {
-	wfID := fmt.Sprintf("jarvis-agent-%s", taskID)
-
-	// Describe the workflow to get the run ID.
-	desc, err := e.temporal.DescribeWorkflowExecution(ctx, wfID, "")
-	if err != nil {
-		return WorkResult{}, fmt.Errorf("describe workflow %s: %w", wfID, err)
+	// If Temporal client available, try to find the agent workflow.
+	if e.temporal != nil {
+		wfID := fmt.Sprintf("chum-agent-%s", taskID)
+		desc, err := e.temporal.DescribeWorkflowExecution(ctx, wfID, "")
+		if err == nil {
+			st := desc.WorkflowExecutionInfo.Status
+			if st == enums.WORKFLOW_EXECUTION_STATUS_COMPLETED ||
+				st == enums.WORKFLOW_EXECUTION_STATUS_FAILED ||
+				st == enums.WORKFLOW_EXECUTION_STATUS_TERMINATED ||
+				st == enums.WORKFLOW_EXECUTION_STATUS_CANCELED {
+				return e.GetStatus(ctx, taskID)
+			}
+		}
 	}
 
-	status := desc.WorkflowExecutionInfo.Status
-	if status == enums.WORKFLOW_EXECUTION_STATUS_COMPLETED {
-		return e.GetStatus(ctx, taskID)
-	}
-	if status == enums.WORKFLOW_EXECUTION_STATUS_FAILED ||
-		status == enums.WORKFLOW_EXECUTION_STATUS_TERMINATED ||
-		status == enums.WORKFLOW_EXECUTION_STATUS_CANCELED {
-		return WorkResult{
-			TaskID: taskID,
-			Status: "failed",
-			Error:  fmt.Sprintf("workflow %s", status.String()),
-		}, nil
-	}
-
-	// Workflow still running — poll until done.
+	// Poll the DAG directly for terminal status.
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
@@ -305,22 +266,13 @@ func (e *Engine) WaitForResult(ctx context.Context, taskID string) (WorkResult, 
 		case <-ctx.Done():
 			return WorkResult{}, ctx.Err()
 		case <-ticker.C:
-			desc, err := e.temporal.DescribeWorkflowExecution(ctx, wfID, "")
+			result, err := e.GetStatus(ctx, taskID)
 			if err != nil {
 				continue
 			}
-			st := desc.WorkflowExecutionInfo.Status
-			if st == enums.WORKFLOW_EXECUTION_STATUS_COMPLETED {
-				return e.GetStatus(ctx, taskID)
-			}
-			if st == enums.WORKFLOW_EXECUTION_STATUS_FAILED ||
-				st == enums.WORKFLOW_EXECUTION_STATUS_TERMINATED ||
-				st == enums.WORKFLOW_EXECUTION_STATUS_CANCELED {
-				return WorkResult{
-					TaskID: taskID,
-					Status: "failed",
-					Error:  fmt.Sprintf("workflow %s", st.String()),
-				}, nil
+			switch result.Status {
+			case "completed", "failed", "needs_review", "dod_failed", "decomposed":
+				return result, nil
 			}
 		}
 	}
