@@ -14,9 +14,14 @@ type TaskStore interface {
 	GetReadyNodes(ctx context.Context, project string) ([]Task, error)
 	CreateSubtasksAtomic(ctx context.Context, parentID string, tasks []Task) ([]string, error)
 
-	// Graph edge operations (used by admission gate).
+	// Graph edge operations.
+	AddEdge(ctx context.Context, from, to string) error
 	AddEdgeWithSource(ctx context.Context, from, to, source string) error
+	RemoveEdge(ctx context.Context, from, to string) error
 	DeleteEdgesBySource(ctx context.Context, project, source string) error
+	GetDependencies(ctx context.Context, id string) ([]string, error)
+	GetDependents(ctx context.Context, id string) ([]string, error)
+	GetEdgeSource(ctx context.Context, from, to string) (string, error)
 
 	// Task target operations (used by admission gate).
 	SetTaskTargets(ctx context.Context, taskID string, targets []TaskTarget) error

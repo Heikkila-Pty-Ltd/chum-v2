@@ -80,6 +80,14 @@ func (d *DAG) CreateTask(ctx context.Context, t Task) (string, error) {
 			return "", fmt.Errorf("marshal labels: %w", marshalErr)
 		}
 	}
+	metadataJSON := []byte("{}")
+	if t.Metadata != nil {
+		var marshalErr error
+		metadataJSON, marshalErr = json.Marshal(t.Metadata)
+		if marshalErr != nil {
+			return "", fmt.Errorf("marshal metadata: %w", marshalErr)
+		}
+	}
 	status := t.Status
 	if status == "" {
 		status = types.StatusOpen
@@ -90,11 +98,11 @@ func (d *DAG) CreateTask(ctx context.Context, t Task) (string, error) {
 	}
 	_, err := d.db.ExecContext(ctx, `INSERT INTO tasks
 		(id, title, description, status, priority, type, assignee, labels,
-		 estimate_minutes, parent_id, acceptance, project, error_log)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 estimate_minutes, parent_id, acceptance, project, error_log, metadata)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.Title, t.Description, status, t.Priority, taskType,
 		t.Assignee, string(labelsJSON), t.EstimateMinutes,
-		t.ParentID, t.Acceptance, t.Project, t.ErrorLog,
+		t.ParentID, t.Acceptance, t.Project, t.ErrorLog, string(metadataJSON),
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert task: %w", err)
@@ -135,6 +143,14 @@ func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks [
 				return nil, fmt.Errorf("marshal labels for %q: %w", t.Title, marshalErr)
 			}
 		}
+		metadataJSON := []byte("{}")
+		if t.Metadata != nil {
+			var marshalErr error
+			metadataJSON, marshalErr = json.Marshal(t.Metadata)
+			if marshalErr != nil {
+				return nil, fmt.Errorf("marshal metadata for %q: %w", t.Title, marshalErr)
+			}
+		}
 		status := t.Status
 		if status == "" {
 			status = types.StatusOpen
@@ -145,11 +161,11 @@ func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks [
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO tasks
 			(id, title, description, status, priority, type, assignee, labels,
-			 estimate_minutes, parent_id, acceptance, project, error_log)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 estimate_minutes, parent_id, acceptance, project, error_log, metadata)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			t.ID, t.Title, t.Description, status, t.Priority, taskType,
 			t.Assignee, string(labelsJSON), t.EstimateMinutes,
-			t.ParentID, t.Acceptance, t.Project, t.ErrorLog,
+			t.ParentID, t.Acceptance, t.Project, t.ErrorLog, string(metadataJSON),
 		); err != nil {
 			return nil, fmt.Errorf("insert subtask %q: %w", t.Title, err)
 		}
@@ -182,7 +198,7 @@ func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks [
 		var ei edgeInfo
 		if err := prereqRows.Scan(&ei.target, &ei.source); err != nil {
 			prereqRows.Close()
-			return nil, err
+			return nil, fmt.Errorf("scan parent prerequisite: %w", err)
 		}
 		prereqs = append(prereqs, ei)
 	}
@@ -217,7 +233,7 @@ func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks [
 		var ei edgeInfo
 		if err := rows.Scan(&ei.target, &ei.source); err != nil {
 			rows.Close()
-			return nil, err
+			return nil, fmt.Errorf("scan parent dependent: %w", err)
 		}
 		dependents = append(dependents, ei)
 	}
@@ -297,6 +313,7 @@ func (d *DAG) UpdateTask(ctx context.Context, id string, fields map[string]any) 
 		"title": true, "description": true, "status": true, "priority": true,
 		"type": true, "assignee": true, "labels": true, "estimate_minutes": true,
 		"parent_id": true, "acceptance": true, "project": true, "error_log": true,
+		"metadata": true,
 	}
 	for k, v := range fields {
 		if !allowed[k] {
@@ -307,6 +324,15 @@ func (d *DAG) UpdateTask(ctx context.Context, id string, fields map[string]any) 
 				b, err := json.Marshal(labels)
 				if err != nil {
 					return fmt.Errorf("marshal labels: %w", err)
+				}
+				v = string(b)
+			}
+		}
+		if k == "metadata" {
+			if meta, ok := v.(map[string]string); ok {
+				b, err := json.Marshal(meta)
+				if err != nil {
+					return fmt.Errorf("marshal metadata: %w", err)
 				}
 				v = string(b)
 			}
@@ -376,12 +402,12 @@ func sqlPlaceholders(n int) string {
 
 func scanTask(row *sql.Row) (Task, error) {
 	var t Task
-	var labelsJSON string
+	var labelsJSON, metadataJSON string
 	err := row.Scan(
 		&t.ID, &t.Title, &t.Description, &t.Status, &t.Priority,
 		&t.Type, &t.Assignee, &labelsJSON, &t.EstimateMinutes,
 		&t.ParentID, &t.Acceptance, &t.Project, &t.ErrorLog,
-		&t.CreatedAt, &t.UpdatedAt,
+		&metadataJSON, &t.CreatedAt, &t.UpdatedAt,
 	)
 	if err != nil {
 		return t, fmt.Errorf("scan task: %w", err)
@@ -391,17 +417,22 @@ func scanTask(row *sql.Row) (Task, error) {
 			return t, fmt.Errorf("unmarshal labels for task %s: %w", t.ID, err)
 		}
 	}
+	if metadataJSON != "" && metadataJSON != "{}" {
+		if err := json.Unmarshal([]byte(metadataJSON), &t.Metadata); err != nil {
+			return t, fmt.Errorf("unmarshal metadata for task %s: %w", t.ID, err)
+		}
+	}
 	return t, nil
 }
 
 func scanTaskRows(rows *sql.Rows) (Task, error) {
 	var t Task
-	var labelsJSON string
+	var labelsJSON, metadataJSON string
 	err := rows.Scan(
 		&t.ID, &t.Title, &t.Description, &t.Status, &t.Priority,
 		&t.Type, &t.Assignee, &labelsJSON, &t.EstimateMinutes,
 		&t.ParentID, &t.Acceptance, &t.Project, &t.ErrorLog,
-		&t.CreatedAt, &t.UpdatedAt,
+		&metadataJSON, &t.CreatedAt, &t.UpdatedAt,
 	)
 	if err != nil {
 		return t, fmt.Errorf("scan task: %w", err)
@@ -409,6 +440,11 @@ func scanTaskRows(rows *sql.Rows) (Task, error) {
 	if labelsJSON != "" && labelsJSON != "[]" {
 		if err := json.Unmarshal([]byte(labelsJSON), &t.Labels); err != nil {
 			return t, fmt.Errorf("unmarshal labels for task %s: %w", t.ID, err)
+		}
+	}
+	if metadataJSON != "" && metadataJSON != "{}" {
+		if err := json.Unmarshal([]byte(metadataJSON), &t.Metadata); err != nil {
+			return t, fmt.Errorf("unmarshal metadata for task %s: %w", t.ID, err)
 		}
 	}
 	return t, nil
