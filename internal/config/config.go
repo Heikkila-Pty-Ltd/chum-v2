@@ -16,7 +16,10 @@ type Duration struct{ time.Duration }
 func (d *Duration) UnmarshalText(text []byte) error {
 	var err error
 	d.Duration, err = time.ParseDuration(string(text))
-	return err
+	if err != nil {
+		return fmt.Errorf("parse duration %q: %w", string(text), err)
+	}
+	return nil
 }
 
 // Config is the top-level CHUM configuration.

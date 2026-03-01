@@ -511,12 +511,9 @@ func TestCreateSubtasksAtomic_RewiresEdges(t *testing.T) {
 	}
 
 	// Edge source should be preserved (original edges were 'beads')
-	var source string
-	err = d.DB().QueryRowContext(ctx,
-		"SELECT source FROM task_edges WHERE from_task = ? AND to_task = ?",
-		ids[0], "prereq").Scan(&source)
+	source, err := d.GetEdgeSource(ctx, ids[0], "prereq")
 	if err != nil {
-		t.Fatalf("query inherited edge source: %v", err)
+		t.Fatalf("get inherited edge source: %v", err)
 	}
 	if source != "beads" {
 		t.Fatalf("inherited edge source = %q, want beads", source)

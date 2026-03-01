@@ -50,11 +50,23 @@ func (d *DAG) GetDependents(ctx context.Context, id string) ([]string, error) {
 	for rows.Next() {
 		var dep string
 		if err := rows.Scan(&dep); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan dependent: %w", err)
 		}
 		deps = append(deps, dep)
 	}
 	return deps, rows.Err()
+}
+
+// GetEdgeSource returns the source tag for an edge between two tasks.
+func (d *DAG) GetEdgeSource(ctx context.Context, from, to string) (string, error) {
+	var source string
+	err := d.db.QueryRowContext(ctx,
+		"SELECT source FROM task_edges WHERE from_task = ? AND to_task = ?",
+		from, to).Scan(&source)
+	if err != nil {
+		return "", fmt.Errorf("get edge source %s→%s: %w", from, to, err)
+	}
+	return source, nil
 }
 
 // RemoveEdge removes a dependency.
@@ -62,5 +74,8 @@ func (d *DAG) RemoveEdge(ctx context.Context, from, to string) error {
 	_, err := d.db.ExecContext(ctx,
 		"DELETE FROM task_edges WHERE from_task = ? AND to_task = ?",
 		from, to)
-	return err
+	if err != nil {
+		return fmt.Errorf("remove edge %s→%s: %w", from, to, err)
+	}
+	return nil
 }

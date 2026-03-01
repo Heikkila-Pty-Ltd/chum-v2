@@ -28,7 +28,7 @@ import (
 func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	c, err := DialTemporal(cfg, logger)
 	if err != nil {
-		return err
+		return fmt.Errorf("dial temporal: %w", err)
 	}
 	defer c.Close()
 

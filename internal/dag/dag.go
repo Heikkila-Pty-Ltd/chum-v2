@@ -45,9 +45,6 @@ func Open(dbPath string) (*DAG, error) {
 	return d, nil
 }
 
-// DB returns the underlying database connection.
-func (d *DAG) DB() *sql.DB { return d.db }
-
 // Close closes the underlying database connection.
 func (d *DAG) Close() error { return d.db.Close() }
 

@@ -200,7 +200,7 @@ func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID str
 		"status":    string(detail.Reason),
 		"error_log": string(raw),
 	}); err != nil {
-		return err
+		return fmt.Errorf("close task %s: %w", taskID, err)
 	}
 
 	// Writeback to beads (best-effort, non-fatal).
