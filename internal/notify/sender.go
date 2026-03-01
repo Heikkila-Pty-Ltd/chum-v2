@@ -59,7 +59,10 @@ func (m *MatrixSender) Send(ctx context.Context, roomID, message string) error {
 		"msgtype": "m.text",
 		"body":    message,
 	}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal matrix payload: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, path, bytes.NewReader(body))
 	if err != nil {
@@ -102,7 +105,10 @@ func (w *WebhookSender) Send(ctx context.Context, _, message string) error {
 	}
 
 	payload := map[string]string{"text": message}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal webhook payload: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.URL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("create webhook request: %w", err)

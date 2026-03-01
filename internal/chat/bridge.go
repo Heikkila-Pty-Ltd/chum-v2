@@ -43,13 +43,15 @@ func (b *Bridge) Run(ctx context.Context) error {
 	b.mc = NewMatrixClient(b.MatrixCfg.Homeserver, b.MatrixCfg.AccessToken)
 
 	// Resolve the bot's own Matrix user ID so we can filter self-echo.
+	// Failure here is fatal — without it, the bot would echo its own messages
+	// and potentially create infinite loops.
 	if b.BotUserID == "" {
-		if uid, err := b.mc.WhoAmI(ctx); err != nil {
-			b.Logger.Warn("Failed to resolve bot user ID — self-echo filtering disabled", "error", err)
-		} else {
-			b.BotUserID = uid
-			b.Logger.Info("Bot user ID resolved", "user_id", uid)
+		uid, err := b.mc.WhoAmI(ctx)
+		if err != nil {
+			return fmt.Errorf("resolve bot user ID (required for self-echo filtering): %w", err)
 		}
+		b.BotUserID = uid
+		b.Logger.Info("Bot user ID resolved", "user_id", uid)
 	}
 
 	b.Logger.Info("Chat bridge started", "room", b.MatrixCfg.RoomID, "interval", b.PollInterval)
@@ -207,14 +209,14 @@ func (b *Bridge) startPlanning(ctx context.Context, msg InboundMessage, cmd Comm
 	}
 
 	b.setActiveSession(msg.Room, sessionID)
-	go b.watchSessionCompletion(msg.Room, sessionID, run)
+	go b.watchSessionCompletion(ctx, msg.Room, sessionID, run)
 	return b.send(ctx, fmt.Sprintf("Started planning session `%s` (run: %s) for project %s",
 		sessionID, run.GetRunID(), cmd.Project))
 }
 
-func (b *Bridge) watchSessionCompletion(room, sessionID string, run client.WorkflowRun) {
+func (b *Bridge) watchSessionCompletion(ctx context.Context, room, sessionID string, run client.WorkflowRun) {
 	var result planning.PlanningResult
-	if err := run.Get(context.Background(), &result); err != nil {
+	if err := run.Get(ctx, &result); err != nil {
 		b.Logger.Warn("Planning session ended with error", "session_id", sessionID, "error", err)
 	} else {
 		b.Logger.Info("Planning session completed", "session_id", sessionID, "cancelled", result.Cancelled)
@@ -260,9 +262,15 @@ func (b *Bridge) send(ctx context.Context, message string) error {
 	}
 	if b.mc != nil {
 		_, err := b.mc.SendMessage(ctx, b.MatrixCfg.RoomID, message)
-		return err
+		if err != nil {
+			return fmt.Errorf("send to room %s: %w", b.MatrixCfg.RoomID, err)
+		}
+		return nil
 	}
-	return SendMatrixMessage(ctx, b.MatrixCfg, message)
+	if err := SendMatrixMessage(ctx, b.MatrixCfg, message); err != nil {
+		return fmt.Errorf("send to room %s: %w", b.MatrixCfg.RoomID, err)
+	}
+	return nil
 }
 
 func (b *Bridge) resolveSession(room, explicit string) string {
