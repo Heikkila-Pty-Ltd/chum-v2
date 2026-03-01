@@ -180,8 +180,12 @@ func registerSchedules(ctx context.Context, c client.Client, cfg *config.Config,
 	case <-time.After(3 * time.Second):
 	}
 
-	// Canonical defaults are applied in config.Load(); no runtime fallback needed.
+	// Canonical defaults are applied in config.Load(); these guards are defensive
+	// against zero-value config.Config{} from tests or other edge cases.
 	tickInterval := cfg.General.TickInterval.Duration
+	if tickInterval <= 0 {
+		tickInterval = 2 * time.Minute
+	}
 	if err := RegisterSchedule(ctx, c, ScheduleSpec{
 		ID:        "chum-v2-dispatcher",
 		Interval:  tickInterval,
@@ -195,6 +199,9 @@ func registerSchedules(ctx context.Context, c client.Client, cfg *config.Config,
 
 	if cfg.General.DoltHealthCheckEnabled {
 		healthInterval := cfg.General.DoltHealthCheckInterval.Duration
+		if healthInterval <= 0 {
+			healthInterval = 30 * time.Second
+		}
 		if err := RegisterSchedule(ctx, c, ScheduleSpec{
 			ID:       "chum-v2-dolt-health",
 			Interval: healthInterval,

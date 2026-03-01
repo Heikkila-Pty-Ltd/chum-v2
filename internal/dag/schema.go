@@ -63,9 +63,20 @@ func (d *DAG) EnsureSchema(ctx context.Context) error {
 	return nil
 }
 
+// allowedMigrationTables guards migrateAddColumn against accidental SQL injection.
+// Only tables listed here may be passed to the dynamic ALTER TABLE statement.
+var allowedMigrationTables = map[string]bool{
+	"tasks":      true,
+	"task_edges": true,
+}
+
 // migrateAddColumn adds a column to a table if it doesn't already exist.
 // Uses PRAGMA table_info to check for the column's presence before ALTER TABLE.
+// Table and column names are validated against an allowlist to prevent SQL injection.
 func (d *DAG) migrateAddColumn(ctx context.Context, table, column, typedef string) error {
+	if !allowedMigrationTables[table] {
+		return fmt.Errorf("migrateAddColumn: table %q not in allowlist", table)
+	}
 	rows, err := d.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
 	if err != nil {
 		return fmt.Errorf("pragma table_info(%s): %w", table, err)
