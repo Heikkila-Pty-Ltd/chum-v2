@@ -174,7 +174,11 @@ func registerHealthWorkflows(w worker.Worker, logger *slog.Logger, chatSender no
 
 // registerSchedules registers Temporal schedules after a startup delay.
 func registerSchedules(ctx context.Context, c client.Client, cfg *config.Config, logger *slog.Logger) {
-	time.Sleep(3 * time.Second)
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(3 * time.Second):
+	}
 
 	tickInterval := cfg.General.TickInterval.Duration
 	if tickInterval <= 0 {
