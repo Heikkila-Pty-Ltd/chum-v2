@@ -42,13 +42,36 @@ const taskTargetsSchema = `CREATE TABLE IF NOT EXISTS task_targets (
 	FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );`
 
+const decisionsTableSchema = `CREATE TABLE IF NOT EXISTS decisions (
+	id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	title TEXT NOT NULL DEFAULT '',
+	context TEXT NOT NULL DEFAULT '',
+	outcome TEXT NOT NULL DEFAULT '',
+	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);`
+
+const decisionAlternativesTableSchema = `CREATE TABLE IF NOT EXISTS decision_alternatives (
+	id TEXT PRIMARY KEY,
+	decision_id TEXT NOT NULL,
+	label TEXT NOT NULL DEFAULT '',
+	reasoning TEXT NOT NULL DEFAULT '',
+	selected INTEGER NOT NULL DEFAULT 0,
+	uct_score REAL NOT NULL DEFAULT 0,
+	visits INTEGER NOT NULL DEFAULT 0,
+	reward REAL NOT NULL DEFAULT 0,
+	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	FOREIGN KEY (decision_id) REFERENCES decisions(id) ON DELETE CASCADE
+);`
+
 const taskColumns = `id, title, description, status, priority, type, assignee, labels,
 	estimate_minutes, parent_id, acceptance, project, error_log, created_at, updated_at`
 
 // EnsureSchema creates the tasks, task_edges, and task_targets tables
 // if they don't exist, and runs any necessary migrations.
 func (d *DAG) EnsureSchema(ctx context.Context) error {
-	for _, ddl := range []string{taskTableSchema, edgeTableSchema, taskTargetsSchema} {
+	for _, ddl := range []string{taskTableSchema, edgeTableSchema, taskTargetsSchema, decisionsTableSchema, decisionAlternativesTableSchema} {
 		if _, err := d.db.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("ensure schema: %w", err)
 		}
