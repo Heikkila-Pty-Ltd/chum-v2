@@ -86,9 +86,10 @@ type DoltHealthActivities struct {
 }
 
 // CheckDoltHealthActivity tests TCP connectivity to Dolt.
-func CheckDoltHealthActivity(_ context.Context, host string, port int) (bool, error) {
+func CheckDoltHealthActivity(ctx context.Context, host string, port int) (bool, error) {
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	dialer := net.Dialer{Timeout: 3 * time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return false, nil
 	}

@@ -55,7 +55,7 @@ func (d *DAG) EnsureSchema(ctx context.Context) error {
 	}
 	// Migration: add source column to task_edges if missing (existing DBs).
 	if err := d.migrateEdgeSource(ctx); err != nil {
-		return err
+		return fmt.Errorf("migrate schema: %w", err)
 	}
 	return nil
 }
