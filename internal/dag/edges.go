@@ -38,6 +38,25 @@ func (d *DAG) DeleteEdgesBySource(ctx context.Context, project, source string) e
 	return nil
 }
 
+// GetDependencies returns task IDs that the given task depends on (to_task where from_task = id).
+func (d *DAG) GetDependencies(ctx context.Context, id string) ([]string, error) {
+	rows, err := d.db.QueryContext(ctx,
+		"SELECT to_task FROM task_edges WHERE from_task = ?", id)
+	if err != nil {
+		return nil, fmt.Errorf("get dependencies: %w", err)
+	}
+	defer rows.Close()
+	var deps []string
+	for rows.Next() {
+		var dep string
+		if err := rows.Scan(&dep); err != nil {
+			return nil, fmt.Errorf("scan dependency: %w", err)
+		}
+		deps = append(deps, dep)
+	}
+	return deps, rows.Err()
+}
+
 // GetDependents returns task IDs that depend on the given task (from_task where to_task = id).
 func (d *DAG) GetDependents(ctx context.Context, id string) ([]string, error) {
 	rows, err := d.db.QueryContext(ctx,
