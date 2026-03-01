@@ -72,9 +72,13 @@ func (d *DAG) CreateTask(ctx context.Context, t Task) (string, error) {
 		}
 		t.ID = id
 	}
-	labelsJSON, _ := json.Marshal(t.Labels)
-	if t.Labels == nil {
-		labelsJSON = []byte("[]")
+	labelsJSON := []byte("[]")
+	if t.Labels != nil {
+		var marshalErr error
+		labelsJSON, marshalErr = json.Marshal(t.Labels)
+		if marshalErr != nil {
+			return "", fmt.Errorf("marshal labels: %w", marshalErr)
+		}
 	}
 	status := t.Status
 	if status == "" {
@@ -123,9 +127,13 @@ func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks [
 			}
 			t.ID = id
 		}
-		labelsJSON, _ := json.Marshal(t.Labels)
-		if t.Labels == nil {
-			labelsJSON = []byte("[]")
+		labelsJSON := []byte("[]")
+		if t.Labels != nil {
+			var marshalErr error
+			labelsJSON, marshalErr = json.Marshal(t.Labels)
+			if marshalErr != nil {
+				return nil, fmt.Errorf("marshal labels for %q: %w", t.Title, marshalErr)
+			}
 		}
 		status := t.Status
 		if status == "" {
@@ -256,9 +264,7 @@ func (d *DAG) ListTasks(ctx context.Context, project string, statuses ...string)
 	query := "SELECT " + taskColumns + " FROM tasks WHERE project = ?"
 	args := []any{project}
 	if len(statuses) > 0 {
-		placeholders := strings.Repeat("?,", len(statuses))
-		placeholders = placeholders[:len(placeholders)-1]
-		query += " AND status IN (" + placeholders + ")"
+		query += " AND status IN (" + sqlPlaceholders(len(statuses)) + ")"
 		for _, s := range statuses {
 			args = append(args, s)
 		}
@@ -298,7 +304,10 @@ func (d *DAG) UpdateTask(ctx context.Context, id string, fields map[string]any) 
 		}
 		if k == "labels" {
 			if labels, ok := v.([]string); ok {
-				b, _ := json.Marshal(labels)
+				b, err := json.Marshal(labels)
+				if err != nil {
+					return fmt.Errorf("marshal labels: %w", err)
+				}
 				v = string(b)
 			}
 		}
@@ -356,6 +365,13 @@ func (d *DAG) GetReadyNodes(ctx context.Context, project string) ([]Task, error)
 	return tasks, rows.Err()
 }
 
+// sqlPlaceholders returns a comma-separated string of N question marks for use
+// in SQL IN clauses. The caller must ensure n > 0.
+// Safety: this generates only literal "?" characters — no user input is interpolated.
+func sqlPlaceholders(n int) string {
+	return strings.TrimRight(strings.Repeat("?,", n), ",")
+}
+
 // --- scan helpers ---
 
 func scanTask(row *sql.Row) (Task, error) {
@@ -370,7 +386,11 @@ func scanTask(row *sql.Row) (Task, error) {
 	if err != nil {
 		return t, fmt.Errorf("scan task: %w", err)
 	}
-	_ = json.Unmarshal([]byte(labelsJSON), &t.Labels)
+	if labelsJSON != "" && labelsJSON != "[]" {
+		if err := json.Unmarshal([]byte(labelsJSON), &t.Labels); err != nil {
+			return t, fmt.Errorf("unmarshal labels for task %s: %w", t.ID, err)
+		}
+	}
 	return t, nil
 }
 
@@ -386,6 +406,10 @@ func scanTaskRows(rows *sql.Rows) (Task, error) {
 	if err != nil {
 		return t, fmt.Errorf("scan task: %w", err)
 	}
-	_ = json.Unmarshal([]byte(labelsJSON), &t.Labels)
+	if labelsJSON != "" && labelsJSON != "[]" {
+		if err := json.Unmarshal([]byte(labelsJSON), &t.Labels); err != nil {
+			return t, fmt.Errorf("unmarshal labels for task %s: %w", t.ID, err)
+		}
+	}
 	return t, nil
 }

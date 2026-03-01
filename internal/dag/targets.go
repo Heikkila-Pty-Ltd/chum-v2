@@ -3,7 +3,6 @@ package dag
 import (
 	"context"
 	"fmt"
-	"strings"
 )
 
 // SetTaskTargets replaces all targets for a task.
@@ -54,12 +53,10 @@ func (d *DAG) GetAllTargetsForStatuses(ctx context.Context, project string, stat
 	if len(statuses) == 0 {
 		return nil, nil
 	}
-	placeholders := strings.Repeat("?,", len(statuses))
-	placeholders = placeholders[:len(placeholders)-1]
 	query := fmt.Sprintf(`SELECT tt.task_id, tt.file_path, tt.symbol_name, tt.symbol_kind
 		FROM task_targets tt
 		JOIN tasks t ON t.id = tt.task_id
-		WHERE t.project = ? AND t.status IN (%s)`, placeholders)
+		WHERE t.project = ? AND t.status IN (%s)`, sqlPlaceholders(len(statuses)))
 	args := []any{project}
 	for _, s := range statuses {
 		args = append(args, s)

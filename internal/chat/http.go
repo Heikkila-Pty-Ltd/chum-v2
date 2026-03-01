@@ -107,7 +107,7 @@ func (m *MatrixClient) doGet(ctx context.Context, endpoint string) ([]byte, erro
 
 	resp, err := m.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("http get: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -136,7 +136,10 @@ func (m *MatrixClient) SendMessage(ctx context.Context, roomID, message string) 
 		"msgtype": "m.text",
 		"body":    message,
 	}
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal matrix payload: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, path, bytes.NewReader(body))
 	if err != nil {

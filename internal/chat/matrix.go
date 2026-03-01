@@ -4,6 +4,7 @@ package chat
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -38,5 +39,8 @@ func SendMatrixMessage(ctx context.Context, cfg MatrixConfig, message string) er
 	// notify.ChatSender directly.
 	mc := NewMatrixClient(cfg.Homeserver, cfg.AccessToken)
 	_, err := mc.SendMessage(ctx, cfg.RoomID, message)
-	return err
+	if err != nil {
+		return fmt.Errorf("send matrix message to %s: %w", cfg.RoomID, err)
+	}
+	return nil
 }

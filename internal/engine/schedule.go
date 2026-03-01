@@ -42,9 +42,9 @@ type ScheduleSpec struct {
 
 // RegisterSchedule creates a Temporal schedule idempotently.
 // If the schedule already exists, it logs and returns nil.
-func RegisterSchedule(c client.Client, spec ScheduleSpec, logger *slog.Logger) error {
+func RegisterSchedule(ctx context.Context, c client.Client, spec ScheduleSpec, logger *slog.Logger) error {
 	schedClient := c.ScheduleClient()
-	_, err := schedClient.Create(context.Background(), client.ScheduleOptions{
+	_, err := schedClient.Create(ctx, client.ScheduleOptions{
 		ID: spec.ID,
 		Spec: client.ScheduleSpec{
 			Intervals: []client.ScheduleIntervalSpec{

@@ -42,11 +42,11 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	registerPlanningWorkflows(w, d, cfg, logger, parser, beadsClients, chatSender)
 	registerHealthWorkflows(w, logger, chatSender)
 
-	go registerSchedules(c, cfg, logger)
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+	defer shutdownCancel()
 
-	bridgeCtx, bridgeCancel := context.WithCancel(context.Background())
-	defer bridgeCancel()
-	startBridge(bridgeCtx, c, cfg, logger)
+	go registerSchedules(shutdownCtx, c, cfg, logger)
+	startBridge(shutdownCtx, c, cfg, logger)
 
 	logger.Info("Starting CHUM v2 worker",
 		"task_queue", cfg.General.TaskQueue,
@@ -173,14 +173,18 @@ func registerHealthWorkflows(w worker.Worker, logger *slog.Logger, chatSender no
 }
 
 // registerSchedules registers Temporal schedules after a startup delay.
-func registerSchedules(c client.Client, cfg *config.Config, logger *slog.Logger) {
-	time.Sleep(3 * time.Second)
+func registerSchedules(ctx context.Context, c client.Client, cfg *config.Config, logger *slog.Logger) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(3 * time.Second):
+	}
 
 	tickInterval := cfg.General.TickInterval.Duration
 	if tickInterval <= 0 {
 		tickInterval = 2 * time.Minute
 	}
-	if err := RegisterSchedule(c, ScheduleSpec{
+	if err := RegisterSchedule(ctx, c, ScheduleSpec{
 		ID:        "chum-v2-dispatcher",
 		Interval:  tickInterval,
 		Workflow:  DispatcherWorkflow,
@@ -196,7 +200,7 @@ func registerSchedules(c client.Client, cfg *config.Config, logger *slog.Logger)
 		if healthInterval <= 0 {
 			healthInterval = 30 * time.Second
 		}
-		if err := RegisterSchedule(c, ScheduleSpec{
+		if err := RegisterSchedule(ctx, c, ScheduleSpec{
 			ID:       "chum-v2-dolt-health",
 			Interval: healthInterval,
 			Workflow: watch.DoltHealthCheckWorkflow,
