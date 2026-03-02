@@ -155,7 +155,9 @@ func (c *ceremony) notify(message string) {
 		return
 	}
 	nCtx := workflow.WithActivityOptions(c.notifyBaseCtx, c.notifyOpts)
-	_ = workflow.ExecuteActivity(nCtx, c.pa.NotifyChatActivity, c.req.RoomID, message).Get(nCtx, nil)
+	if err := workflow.ExecuteActivity(nCtx, c.pa.NotifyChatActivity, c.req.RoomID, message).Get(nCtx, nil); err != nil {
+		workflow.GetLogger(nCtx).Warn("notify failed", "error", err)
+	}
 }
 
 // drainCancel checks for any pending cancel signals.

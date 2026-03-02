@@ -6,6 +6,9 @@ import (
 	"fmt"
 )
 
+// Edge direction convention: from_task is the dependent, to_task is the prerequisite.
+// An edge (A → B) means "A depends on B" — A cannot start until B completes.
+
 // AddEdge creates a dependency: from depends on to. Source defaults to "beads".
 func (d *DAG) AddEdge(ctx context.Context, from, to string) error {
 	return d.AddEdgeWithSource(ctx, from, to, "beads")

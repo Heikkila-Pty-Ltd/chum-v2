@@ -91,6 +91,7 @@ func (d *DAG) EnsureSchema(ctx context.Context) error {
 
 // migrateAddColumn adds a column to a table if it doesn't already exist.
 // Uses PRAGMA table_info to check for the column's presence before ALTER TABLE.
+// Table and column names are validated via character allowlist to prevent SQL injection.
 func (d *DAG) migrateAddColumn(ctx context.Context, table, column, typedef string) error {
 	// Validate identifiers to prevent SQL injection (internal callers only, but defense in depth).
 	for _, ident := range []string{table, column} {
