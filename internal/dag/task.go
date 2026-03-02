@@ -17,9 +17,10 @@ type Task struct {
 	ParentID        string    `json:"parent_id"`
 	Acceptance      string    `json:"acceptance"`
 	Project         string    `json:"project"`
-	ErrorLog        string    `json:"error_log"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ErrorLog        string            `json:"error_log"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
 }
 
 // TaskTarget records a resolved code reference for a task.

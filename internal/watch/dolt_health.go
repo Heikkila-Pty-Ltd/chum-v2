@@ -29,6 +29,7 @@ type DoltHealthConfig struct {
 // DoltHealthCheckWorkflow is a Temporal scheduled workflow that checks
 // Dolt connectivity and restarts the server if it's down.
 func DoltHealthCheckWorkflow(ctx workflow.Context, cfg DoltHealthConfig) error {
+	// Safety-net defaults for Temporal replay (config values may not be reloaded).
 	if cfg.Host == "" {
 		cfg.Host = "127.0.0.1"
 	}
