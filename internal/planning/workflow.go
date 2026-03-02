@@ -537,10 +537,22 @@ func (c *ceremony) approveDecomp(ctx workflow.Context) (bool, error) {
 	return approved, nil
 }
 
-// handoff runs phase 8: create subtasks from the decomposition.
+// handoff runs phase 8: record decision, create subtasks from the decomposition.
 func (c *ceremony) handoff(ctx workflow.Context) (*PlanningResult, error) {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("Phase: handoff to factory", "Steps", len(c.steps))
+
+	// Record the planning decision in the decision DAG before creating subtasks.
+	// This links the selected approach and all alternatives to the goal,
+	// feeding the decision blockchain for future learning.
+	decisionCtx := workflow.WithActivityOptions(ctx, c.shortOpts)
+	var decisionID string
+	if err := workflow.ExecuteActivity(decisionCtx, c.pa.RecordPlanningDecisionActivity,
+		c.req, *c.selectedApproach, c.approaches).Get(ctx, &decisionID); err != nil {
+		logger.Warn("Failed to record planning decision (non-fatal)", "error", err)
+	} else if decisionID != "" {
+		logger.Info("Planning decision recorded", "DecisionID", decisionID)
+	}
 
 	handoffCtx := workflow.WithActivityOptions(ctx, c.shortOpts)
 	var subtaskIDs []string
@@ -558,6 +570,7 @@ func (c *ceremony) handoff(ctx workflow.Context) (*PlanningResult, error) {
 		SelectedApproach: c.selectedApproach,
 		SubtaskIDs:       subtaskIDs,
 		Approaches:       c.approaches,
+		DecisionID:       decisionID,
 	}, nil
 }
 

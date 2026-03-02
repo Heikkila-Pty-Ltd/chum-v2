@@ -150,7 +150,7 @@ func registerEngineWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Confi
 }
 
 // registerPlanningWorkflows registers the planning ceremony workflow and activities.
-func registerPlanningWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Config,
+func registerPlanningWorkflows(w worker.Worker, d *dag.DAG, cfg *config.Config,
 	logger *slog.Logger, parser *astpkg.Parser,
 	beadsClients map[string]beads.Store, chatSender notify.ChatSender) {
 
@@ -158,6 +158,7 @@ func registerPlanningWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Con
 
 	pa := &planning.PlanningActivities{
 		DAG:          d,
+		Decisions:    d,
 		Config:       cfg,
 		Logger:       logger,
 		AST:          parser,
@@ -173,6 +174,7 @@ func registerPlanningWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Con
 	w.RegisterActivity(pa.AnswerQuestionActivity)
 	w.RegisterActivity(pa.DecomposeApproachActivity)
 	w.RegisterActivity(pa.CreatePlanSubtasksActivity)
+	w.RegisterActivity(pa.RecordPlanningDecisionActivity)
 	w.RegisterActivity(pa.NotifyChatActivity)
 }
 
