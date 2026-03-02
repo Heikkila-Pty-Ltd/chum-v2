@@ -63,6 +63,8 @@ type General struct {
 	DoltDataDir             string   `toml:"dolt_data_dir"`
 	DoltHost                string   `toml:"dolt_host"`
 	DoltPort                int      `toml:"dolt_port"`
+
+	JarvisPort int `toml:"jarvis_port"` // HTTP API port for Jarvis integration (0 = disabled)
 }
 
 // Project configures a single managed project.

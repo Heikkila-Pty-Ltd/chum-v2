@@ -5,20 +5,24 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"time"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/admit"
 	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beadsync"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/engine"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/jarvis"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
-	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beadsync"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/worker"
 )
 
 func main() {
@@ -56,6 +60,40 @@ func main() {
 	switch subcmd {
 	case "serve":
 		fmt.Println("CHUM v2 — starting worker")
+
+		// Register Jarvis integration hook.
+		engine.RegisterWorkerHook(func(w worker.Worker, c client.Client, d *dag.DAG, cfg *config.Config, logger *slog.Logger) {
+			port := cfg.General.JarvisPort
+			if port == 0 {
+				return
+			}
+
+			workDirs := make(map[string]string)
+			for name, proj := range cfg.Projects {
+				if proj.Enabled {
+					workDirs[name] = proj.Workspace
+				}
+			}
+
+			eng := jarvis.NewEngine(d, c, cfg.General.TaskQueue, workDirs, logger)
+			api := &jarvis.API{Engine: eng, Logger: logger}
+
+			addr := fmt.Sprintf("127.0.0.1:%d", port)
+			ln, err := net.Listen("tcp", addr)
+			if err != nil {
+				logger.Error("Failed to start Jarvis API", "addr", addr, "error", err)
+				return
+			}
+
+			srv := &http.Server{Handler: api.Handler()}
+			go func() {
+				logger.Info("Jarvis API listening", "addr", addr)
+				if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+					logger.Error("Jarvis API error", "error", err)
+				}
+			}()
+		})
+
 		if err := engine.StartWorker(cfg, d, logger); err != nil {
 			logger.Error("Worker failed", "error", err)
 			os.Exit(1)

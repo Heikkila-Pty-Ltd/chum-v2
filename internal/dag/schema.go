@@ -43,13 +43,39 @@ const taskTargetsSchema = `CREATE TABLE IF NOT EXISTS task_targets (
 	FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 );`
 
+const decisionsTableSchema = `CREATE TABLE IF NOT EXISTS decisions (
+	id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	title TEXT NOT NULL DEFAULT '',
+	context TEXT NOT NULL DEFAULT '',
+	outcome TEXT NOT NULL DEFAULT '',
+	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);`
+
+const decisionAlternativesTableSchema = `CREATE TABLE IF NOT EXISTS decision_alternatives (
+	id TEXT PRIMARY KEY,
+	decision_id TEXT NOT NULL,
+	label TEXT NOT NULL DEFAULT '',
+	reasoning TEXT NOT NULL DEFAULT '',
+	selected INTEGER NOT NULL DEFAULT 0,
+	uct_score REAL NOT NULL DEFAULT 0,
+	visits INTEGER NOT NULL DEFAULT 0,
+	reward REAL NOT NULL DEFAULT 0,
+	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	FOREIGN KEY (decision_id) REFERENCES decisions(id) ON DELETE CASCADE
+);`
+
+const indexDecisionsTaskID = `CREATE INDEX IF NOT EXISTS idx_decisions_task_id ON decisions(task_id);`
+const indexAlternativesDecisionID = `CREATE INDEX IF NOT EXISTS idx_alternatives_decision_id ON decision_alternatives(decision_id);`
+
 const taskColumns = `id, title, description, status, priority, type, assignee, labels,
 	estimate_minutes, parent_id, acceptance, project, error_log, metadata, created_at, updated_at`
 
 // EnsureSchema creates the tasks, task_edges, and task_targets tables
 // if they don't exist, and runs any necessary migrations.
 func (d *DAG) EnsureSchema(ctx context.Context) error {
-	for _, ddl := range []string{taskTableSchema, edgeTableSchema, taskTargetsSchema} {
+	for _, ddl := range []string{taskTableSchema, edgeTableSchema, taskTargetsSchema, decisionsTableSchema, decisionAlternativesTableSchema, indexDecisionsTaskID, indexAlternativesDecisionID} {
 		if _, err := d.db.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("ensure schema: %w", err)
 		}
@@ -63,19 +89,17 @@ func (d *DAG) EnsureSchema(ctx context.Context) error {
 	return nil
 }
 
-// allowedMigrationTables guards migrateAddColumn against accidental SQL injection.
-// Only tables listed here may be passed to the dynamic ALTER TABLE statement.
-var allowedMigrationTables = map[string]bool{
-	"tasks":      true,
-	"task_edges": true,
-}
-
 // migrateAddColumn adds a column to a table if it doesn't already exist.
 // Uses PRAGMA table_info to check for the column's presence before ALTER TABLE.
-// Table and column names are validated against an allowlist to prevent SQL injection.
+// Table and column names are validated via character allowlist to prevent SQL injection.
 func (d *DAG) migrateAddColumn(ctx context.Context, table, column, typedef string) error {
-	if !allowedMigrationTables[table] {
-		return fmt.Errorf("migrateAddColumn: table %q not in allowlist", table)
+	// Validate identifiers to prevent SQL injection (internal callers only, but defense in depth).
+	for _, ident := range []string{table, column} {
+		for _, ch := range ident {
+			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_') {
+				return fmt.Errorf("invalid identifier %q", ident)
+			}
+		}
 	}
 	rows, err := d.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
 	if err != nil {
