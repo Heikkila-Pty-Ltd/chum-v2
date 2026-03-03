@@ -76,7 +76,7 @@ func main() {
 			}
 
 			eng := jarvis.NewEngine(d, c, cfg.General.TaskQueue, workDirs, logger)
-			api := &jarvis.API{Engine: eng, DAG: d, Logger: logger, WebDir: "web"}
+			api := &jarvis.API{Engine: eng, Logger: logger}
 
 			addr := fmt.Sprintf("127.0.0.1:%d", port)
 			ln, err := net.Listen("tcp", addr)
