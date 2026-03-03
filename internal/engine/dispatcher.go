@@ -74,7 +74,7 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 		logger.Info("Dispatched agent", "TaskID", c.TaskID, "Agent", c.Agent, "Tier", c.Tier, "ChildWorkflowID", childExecution.ID)
 	}
 
-	// Notify: tasks dispatched to sharks
+	// Notify: tasks dispatched to agents
 	if len(candidates) > 0 {
 		taskIDs := make([]string, 0, len(candidates))
 		for _, c := range candidates {

@@ -37,7 +37,7 @@ func (a *Activities) NotifyActivity(ctx context.Context, req NotifyRequest) erro
 	return a.ChatSend.Send(ctx, roomID, msg)
 }
 
-// themed produces an ocean-themed notification message for the given event.
+// themed produces a notification message for the given event.
 // Returns empty string for unknown events (caller should skip sending).
 func themed(event, taskID string, extra map[string]string) string {
 	get := func(key string) string {
@@ -54,21 +54,21 @@ func themed(event, taskID string, extra map[string]string) string {
 		if count == "" {
 			count = "?"
 		}
-		return fmt.Sprintf("🦈 **chum fed to %s sharks** — %s", count, tasks)
+		return fmt.Sprintf("📤 **dispatched %s tasks** — %s", count, tasks)
 
 	case "execute":
 		agent := get("agent")
-		return fmt.Sprintf("🦈 **shark hunting** — `%s` agent=%s", taskID, agent)
+		return fmt.Sprintf("⚡ **agent started** — `%s` agent=%s", taskID, agent)
 
 	case "dod_pass":
-		return fmt.Sprintf("✅ **orca approved the kill** — `%s`", taskID)
+		return fmt.Sprintf("✅ **DoD passed** — `%s`", taskID)
 
 	case "dod_fail":
 		failures := get("failures")
 		if len(failures) > 200 {
 			failures = failures[:200] + "…"
 		}
-		return fmt.Sprintf("❌ **orca rejected** — `%s`: %s", taskID, failures)
+		return fmt.Sprintf("❌ **DoD failed** — `%s`: %s", taskID, failures)
 
 	case "complete":
 		pr := get("pr")
@@ -80,16 +80,16 @@ func themed(event, taskID string, extra map[string]string) string {
 		if review != "" {
 			suffix += fmt.Sprintf(" — %s", review)
 		}
-		return fmt.Sprintf("🎉 **catch landed** — `%s`%s", taskID, suffix)
+		return fmt.Sprintf("🎉 **task complete** — `%s`%s", taskID, suffix)
 
 	case "review":
 		reviewer := get("reviewer")
 		round := get("round")
-		return fmt.Sprintf("🔍 **pilot fish inspecting** — `%s` reviewer=%s round=%s", taskID, reviewer, round)
+		return fmt.Sprintf("🔍 **review started** — `%s` reviewer=%s round=%s", taskID, reviewer, round)
 
 	case "review_approved":
 		reviewer := get("reviewer")
-		return fmt.Sprintf("✅ **pilot fish approved** — `%s` reviewer=%s", taskID, reviewer)
+		return fmt.Sprintf("✅ **review approved** — `%s` reviewer=%s", taskID, reviewer)
 
 	case "review_changes":
 		reviewer := get("reviewer")
@@ -108,11 +108,11 @@ func themed(event, taskID string, extra map[string]string) string {
 	case "escalate":
 		reason := get("reason")
 		sub := get("sub_reason")
-		return fmt.Sprintf("🚨 **shark beached** — `%s` reason=%s (%s)", taskID, reason, sub)
+		return fmt.Sprintf("🚨 **task blocked** — `%s` reason=%s (%s)", taskID, reason, sub)
 
 	case "decomposed":
 		subtasks := get("subtasks")
-		return fmt.Sprintf("🦀 **task decomposed** — `%s` into %s subtasks", taskID, subtasks)
+		return fmt.Sprintf("🔀 **task decomposed** — `%s` into %s subtasks", taskID, subtasks)
 
 	default:
 		return ""
