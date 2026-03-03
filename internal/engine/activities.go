@@ -254,9 +254,10 @@ func (a *Activities) buildCodebaseContextForTask(ctx context.Context, workDir, t
 		files, err := a.AST.ParseDir(ctx, workDir)
 		if err == nil && len(files) > 0 {
 			if taskPrompt != "" {
-				relevant, surrounding := astpkg.FilterRelevant(taskPrompt, files)
+				ef := astpkg.NewEmbedFilter()
+				relevant, surrounding := ef.FilterRelevantByEmbedding(ctx, taskPrompt, files)
 				if len(relevant) > 0 {
-					a.Logger.Info("Targeted context injection",
+					a.Logger.Info("Targeted context injection (embedding)",
 						"relevant", len(relevant),
 						"surrounding", len(surrounding),
 						"total", len(files))

@@ -474,7 +474,8 @@ func (pa *PlanningActivities) buildCodebaseContextForTask(ctx context.Context, w
 		files, err := pa.AST.ParseDir(ctx, workDir)
 		if err == nil && len(files) > 0 {
 			if taskPrompt != "" {
-				relevant, surrounding := astpkg.FilterRelevant(taskPrompt, files)
+				ef := astpkg.NewEmbedFilter()
+				relevant, surrounding := ef.FilterRelevantByEmbedding(ctx, taskPrompt, files)
 				if len(relevant) > 0 {
 					return astpkg.SummarizeTargeted(surrounding, relevant)
 				}
