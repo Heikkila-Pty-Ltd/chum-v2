@@ -384,3 +384,103 @@ func TestDoltDefaults(t *testing.T) {
 		t.Errorf("expected default 30s, got %v", cfg.General.DoltHealthCheckInterval.Duration)
 	}
 }
+
+func TestRateLimitDefaults(t *testing.T) {
+	t.Parallel()
+	content := `[general]`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chum.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if cfg.RateLimit.DefaultRate != 10 {
+		t.Errorf("expected default rate 10, got %v", cfg.RateLimit.DefaultRate)
+	}
+	if cfg.RateLimit.DefaultBurst != 20 {
+		t.Errorf("expected default burst 20, got %d", cfg.RateLimit.DefaultBurst)
+	}
+	if cfg.RateLimit.CleanupInterval.Duration != 5*time.Minute {
+		t.Errorf("expected default cleanup interval 5m, got %v", cfg.RateLimit.CleanupInterval.Duration)
+	}
+	if len(cfg.RateLimit.Rules) != 0 {
+		t.Errorf("expected empty rules, got %v", cfg.RateLimit.Rules)
+	}
+}
+
+func TestRateLimitConfigWithRules(t *testing.T) {
+	t.Parallel()
+	content := `
+[general]
+
+[rate_limit]
+enabled = true
+default_rate = 15.5
+default_burst = 30
+cleanup_interval = "10m"
+
+[[rate_limit.rules]]
+path = "/api/v1/upload"
+rate = 2.0
+burst = 5
+
+[[rate_limit.rules]]
+path = "/api/v1/download"
+rate = 100.0
+burst = 200
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chum.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if !cfg.RateLimit.Enabled {
+		t.Error("expected rate limit to be enabled")
+	}
+	if cfg.RateLimit.DefaultRate != 15.5 {
+		t.Errorf("expected default rate 15.5, got %v", cfg.RateLimit.DefaultRate)
+	}
+	if cfg.RateLimit.DefaultBurst != 30 {
+		t.Errorf("expected default burst 30, got %d", cfg.RateLimit.DefaultBurst)
+	}
+	if cfg.RateLimit.CleanupInterval.Duration != 10*time.Minute {
+		t.Errorf("expected cleanup interval 10m, got %v", cfg.RateLimit.CleanupInterval.Duration)
+	}
+
+	if len(cfg.RateLimit.Rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(cfg.RateLimit.Rules))
+	}
+
+	rule1 := cfg.RateLimit.Rules[0]
+	if rule1.Path != "/api/v1/upload" {
+		t.Errorf("expected path '/api/v1/upload', got %s", rule1.Path)
+	}
+	if rule1.Rate != 2.0 {
+		t.Errorf("expected rate 2.0, got %v", rule1.Rate)
+	}
+	if rule1.Burst != 5 {
+		t.Errorf("expected burst 5, got %d", rule1.Burst)
+	}
+
+	rule2 := cfg.RateLimit.Rules[1]
+	if rule2.Path != "/api/v1/download" {
+		t.Errorf("expected path '/api/v1/download', got %s", rule2.Path)
+	}
+	if rule2.Rate != 100.0 {
+		t.Errorf("expected rate 100.0, got %v", rule2.Rate)
+	}
+	if rule2.Burst != 200 {
+		t.Errorf("expected burst 200, got %d", rule2.Burst)
+	}
+}

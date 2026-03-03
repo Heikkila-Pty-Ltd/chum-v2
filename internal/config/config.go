@@ -24,6 +24,22 @@ func (d *Duration) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// RateLimitRule defines per-endpoint rate limiting overrides.
+type RateLimitRule struct {
+	Path  string  `toml:"path"`
+	Rate  float64 `toml:"rate"`
+	Burst int     `toml:"burst"`
+}
+
+// RateLimit configures request rate limiting.
+type RateLimit struct {
+	Enabled         bool            `toml:"enabled"`
+	DefaultRate     float64         `toml:"default_rate"`
+	DefaultBurst    int             `toml:"default_burst"`
+	Rules           []RateLimitRule `toml:"rules"`
+	CleanupInterval Duration        `toml:"cleanup_interval"`
+}
+
 // Config is the top-level CHUM configuration.
 type Config struct {
 	General   General             `toml:"general"`
@@ -31,6 +47,7 @@ type Config struct {
 	Projects  map[string]Project  `toml:"projects"`
 	Providers map[string]Provider `toml:"providers"`
 	Tiers     Tiers               `toml:"tiers"`
+	RateLimit RateLimit           `toml:"rate_limit"`
 }
 
 // Tiers maps tier names to ordered lists of provider keys.
@@ -160,6 +177,16 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Planning.PollInterval.Duration == 0 {
 		cfg.Planning.PollInterval.Duration = 10 * time.Second
+	}
+	// Rate limiting defaults
+	if cfg.RateLimit.DefaultRate == 0 {
+		cfg.RateLimit.DefaultRate = 10
+	}
+	if cfg.RateLimit.DefaultBurst == 0 {
+		cfg.RateLimit.DefaultBurst = 20
+	}
+	if cfg.RateLimit.CleanupInterval.Duration == 0 {
+		cfg.RateLimit.CleanupInterval.Duration = 5 * time.Minute
 	}
 	// Tier defaults: if no explicit [tiers] section, auto-populate from Provider.Tier fields.
 	if len(cfg.Tiers.Fast) == 0 && len(cfg.Tiers.Balanced) == 0 && len(cfg.Tiers.Premium) == 0 {
