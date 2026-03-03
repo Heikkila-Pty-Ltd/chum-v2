@@ -33,6 +33,101 @@ func TestParseReviewSignal_InvalidDefaultsToRequestChanges(t *testing.T) {
 	}
 }
 
+func TestParseReviewSignal_EmptyInput(t *testing.T) {
+	t.Parallel()
+
+	signal, body, invalid := parseReviewSignal("")
+	if !invalid {
+		t.Fatal("expected invalid=true for empty input")
+	}
+	if signal != "REQUEST_CHANGES" {
+		t.Fatalf("signal = %q, want REQUEST_CHANGES", signal)
+	}
+	if body != "Invalid reviewer output: empty response." {
+		t.Fatalf("body = %q, want empty response message", body)
+	}
+}
+
+func TestParseReviewSignal_WhitespaceOnlyInput(t *testing.T) {
+	t.Parallel()
+
+	signal, body, invalid := parseReviewSignal("   \n\t  \n  ")
+	if !invalid {
+		t.Fatal("expected invalid=true for whitespace-only input")
+	}
+	if signal != "REQUEST_CHANGES" {
+		t.Fatalf("signal = %q, want REQUEST_CHANGES", signal)
+	}
+	if body != "Invalid reviewer output: empty response." {
+		t.Fatalf("body = %q, want empty response message", body)
+	}
+}
+
+func TestParseReviewSignal_ApproveWithNoBody(t *testing.T) {
+	t.Parallel()
+
+	signal, body, invalid := parseReviewSignal("APPROVE")
+	if invalid {
+		t.Fatal("expected invalid=false for valid APPROVE signal")
+	}
+	if signal != "APPROVE" {
+		t.Fatalf("signal = %q, want APPROVE", signal)
+	}
+	if body != "Approved." {
+		t.Fatalf("body = %q, want default approved message", body)
+	}
+}
+
+func TestParseReviewSignal_RequestChangesWithMultiLineBody(t *testing.T) {
+	t.Parallel()
+
+	input := `REQUEST_CHANGES
+Please fix the following issues:
+1. Add proper error handling
+2. Update documentation
+3. Fix memory leak in line 42
+
+These changes are required before merging.`
+
+	signal, body, invalid := parseReviewSignal(input)
+	if invalid {
+		t.Fatal("expected invalid=false for valid REQUEST_CHANGES signal")
+	}
+	if signal != "REQUEST_CHANGES" {
+		t.Fatalf("signal = %q, want REQUEST_CHANGES", signal)
+	}
+
+	expectedBody := `Please fix the following issues:
+1. Add proper error handling
+2. Update documentation
+3. Fix memory leak in line 42
+
+These changes are required before merging.`
+	if body != expectedBody {
+		t.Fatalf("body = %q, want multi-line body", body)
+	}
+}
+
+func TestParseReviewSignal_SignalWithLeadingWhitespace(t *testing.T) {
+	t.Parallel()
+
+	input := `
+
+   APPROVE
+Code looks good to go.`
+
+	signal, body, invalid := parseReviewSignal(input)
+	if invalid {
+		t.Fatal("expected invalid=false for valid signal with leading whitespace")
+	}
+	if signal != "APPROVE" {
+		t.Fatalf("signal = %q, want APPROVE", signal)
+	}
+	if body != "Code looks good to go." {
+		t.Fatalf("body = %q, want trimmed body", body)
+	}
+}
+
 func TestDefaultReviewer(t *testing.T) {
 	t.Parallel()
 
