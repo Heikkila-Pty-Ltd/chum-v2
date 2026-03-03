@@ -8,7 +8,8 @@ import (
 
 // MaxEstimateMinutes is the upper bound for task estimates.
 // Tasks exceeding this must be broken down into smaller units.
-const MaxEstimateMinutes = 30
+// Kept deliberately tight to prevent agent timeout / iteration exhaustion.
+const MaxEstimateMinutes = 15
 
 // MinDescriptionLen is the minimum length for a task description.
 const MinDescriptionLen = 50
@@ -53,7 +54,7 @@ func ValidateStructure(t dag.Task) ValidationResult {
 		return ValidationResult{Reason: "estimate_minutes must be set"}
 	}
 	if t.EstimateMinutes > MaxEstimateMinutes {
-		return ValidationResult{Reason: "tasks over 30 minutes must be broken down"}
+		return ValidationResult{Reason: "tasks over 15 minutes must be broken down"}
 	}
 
 	return ValidationResult{Pass: true}

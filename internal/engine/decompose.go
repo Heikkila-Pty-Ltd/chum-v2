@@ -107,9 +107,16 @@ Return a JSON object with this schema:
 Rules:
 - Each step must be independently implementable and testable.
 - Each step must have a clear title, detailed description, acceptance criteria, and time estimate.
-- If the task is already atomic (a single clear, bounded change), return {"steps": []} to indicate no decomposition needed.
+- Maximum estimate per step: 15 minutes. Prefer 5-10 minute steps.
+- Each step should require at most 15 tool calls (file reads, edits, test runs).
+- Each step should touch at most 3 files.
+- If the task is already atomic (a single clear, bounded change completable in ≤15 minutes), return {"steps": []} to indicate no decomposition needed.
 - Do NOT decompose tasks that are already specific and bounded (e.g. "add field X to struct Y", "fix bug in function Z").
 - DO decompose tasks that are vague, multi-part, or touch multiple subsystems.
 - Maximum 5 steps. Prefer fewer, larger steps over many tiny ones.
+- ANTI-PATTERNS (never create steps like these):
+  - "Refactor X and verify all tests pass" → split into "Refactor X" and "Run test suite"
+  - "Add feature and update docs and tests" → three separate steps
+  - "Investigate and fix" → split into "Diagnose root cause" and "Apply fix"
 - Output ONLY the JSON object. No commentary, no markdown fences.`, taskPrompt, codeContext)
 }
