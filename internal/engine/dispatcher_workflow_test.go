@@ -86,6 +86,7 @@ func TestDispatcherWorkflow_DispatchesCandidateWithExpectedRequest(t *testing.T)
 			WorkDir: "/tmp/p",
 			Agent:   "claude",
 			Model:   "claude-sonnet",
+			Tier:    "fast",
 		},
 	}, nil)
 	env.OnActivity(da.MarkTaskRunningActivity, mock.Anything, "task-1").Return(nil)
@@ -111,6 +112,9 @@ func TestDispatcherWorkflow_DispatchesCandidateWithExpectedRequest(t *testing.T)
 		}
 		if req.Model != "claude-sonnet" {
 			t.Fatalf("Model = %q, want claude-sonnet", req.Model)
+		}
+		if req.Tier != "fast" {
+			t.Fatalf("Tier = %q, want fast", req.Tier)
 		}
 	}).Return(nil)
 

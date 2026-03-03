@@ -71,7 +71,7 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 			logger.Error("Failed to start agent workflow", "TaskID", c.TaskID, "error", err)
 			continue
 		}
-		logger.Info("Dispatched agent", "TaskID", c.TaskID, "Agent", c.Agent, "ChildWorkflowID", childExecution.ID)
+		logger.Info("Dispatched agent", "TaskID", c.TaskID, "Agent", c.Agent, "Tier", c.Tier, "ChildWorkflowID", childExecution.ID)
 	}
 
 	return nil
@@ -85,6 +85,7 @@ type DispatchCandidate struct {
 	WorkDir       string
 	Agent         string
 	Model         string
+	Tier          string
 	ParentID      string
 	ExecTimeout   time.Duration
 	ShortTimeout  time.Duration
@@ -127,8 +128,8 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 			tasks = tasks[:max]
 		}
 
-		// Pick the first enabled provider
-		agent, model := pickProvider(da.Config)
+		// Pick the first enabled provider, starting from the cheapest tier
+		agent, model, tier := PickProvider(da.Config, "fast")
 
 		for _, t := range tasks {
 			prompt := t.Description
@@ -143,6 +144,7 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 				WorkDir:       project.Workspace,
 				Agent:         agent,
 				Model:         model,
+				Tier:          tier,
 				ParentID:      t.ParentID,
 				ExecTimeout:   da.Config.General.ExecTimeout.Duration,
 				ShortTimeout:  da.Config.General.ShortTimeout.Duration,
@@ -181,13 +183,4 @@ func pullMaster(ctx context.Context, workDir string, logger *slog.Logger) {
 	} else {
 		logger.Info("Pulled latest from origin", "WorkDir", workDir)
 	}
-}
-
-func pickProvider(cfg *config.Config) (cli, model string) {
-	for _, p := range cfg.Providers {
-		if p.Enabled {
-			return p.CLI, p.Model
-		}
-	}
-	return "claude", "" // fallback
 }

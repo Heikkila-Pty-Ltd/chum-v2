@@ -18,6 +18,7 @@ type TaskRequest struct {
 	WorkDir  string `json:"work_dir"`   // project workspace root
 	Agent    string `json:"agent"`      // CLI name (claude, gemini, codex)
 	Model    string `json:"model"`      // optional model override
+	Tier     string `json:"tier"`       // dispatch tier: fast, balanced, premium
 	ParentID string `json:"parent_id"`  // non-empty for subtasks (skip decomposition)
 
 	// Timeouts (zero = use defaults). Populated from config by dispatcher.

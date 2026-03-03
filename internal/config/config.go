@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -28,6 +30,14 @@ type Config struct {
 	Planning  Planning            `toml:"planning"`
 	Projects  map[string]Project  `toml:"projects"`
 	Providers map[string]Provider `toml:"providers"`
+	Tiers     Tiers               `toml:"tiers"`
+}
+
+// Tiers maps tier names to ordered lists of provider keys.
+type Tiers struct {
+	Fast     []string `toml:"fast"`
+	Balanced []string `toml:"balanced"`
+	Premium  []string `toml:"premium"`
 }
 
 // Planning configures the push-based planning ceremony.
@@ -80,6 +90,7 @@ type Provider struct {
 	Model    string `toml:"model"`
 	Reviewer string `toml:"reviewer"`
 	Enabled  bool   `toml:"enabled"`
+	Tier     string `toml:"tier"` // "fast", "balanced", or "premium" (default: "balanced")
 }
 
 // Load reads and parses a TOML config file.
@@ -150,5 +161,37 @@ func Load(path string) (*Config, error) {
 	if cfg.Planning.PollInterval.Duration == 0 {
 		cfg.Planning.PollInterval.Duration = 10 * time.Second
 	}
+	// Tier defaults: if no explicit [tiers] section, auto-populate from Provider.Tier fields.
+	if len(cfg.Tiers.Fast) == 0 && len(cfg.Tiers.Balanced) == 0 && len(cfg.Tiers.Premium) == 0 {
+		cfg.Tiers = buildTiersFromProviders(cfg.Providers)
+	}
+
 	return &cfg, nil
+}
+
+// buildTiersFromProviders auto-populates Tiers from Provider.Tier fields
+// when no explicit [tiers] section is defined. Produces sorted, deterministic output.
+func buildTiersFromProviders(providers map[string]Provider) Tiers {
+	var t Tiers
+	names := make([]string, 0, len(providers))
+	for name := range providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		p := providers[name]
+		tier := strings.ToLower(strings.TrimSpace(p.Tier))
+		if tier == "" {
+			tier = "balanced"
+		}
+		switch tier {
+		case "fast":
+			t.Fast = append(t.Fast, name)
+		case "balanced":
+			t.Balanced = append(t.Balanced, name)
+		case "premium":
+			t.Premium = append(t.Premium, name)
+		}
+	}
+	return t
 }

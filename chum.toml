@@ -26,9 +26,16 @@ cli = "claude"
 model = "claude-sonnet-4-20250514"
 reviewer = "gemini"
 enabled = true
+tier = "balanced"
 
 [providers.gemini]
 cli = "gemini"
 model = "gemini-2.5-flash"
 reviewer = "claude"
 enabled = false
+tier = "fast"
+
+[tiers]
+fast = ["gemini"]
+balanced = ["claude"]
+premium = []
