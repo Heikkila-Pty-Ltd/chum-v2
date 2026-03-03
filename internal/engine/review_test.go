@@ -1,9 +1,6 @@
 package engine
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestParseReviewSignal_UnwrapsClaudeEnvelope(t *testing.T) {
 	t.Parallel()
@@ -50,93 +47,122 @@ func TestDefaultReviewer(t *testing.T) {
 	}
 }
 
-func TestBuildReviewPrompt_ContainsPRNumber(t *testing.T) {
+func TestParseRepoSlug_SSH(t *testing.T) {
 	t.Parallel()
 
-	prNumber := 42
-	round := 1
-	diff := "some diff content"
-
-	prompt := buildReviewPrompt(prNumber, round, diff)
-
-	if !containsString(prompt, "#42") {
-		t.Fatalf("expected prompt to contain PR number #42, got: %s", prompt)
+	slug, err := parseRepoSlug("git@github.com:owner/repo.git")
+	if err != nil {
+		t.Fatalf("parseRepoSlug SSH with .git: %v", err)
+	}
+	if slug != "owner/repo" {
+		t.Fatalf("slug = %q, want owner/repo", slug)
 	}
 }
 
-func TestBuildReviewPrompt_ContainsRoundNumber(t *testing.T) {
+func TestParseRepoSlug_HTTPS(t *testing.T) {
 	t.Parallel()
 
-	prNumber := 1
-	round := 3
-	diff := "some diff content"
-
-	prompt := buildReviewPrompt(prNumber, round, diff)
-
-	if !containsString(prompt, "Review round: 3") {
-		t.Fatalf("expected prompt to contain round number 3, got: %s", prompt)
+	slug, err := parseRepoSlug("https://github.com/owner/repo.git")
+	if err != nil {
+		t.Fatalf("parseRepoSlug HTTPS with .git: %v", err)
+	}
+	if slug != "owner/repo" {
+		t.Fatalf("slug = %q, want owner/repo", slug)
 	}
 }
 
-func TestBuildReviewPrompt_ContainsDiffText(t *testing.T) {
+func TestParseRepoSlug_HTTPSNoGit(t *testing.T) {
 	t.Parallel()
 
-	prNumber := 1
-	round := 1
-	diff := "unique diff content xyz123"
-
-	prompt := buildReviewPrompt(prNumber, round, diff)
-
-	if !containsString(prompt, diff) {
-		t.Fatalf("expected prompt to contain diff text %q, got: %s", diff, prompt)
+	slug, err := parseRepoSlug("https://github.com/owner/repo")
+	if err != nil {
+		t.Fatalf("parseRepoSlug HTTPS without .git: %v", err)
+	}
+	if slug != "owner/repo" {
+		t.Fatalf("slug = %q, want owner/repo", slug)
 	}
 }
 
-func TestCapDiff_UnderLimit(t *testing.T) {
+func TestParseRepoSlug_HTTP(t *testing.T) {
 	t.Parallel()
 
-	input := "small diff content"
-	result := capDiff(input)
-
-	if result != input {
-		t.Fatalf("expected unchanged input for small diff, got: %s", result)
+	slug, err := parseRepoSlug("http://github.com/owner/repo.git")
+	if err != nil {
+		t.Fatalf("parseRepoSlug HTTP with .git: %v", err)
+	}
+	if slug != "owner/repo" {
+		t.Fatalf("slug = %q, want owner/repo", slug)
 	}
 }
 
-func TestCapDiff_ExactlyAtLimit(t *testing.T) {
+func TestParseRepoSlug_InvalidURL(t *testing.T) {
 	t.Parallel()
 
-	// Create a string exactly 120000 bytes
-	input := strings.Repeat("a", 120000)
-	result := capDiff(input)
-
-	if result != input {
-		t.Fatalf("expected unchanged input for diff exactly at limit")
+	_, err := parseRepoSlug("invalid-url")
+	if err == nil {
+		t.Fatal("parseRepoSlug with invalid URL should return error")
 	}
-	if len(result) != 120000 {
-		t.Fatalf("expected result to be exactly 120000 bytes, got %d", len(result))
+	expectedMsg := "unsupported remote origin URL: invalid-url"
+	if err.Error() != expectedMsg {
+		t.Fatalf("error = %q, want %q", err.Error(), expectedMsg)
 	}
 }
 
-func TestCapDiff_OverLimit(t *testing.T) {
+func TestParseRepoSlug_NoSlash(t *testing.T) {
 	t.Parallel()
 
-	// Create a string over 120000 bytes
-	input := strings.Repeat("b", 120001)
-	result := capDiff(input)
-
-	expectedTruncation := "\n\n[truncated by CHUM]"
-	if !strings.HasSuffix(result, expectedTruncation) {
-		t.Fatalf("expected result to end with truncation marker, got: %s", result[len(result)-30:])
-	}
-
-	// Should be exactly 120000 + length of truncation marker
-	expectedLength := 120000 + len(expectedTruncation)
-	if len(result) != expectedLength {
-		t.Fatalf("expected result length %d, got %d", expectedLength, len(result))
+	_, err := parseRepoSlug("https://github.com/onlyowner")
+	if err == nil {
+		t.Fatal("parseRepoSlug without slash should return error")
 	}
 }
 
-func containsString(s, substr string) bool {
-	return strings.Contains(s, substr)
+func TestReviewStateToOutcome_Approved(t *testing.T) {
+	t.Parallel()
+
+	outcome := reviewStateToOutcome("APPROVED")
+	if outcome != ReviewApproved {
+		t.Fatalf("reviewStateToOutcome(APPROVED) = %q, want %q", outcome, ReviewApproved)
+	}
+}
+
+func TestReviewStateToOutcome_ChangesRequested(t *testing.T) {
+	t.Parallel()
+
+	outcome := reviewStateToOutcome("CHANGES_REQUESTED")
+	if outcome != ReviewChangesRequested {
+		t.Fatalf("reviewStateToOutcome(CHANGES_REQUESTED) = %q, want %q", outcome, ReviewChangesRequested)
+	}
+}
+
+func TestReviewStateToOutcome_Commented(t *testing.T) {
+	t.Parallel()
+
+	outcome := reviewStateToOutcome("COMMENTED")
+	if outcome != ReviewNoActivity {
+		t.Fatalf("reviewStateToOutcome(COMMENTED) = %q, want %q", outcome, ReviewNoActivity)
+	}
+}
+
+func TestReviewStateToOutcome_EmptyString(t *testing.T) {
+	t.Parallel()
+
+	outcome := reviewStateToOutcome("")
+	if outcome != ReviewNoActivity {
+		t.Fatalf("reviewStateToOutcome(\"\") = %q, want %q", outcome, ReviewNoActivity)
+	}
+}
+
+func TestReviewStateToOutcome_CaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	outcome := reviewStateToOutcome("approved")
+	if outcome != ReviewApproved {
+		t.Fatalf("reviewStateToOutcome(approved) = %q, want %q", outcome, ReviewApproved)
+	}
+
+	outcome = reviewStateToOutcome("changes_requested")
+	if outcome != ReviewChangesRequested {
+		t.Fatalf("reviewStateToOutcome(changes_requested) = %q, want %q", outcome, ReviewChangesRequested)
+	}
 }
