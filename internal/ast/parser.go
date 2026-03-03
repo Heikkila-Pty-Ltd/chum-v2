@@ -59,8 +59,10 @@ func (p *Parser) ParseFile(ctx context.Context, path string) (*ParsedFile, error
 
 	// Check cache
 	if cached, ok := p.cache.Load(path); ok {
-		entry := cached.(cacheEntry)
-		if entry.mtime.Equal(mtime) {
+		entry, ok := cached.(cacheEntry)
+		if !ok {
+			// Invalid cache entry type, skip cache
+		} else if entry.mtime.Equal(mtime) {
 			return entry.result, nil
 		}
 	}
