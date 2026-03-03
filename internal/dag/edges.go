@@ -101,3 +101,90 @@ func (d *DAG) RemoveEdge(ctx context.Context, from, to string) error {
 	}
 	return nil
 }
+
+// DetectCycles returns the first cycle found in the DAG, or nil if no cycle exists.
+// Uses DFS with color coding: white (unvisited), gray (in current path), black (processed).
+func (d *DAG) DetectCycles(ctx context.Context, project string) ([]string, error) {
+	// Get all task IDs for the project
+	rows, err := d.db.QueryContext(ctx, "SELECT id FROM tasks WHERE project = ?", project)
+	if err != nil {
+		return nil, fmt.Errorf("get tasks for project %s: %w", project, err)
+	}
+	defer rows.Close()
+
+	var taskIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan task id: %w", err)
+		}
+		taskIDs = append(taskIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tasks: %w", err)
+	}
+
+	// Build adjacency list
+	adjList := make(map[string][]string)
+	for _, id := range taskIDs {
+		deps, err := d.GetDependencies(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("get dependencies for %s: %w", id, err)
+		}
+		adjList[id] = deps
+	}
+
+	// DFS with color coding
+	const (
+		white = 0 // unvisited
+		gray  = 1 // in current path
+		black = 2 // processed
+	)
+
+	colors := make(map[string]int)
+	parent := make(map[string]string)
+
+	var dfs func(string) ([]string, bool)
+	dfs = func(node string) ([]string, bool) {
+		colors[node] = gray
+
+		for _, dep := range adjList[node] {
+			parent[dep] = node
+			switch colors[dep] {
+			case gray:
+				// Back edge found - reconstruct cycle
+				var cycle []string
+				current := node
+				for current != dep {
+					cycle = append(cycle, current)
+					current = parent[current]
+				}
+				cycle = append(cycle, dep)
+				// Reverse to get proper order
+				for i := len(cycle)/2 - 1; i >= 0; i-- {
+					opp := len(cycle) - 1 - i
+					cycle[i], cycle[opp] = cycle[opp], cycle[i]
+				}
+				return cycle, true
+			case white:
+				if cycle, found := dfs(dep); found {
+					return cycle, true
+				}
+			}
+		}
+
+		colors[node] = black
+		return nil, false
+	}
+
+	// Check all unvisited nodes
+	for _, taskID := range taskIDs {
+		if colors[taskID] == white {
+			if cycle, found := dfs(taskID); found {
+				return cycle, nil
+			}
+		}
+	}
+
+	return nil, nil // No cycle found
+}

@@ -859,6 +859,95 @@ func TestUpdateTask_Metadata(t *testing.T) {
 	}
 }
 
+// --- Cycle Detection ---
+
+func TestDetectCycles(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(*DAG, context.Context)
+		wantLen int
+		desc    string
+	}{
+		{
+			name: "self_referencing_task",
+			setup: func(d *DAG, ctx context.Context) {
+				d.CreateTask(ctx, Task{ID: "self", Project: "p"})
+				// Force self-edge by bypassing AddEdge validation
+				d.db.ExecContext(ctx, "INSERT INTO task_edges (from_task, to_task, source) VALUES (?, ?, ?)", "self", "self", "test")
+			},
+			wantLen: 1,
+			desc:    "should detect single-node self-cycle",
+		},
+		{
+			name: "two_node_cycle",
+			setup: func(d *DAG, ctx context.Context) {
+				d.CreateTask(ctx, Task{ID: "a", Project: "p"})
+				d.CreateTask(ctx, Task{ID: "b", Project: "p"})
+				d.AddEdge(ctx, "a", "b") // a depends on b
+				d.AddEdge(ctx, "b", "a") // b depends on a
+			},
+			wantLen: 2,
+			desc:    "should detect two-node cycle",
+		},
+		{
+			name: "deep_chain_no_cycle",
+			setup: func(d *DAG, ctx context.Context) {
+				d.CreateTask(ctx, Task{ID: "start", Project: "p"})
+				d.CreateTask(ctx, Task{ID: "mid1", Project: "p"})
+				d.CreateTask(ctx, Task{ID: "mid2", Project: "p"})
+				d.CreateTask(ctx, Task{ID: "mid3", Project: "p"})
+				d.CreateTask(ctx, Task{ID: "end", Project: "p"})
+				d.AddEdge(ctx, "mid1", "start")
+				d.AddEdge(ctx, "mid2", "mid1")
+				d.AddEdge(ctx, "mid3", "mid2")
+				d.AddEdge(ctx, "end", "mid3")
+			},
+			wantLen: 0,
+			desc:    "should pass with no cycle in linear chain",
+		},
+		{
+			name: "diamond_dependency_no_cycle",
+			setup: func(d *DAG, ctx context.Context) {
+				d.CreateTask(ctx, Task{ID: "top", Project: "p"})
+				d.CreateTask(ctx, Task{ID: "left", Project: "p"})
+				d.CreateTask(ctx, Task{ID: "right", Project: "p"})
+				d.CreateTask(ctx, Task{ID: "bottom", Project: "p"})
+				d.AddEdge(ctx, "left", "top")
+				d.AddEdge(ctx, "right", "top")
+				d.AddEdge(ctx, "bottom", "left")
+				d.AddEdge(ctx, "bottom", "right")
+			},
+			wantLen: 0,
+			desc:    "should pass with diamond pattern (no cycle)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			d := newTestDAG(t)
+			ctx := context.Background()
+
+			tt.setup(d, ctx)
+
+			cycle, err := d.DetectCycles(ctx, "p")
+			if err != nil {
+				t.Fatalf("DetectCycles failed: %v", err)
+			}
+
+			if tt.wantLen == 0 && cycle != nil {
+				t.Fatalf("%s: expected no cycle, got %v", tt.desc, cycle)
+			}
+			if tt.wantLen > 0 && cycle == nil {
+				t.Fatalf("%s: expected cycle of length %d, got nil", tt.desc, tt.wantLen)
+			}
+			if tt.wantLen > 0 && len(cycle) != tt.wantLen {
+				t.Fatalf("%s: expected cycle length %d, got %d: %v", tt.desc, tt.wantLen, len(cycle), cycle)
+			}
+		})
+	}
+}
+
 // --- helpers ---
 
 func taskIDs(tasks []Task) []string {
