@@ -2,6 +2,8 @@ package engine
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -60,6 +62,21 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	// === WORKTREE SETUP (mandatory) ===
 	// Agents must never work on master. Every task gets its own worktree
 	// on a feature branch. If worktree setup fails, the task fails.
+
+	// cleanup runs on every exit path, even if setup fails
+	// Use predictable worktree path based on taskID (same logic as SetupWorktree)
+	predictableWorktreePath := filepath.Join(os.TempDir(), "chum-worktrees", req.TaskID)
+	cleaned := false
+	cleanup := func() {
+		if cleaned {
+			return
+		}
+		cleaned = true
+		cleanCtx := workflow.WithActivityOptions(ctx, shortOpts)
+		_ = workflow.ExecuteActivity(cleanCtx, a.CleanupWorktreeActivity, baseWorkDir, predictableWorktreePath).Get(ctx, nil)
+	}
+	defer cleanup()
+
 	wtCtx := workflow.WithActivityOptions(ctx, shortOpts)
 	var worktreePath string
 	if err := workflow.ExecuteActivity(wtCtx, a.SetupWorktreeActivity, baseWorkDir, req.TaskID).Get(ctx, &worktreePath); err != nil {
@@ -74,18 +91,6 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	}
 	req.WorkDir = worktreePath
 	logger.Info("Worktree isolated", "path", worktreePath)
-
-	// cleanup runs on every exit path
-	cleaned := false
-	cleanup := func() {
-		if cleaned {
-			return
-		}
-		cleaned = true
-		cleanCtx := workflow.WithActivityOptions(ctx, shortOpts)
-		_ = workflow.ExecuteActivity(cleanCtx, a.CleanupWorktreeActivity, baseWorkDir, worktreePath).Get(ctx, nil)
-	}
-	defer cleanup()
 
 	// === DECOMPOSE ===
 	// Version gate: workflows started before decomposition was added must skip
