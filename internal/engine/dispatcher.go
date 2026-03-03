@@ -128,10 +128,11 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 			tasks = tasks[:max]
 		}
 
-		// Pick the first enabled provider, starting from the cheapest tier
-		agent, model, tier := PickProvider(da.Config, "fast")
-
 		for _, t := range tasks {
+			// Pick provider based on task's estimated difficulty
+			startTier := TierForEstimate(t.EstimateMinutes)
+			agent, model, tier := PickProvider(da.Config, startTier)
+
 			prompt := t.Description
 			if t.Acceptance != "" {
 				prompt += "\n\nAcceptance Criteria:\n" + t.Acceptance

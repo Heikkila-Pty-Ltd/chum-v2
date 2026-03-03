@@ -6,6 +6,32 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 )
 
+func TestTierForEstimate(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		estimate int
+		want     string
+	}{
+		{"zero_defaults_to_balanced", 0, "balanced"},
+		{"negative_defaults_to_balanced", -5, "balanced"},
+		{"1min_fast", 1, "fast"},
+		{"10min_fast_boundary", 10, "fast"},
+		{"11min_balanced", 11, "balanced"},
+		{"20min_balanced_boundary", 20, "balanced"},
+		{"21min_premium", 21, "premium"},
+		{"60min_premium", 60, "premium"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := TierForEstimate(tt.estimate); got != tt.want {
+				t.Errorf("TierForEstimate(%d) = %q, want %q", tt.estimate, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRetriesForTier(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
