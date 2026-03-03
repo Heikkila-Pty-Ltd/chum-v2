@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"go.temporal.io/api/enums/v1"
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
@@ -72,6 +74,38 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 			continue
 		}
 		logger.Info("Dispatched agent", "TaskID", c.TaskID, "Agent", c.Agent, "Tier", c.Tier, "ChildWorkflowID", childExecution.ID)
+	}
+
+	// === ORPHANED REVIEW RECOVERY ===
+	// Scan for needs_review tasks with live PRs but no running workflow.
+	var orphans []ReviewRequest
+	if err := workflow.ExecuteActivity(scanCtx, da.ScanOrphanedReviewsActivity).Get(ctx, &orphans); err != nil {
+		logger.Error("Orphan review scan failed", "error", err)
+		// Non-fatal — continue normally.
+	} else if len(orphans) > 0 {
+		logger.Info("Found orphaned reviews to resume", "count", len(orphans))
+		for _, o := range orphans {
+			markCtx := workflow.WithActivityOptions(ctx, scanOpts)
+			if err := workflow.ExecuteActivity(markCtx, da.MarkTaskRunningActivity, o.TaskID).Get(ctx, nil); err != nil {
+				logger.Error("Failed to mark orphaned task running, skipping", "TaskID", o.TaskID, "error", err)
+				continue
+			}
+
+			childOpts := workflow.ChildWorkflowOptions{
+				WorkflowID:               fmt.Sprintf("chum-review-%s", o.TaskID),
+				WorkflowExecutionTimeout: 1 * time.Hour,
+				ParentClosePolicy:        enums.PARENT_CLOSE_POLICY_ABANDON,
+			}
+			childCtx := workflow.WithChildOptions(ctx, childOpts)
+
+			childFuture := workflow.ExecuteChildWorkflow(childCtx, ReviewWorkflow, o)
+			var childExecution workflow.Execution
+			if err := childFuture.GetChildWorkflowExecution().Get(ctx, &childExecution); err != nil {
+				logger.Error("Failed to start review workflow", "TaskID", o.TaskID, "PR", o.PRNumber, "error", err)
+				continue
+			}
+			logger.Info("Dispatched review recovery", "TaskID", o.TaskID, "PR", o.PRNumber, "ChildWorkflowID", childExecution.ID)
+		}
 	}
 
 	return nil
@@ -184,4 +218,66 @@ func pullMaster(ctx context.Context, workDir string, logger *slog.Logger) {
 	} else {
 		logger.Info("Pulled latest from origin", "WorkDir", workDir)
 	}
+}
+
+// ScanOrphanedReviewsActivity finds tasks in "needs_review" whose error_log
+// contains a non-zero pr_number. These are orphaned — their AgentWorkflow died
+// after creating a PR. Returns ReviewRequest objects ready for ReviewWorkflow.
+func (da *DispatchActivities) ScanOrphanedReviewsActivity(ctx context.Context) ([]ReviewRequest, error) {
+	logger := activity.GetLogger(ctx)
+	var orphans []ReviewRequest
+
+	for projectName, project := range da.Config.Projects {
+		if !project.Enabled {
+			continue
+		}
+
+		tasks, err := da.DAG.ListTasks(ctx, projectName, "needs_review")
+		if err != nil {
+			logger.Error("Failed to list needs_review tasks", "project", projectName, "error", err)
+			continue
+		}
+
+		for _, t := range tasks {
+			if strings.TrimSpace(t.ErrorLog) == "" {
+				continue
+			}
+
+			var detail CloseDetail
+			if err := json.Unmarshal([]byte(t.ErrorLog), &detail); err != nil {
+				logger.Warn("Failed to parse error_log", "task", t.ID, "error", err)
+				continue
+			}
+			if detail.PRNumber <= 0 {
+				continue
+			}
+
+			// Pick provider the same way the normal dispatcher does.
+			startTier := TierForEstimate(t.EstimateMinutes)
+			agent, model, _ := PickProvider(da.Config, startTier)
+
+			prompt := t.Description
+			if t.Acceptance != "" {
+				prompt += "\n\nAcceptance Criteria:\n" + t.Acceptance
+			}
+
+			orphans = append(orphans, ReviewRequest{
+				TaskID:        t.ID,
+				Project:       projectName,
+				WorkDir:       project.Workspace,
+				PRNumber:      detail.PRNumber,
+				Agent:         agent,
+				Model:         model,
+				Prompt:        prompt,
+				ExecTimeout:   da.Config.General.ExecTimeout.Duration,
+				ShortTimeout:  da.Config.General.ShortTimeout.Duration,
+				ReviewTimeout: da.Config.General.ReviewTimeout.Duration,
+			})
+		}
+	}
+
+	if len(orphans) > 0 {
+		logger.Info("Found orphaned reviews", "count", len(orphans))
+	}
+	return orphans, nil
 }

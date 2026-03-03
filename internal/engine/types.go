@@ -7,19 +7,18 @@ import (
 	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
 )
 
-
 // TaskRequest is the input to the AgentWorkflow.
 // Tasks arrive fully planned and scoped from beads — description, acceptance
 // criteria, and design notes are all in the Prompt field.
 type TaskRequest struct {
 	TaskID   string `json:"task_id"`
 	Project  string `json:"project"`
-	Prompt   string `json:"prompt"`     // full task context from beads
-	WorkDir  string `json:"work_dir"`   // project workspace root
-	Agent    string `json:"agent"`      // CLI name (claude, gemini, codex)
-	Model    string `json:"model"`      // optional model override
-	Tier     string `json:"tier"`       // dispatch tier: fast, balanced, premium
-	ParentID string `json:"parent_id"`  // non-empty for subtasks (skip decomposition)
+	Prompt   string `json:"prompt"`    // full task context from beads
+	WorkDir  string `json:"work_dir"`  // project workspace root
+	Agent    string `json:"agent"`     // CLI name (claude, gemini, codex)
+	Model    string `json:"model"`     // optional model override
+	Tier     string `json:"tier"`      // dispatch tier: fast, balanced, premium
+	ParentID string `json:"parent_id"` // non-empty for subtasks (skip decomposition)
 
 	// Timeouts (zero = use defaults). Populated from config by dispatcher.
 	ExecTimeout   time.Duration `json:"exec_timeout,omitempty"`
@@ -86,4 +85,20 @@ type CloseDetail struct {
 	SubReason string      `json:"sub_reason"`
 	ReviewURL string      `json:"review_url"`
 	PRNumber  int         `json:"pr_number"`
+}
+
+// ReviewRequest is the input to ReviewWorkflow for resuming orphaned reviews.
+// Tasks that created a PR but whose workflow died before review can be
+// recovered by spawning a ReviewWorkflow with the PR number from error_log.
+type ReviewRequest struct {
+	TaskID        string        `json:"task_id"`
+	Project       string        `json:"project"`
+	WorkDir       string        `json:"work_dir"`
+	PRNumber      int           `json:"pr_number"`
+	Agent         string        `json:"agent"` // original executor agent (used to pick cross-reviewer)
+	Model         string        `json:"model"`
+	Prompt        string        `json:"prompt"` // original task prompt for re-execution on changes_requested
+	ExecTimeout   time.Duration `json:"exec_timeout,omitempty"`
+	ShortTimeout  time.Duration `json:"short_timeout,omitempty"`
+	ReviewTimeout time.Duration `json:"review_timeout,omitempty"`
 }
