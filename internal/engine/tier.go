@@ -7,6 +7,34 @@ import (
 // TierOrder defines the escalation chain from cheapest to most capable.
 var TierOrder = []string{"fast", "balanced", "premium"}
 
+// Estimate thresholds for tier assignment.
+const (
+	// Tasks estimated at or below this are "fast" (simple, cheap model).
+	fastMaxMinutes = 10
+	// Tasks estimated at or below this are "balanced" (moderate complexity).
+	balancedMaxMinutes = 20
+	// Tasks above balancedMaxMinutes are "premium" (complex, best model).
+)
+
+// TierForEstimate maps a task's estimated difficulty (in minutes) to a tier.
+//
+//	0 (unset) → balanced (safe default)
+//	1-10 min  → fast
+//	11-20 min → balanced
+//	21+ min   → premium
+func TierForEstimate(estimateMinutes int) string {
+	switch {
+	case estimateMinutes <= 0:
+		return "balanced"
+	case estimateMinutes <= fastMaxMinutes:
+		return "fast"
+	case estimateMinutes <= balancedMaxMinutes:
+		return "balanced"
+	default:
+		return "premium"
+	}
+}
+
 // RetriesForTier returns the maximum retry count for a given tier.
 // Cheap models get more chances; expensive models fewer.
 func RetriesForTier(tier string) int {
