@@ -16,11 +16,11 @@ func TestTierForEstimate(t *testing.T) {
 		{"zero_defaults_to_balanced", 0, "balanced"},
 		{"negative_defaults_to_balanced", -5, "balanced"},
 		{"1min_fast", 1, "fast"},
-		{"10min_fast_boundary", 10, "fast"},
-		{"11min_balanced", 11, "balanced"},
-		{"20min_balanced_boundary", 20, "balanced"},
-		{"21min_premium", 21, "premium"},
-		{"60min_premium", 60, "premium"},
+		{"5min_fast_boundary", 5, "fast"},
+		{"6min_balanced", 6, "balanced"},
+		{"10min_balanced_boundary", 10, "balanced"},
+		{"11min_premium", 11, "premium"},
+		{"15min_premium", 15, "premium"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

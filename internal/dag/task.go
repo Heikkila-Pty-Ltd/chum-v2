@@ -5,20 +5,22 @@ import "time"
 
 // Task represents a unit of work in the DAG.
 type Task struct {
-	ID              string    `json:"id"`
-	Title           string    `json:"title"`
-	Description     string    `json:"description"`
-	Status          string    `json:"status"`
-	Priority        int       `json:"priority"`
-	Type            string    `json:"type"`
-	Assignee        string    `json:"assignee"`
-	Labels          []string  `json:"labels"`
-	EstimateMinutes int       `json:"estimate_minutes"`
-	ParentID        string    `json:"parent_id"`
-	Acceptance      string    `json:"acceptance"`
-	Project         string    `json:"project"`
+	ID              string            `json:"id"`
+	Title           string            `json:"title"`
+	Description     string            `json:"description"`
+	Status          string            `json:"status"`
+	Priority        int               `json:"priority"`
+	Type            string            `json:"type"`
+	Assignee        string            `json:"assignee"`
+	Labels          []string          `json:"labels"`
+	EstimateMinutes int               `json:"estimate_minutes"`
+	ParentID        string            `json:"parent_id"`
+	Acceptance      string            `json:"acceptance"`
+	Project         string            `json:"project"`
 	ErrorLog        string            `json:"error_log"`
 	Metadata        map[string]string `json:"metadata,omitempty"`
+	ActualDurationS int               `json:"actual_duration_sec,omitempty"` // recorded after execution
+	IterationsUsed  int               `json:"iterations_used,omitempty"`     // agent tool-call iterations used
 	CreatedAt       time.Time         `json:"created_at"`
 	UpdatedAt       time.Time         `json:"updated_at"`
 }

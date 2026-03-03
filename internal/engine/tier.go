@@ -10,18 +10,18 @@ var TierOrder = []string{"fast", "balanced", "premium"}
 // Estimate thresholds for tier assignment.
 const (
 	// Tasks estimated at or below this are "fast" (simple, cheap model).
-	fastMaxMinutes = 10
+	fastMaxMinutes = 5
 	// Tasks estimated at or below this are "balanced" (moderate complexity).
-	balancedMaxMinutes = 20
+	balancedMaxMinutes = 10
 	// Tasks above balancedMaxMinutes are "premium" (complex, best model).
 )
 
 // TierForEstimate maps a task's estimated difficulty (in minutes) to a tier.
 //
 //	0 (unset) → balanced (safe default)
-//	1-10 min  → fast
-//	11-20 min → balanced
-//	21+ min   → premium
+//	1-5 min   → fast
+//	6-10 min  → balanced
+//	11-15 min → premium
 func TierForEstimate(estimateMinutes int) string {
 	switch {
 	case estimateMinutes <= 0:
