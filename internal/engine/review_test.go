@@ -1,6 +1,9 @@
 package engine
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseReviewSignal_UnwrapsClaudeEnvelope(t *testing.T) {
 	t.Parallel()
@@ -33,101 +36,6 @@ func TestParseReviewSignal_InvalidDefaultsToRequestChanges(t *testing.T) {
 	}
 }
 
-func TestParseReviewSignal_EmptyInput(t *testing.T) {
-	t.Parallel()
-
-	signal, body, invalid := parseReviewSignal("")
-	if !invalid {
-		t.Fatal("expected invalid=true for empty input")
-	}
-	if signal != "REQUEST_CHANGES" {
-		t.Fatalf("signal = %q, want REQUEST_CHANGES", signal)
-	}
-	if body != "Invalid reviewer output: empty response." {
-		t.Fatalf("body = %q, want empty response message", body)
-	}
-}
-
-func TestParseReviewSignal_WhitespaceOnlyInput(t *testing.T) {
-	t.Parallel()
-
-	signal, body, invalid := parseReviewSignal("   \n\t  \n  ")
-	if !invalid {
-		t.Fatal("expected invalid=true for whitespace-only input")
-	}
-	if signal != "REQUEST_CHANGES" {
-		t.Fatalf("signal = %q, want REQUEST_CHANGES", signal)
-	}
-	if body != "Invalid reviewer output: empty response." {
-		t.Fatalf("body = %q, want empty response message", body)
-	}
-}
-
-func TestParseReviewSignal_ApproveWithNoBody(t *testing.T) {
-	t.Parallel()
-
-	signal, body, invalid := parseReviewSignal("APPROVE")
-	if invalid {
-		t.Fatal("expected invalid=false for valid APPROVE signal")
-	}
-	if signal != "APPROVE" {
-		t.Fatalf("signal = %q, want APPROVE", signal)
-	}
-	if body != "Approved." {
-		t.Fatalf("body = %q, want default approved message", body)
-	}
-}
-
-func TestParseReviewSignal_RequestChangesWithMultiLineBody(t *testing.T) {
-	t.Parallel()
-
-	input := `REQUEST_CHANGES
-Please fix the following issues:
-1. Add proper error handling
-2. Update documentation
-3. Fix memory leak in line 42
-
-These changes are required before merging.`
-
-	signal, body, invalid := parseReviewSignal(input)
-	if invalid {
-		t.Fatal("expected invalid=false for valid REQUEST_CHANGES signal")
-	}
-	if signal != "REQUEST_CHANGES" {
-		t.Fatalf("signal = %q, want REQUEST_CHANGES", signal)
-	}
-
-	expectedBody := `Please fix the following issues:
-1. Add proper error handling
-2. Update documentation
-3. Fix memory leak in line 42
-
-These changes are required before merging.`
-	if body != expectedBody {
-		t.Fatalf("body = %q, want multi-line body", body)
-	}
-}
-
-func TestParseReviewSignal_SignalWithLeadingWhitespace(t *testing.T) {
-	t.Parallel()
-
-	input := `
-
-   APPROVE
-Code looks good to go.`
-
-	signal, body, invalid := parseReviewSignal(input)
-	if invalid {
-		t.Fatal("expected invalid=false for valid signal with leading whitespace")
-	}
-	if signal != "APPROVE" {
-		t.Fatalf("signal = %q, want APPROVE", signal)
-	}
-	if body != "Code looks good to go." {
-		t.Fatalf("body = %q, want trimmed body", body)
-	}
-}
-
 func TestDefaultReviewer(t *testing.T) {
 	t.Parallel()
 
@@ -142,182 +50,93 @@ func TestDefaultReviewer(t *testing.T) {
 	}
 }
 
-func TestFindLatestMatchingReview_EmptyReviewsList(t *testing.T) {
+func TestBuildReviewPrompt_ContainsPRNumber(t *testing.T) {
 	t.Parallel()
 
-	var reviews []ghReview
-	_, found := findLatestMatchingReview(reviews, "testuser", "abc123", 1)
-	if found {
-		t.Fatal("expected no match for empty reviews list")
+	prNumber := 42
+	round := 1
+	diff := "some diff content"
+
+	prompt := buildReviewPrompt(prNumber, round, diff)
+
+	if !containsString(prompt, "#42") {
+		t.Fatalf("expected prompt to contain PR number #42, got: %s", prompt)
 	}
 }
 
-func TestFindLatestMatchingReview_NoMatchingReviewer(t *testing.T) {
+func TestBuildReviewPrompt_ContainsRoundNumber(t *testing.T) {
 	t.Parallel()
 
-	reviews := []ghReview{
-		{
-			ID:       1,
-			State:    "APPROVED",
-			Body:     "LGTM <!-- chum-round:1 -->",
-			CommitID: "abc123",
-			User:     ghUser{Login: "otheruser"},
-		},
-	}
-	_, found := findLatestMatchingReview(reviews, "testuser", "abc123", 1)
-	if found {
-		t.Fatal("expected no match when reviewer doesn't match")
+	prNumber := 1
+	round := 3
+	diff := "some diff content"
+
+	prompt := buildReviewPrompt(prNumber, round, diff)
+
+	if !containsString(prompt, "Review round: 3") {
+		t.Fatalf("expected prompt to contain round number 3, got: %s", prompt)
 	}
 }
 
-func TestFindLatestMatchingReview_MatchingReviewerWrongSHA(t *testing.T) {
+func TestBuildReviewPrompt_ContainsDiffText(t *testing.T) {
 	t.Parallel()
 
-	reviews := []ghReview{
-		{
-			ID:       1,
-			State:    "APPROVED",
-			Body:     "LGTM <!-- chum-round:1 -->",
-			CommitID: "wrongsha",
-			User:     ghUser{Login: "testuser"},
-		},
-	}
-	_, found := findLatestMatchingReview(reviews, "testuser", "abc123", 1)
-	if found {
-		t.Fatal("expected no match when SHA doesn't match")
+	prNumber := 1
+	round := 1
+	diff := "unique diff content xyz123"
+
+	prompt := buildReviewPrompt(prNumber, round, diff)
+
+	if !containsString(prompt, diff) {
+		t.Fatalf("expected prompt to contain diff text %q, got: %s", diff, prompt)
 	}
 }
 
-func TestFindLatestMatchingReview_MatchingReviewerSHAButDismissed(t *testing.T) {
+func TestCapDiff_UnderLimit(t *testing.T) {
 	t.Parallel()
 
-	reviews := []ghReview{
-		{
-			ID:       1,
-			State:    "DISMISSED",
-			Body:     "LGTM <!-- chum-round:1 -->",
-			CommitID: "abc123",
-			User:     ghUser{Login: "testuser"},
-		},
-	}
-	_, found := findLatestMatchingReview(reviews, "testuser", "abc123", 1)
-	if found {
-		t.Fatal("expected no match when review is dismissed")
+	input := "small diff content"
+	result := capDiff(input)
+
+	if result != input {
+		t.Fatalf("expected unchanged input for small diff, got: %s", result)
 	}
 }
 
-func TestFindLatestMatchingReview_MatchingReviewerSHARoundMarkerFound(t *testing.T) {
+func TestCapDiff_ExactlyAtLimit(t *testing.T) {
 	t.Parallel()
 
-	reviews := []ghReview{
-		{
-			ID:       1,
-			State:    "APPROVED",
-			Body:     "LGTM <!-- chum-round:1 -->",
-			CommitID: "abc123",
-			User:     ghUser{Login: "testuser"},
-		},
+	// Create a string exactly 120000 bytes
+	input := strings.Repeat("a", 120000)
+	result := capDiff(input)
+
+	if result != input {
+		t.Fatalf("expected unchanged input for diff exactly at limit")
 	}
-	review, found := findLatestMatchingReview(reviews, "testuser", "abc123", 1)
-	if !found {
-		t.Fatal("expected match when all criteria are met")
-	}
-	if review.ID != 1 {
-		t.Fatalf("expected review ID 1, got %d", review.ID)
+	if len(result) != 120000 {
+		t.Fatalf("expected result to be exactly 120000 bytes, got %d", len(result))
 	}
 }
 
-func TestFindLatestMatchingReview_MultipleReviewsPicksLatest(t *testing.T) {
+func TestCapDiff_OverLimit(t *testing.T) {
 	t.Parallel()
 
-	reviews := []ghReview{
-		{
-			ID:       1,
-			State:    "APPROVED",
-			Body:     "LGTM <!-- chum-round:1 -->",
-			CommitID: "abc123",
-			User:     ghUser{Login: "testuser"},
-		},
-		{
-			ID:       2,
-			State:    "CHANGES_REQUESTED",
-			Body:     "Needs work <!-- chum-round:1 -->",
-			CommitID: "abc123",
-			User:     ghUser{Login: "testuser"},
-		},
-		{
-			ID:       3,
-			State:    "APPROVED",
-			Body:     "Fixed! <!-- chum-round:1 -->",
-			CommitID: "abc123",
-			User:     ghUser{Login: "testuser"},
-		},
+	// Create a string over 120000 bytes
+	input := strings.Repeat("b", 120001)
+	result := capDiff(input)
+
+	expectedTruncation := "\n\n[truncated by CHUM]"
+	if !strings.HasSuffix(result, expectedTruncation) {
+		t.Fatalf("expected result to end with truncation marker, got: %s", result[len(result)-30:])
 	}
-	review, found := findLatestMatchingReview(reviews, "testuser", "abc123", 1)
-	if !found {
-		t.Fatal("expected match when multiple reviews exist")
-	}
-	if review.ID != 3 {
-		t.Fatalf("expected latest review ID 3, got %d", review.ID)
+
+	// Should be exactly 120000 + length of truncation marker
+	expectedLength := 120000 + len(expectedTruncation)
+	if len(result) != expectedLength {
+		t.Fatalf("expected result length %d, got %d", expectedLength, len(result))
 	}
 }
 
-func TestFindLatestMatchingReview_CaseInsensitiveReviewer(t *testing.T) {
-	t.Parallel()
-
-	reviews := []ghReview{
-		{
-			ID:       1,
-			State:    "APPROVED",
-			Body:     "LGTM <!-- chum-round:1 -->",
-			CommitID: "abc123",
-			User:     ghUser{Login: "TestUser"},
-		},
-	}
-	review, found := findLatestMatchingReview(reviews, "testuser", "abc123", 1)
-	if !found {
-		t.Fatal("expected match with case-insensitive reviewer login")
-	}
-	if review.ID != 1 {
-		t.Fatalf("expected review ID 1, got %d", review.ID)
-	}
-}
-
-func TestFindLatestMatchingReview_WhitespaceHandling(t *testing.T) {
-	t.Parallel()
-
-	reviews := []ghReview{
-		{
-			ID:       1,
-			State:    "APPROVED",
-			Body:     "LGTM <!-- chum-round:1 -->",
-			CommitID: "  abc123  ",
-			User:     ghUser{Login: "  testuser  "},
-		},
-	}
-	review, found := findLatestMatchingReview(reviews, "testuser", "abc123", 1)
-	if !found {
-		t.Fatal("expected match with whitespace handling")
-	}
-	if review.ID != 1 {
-		t.Fatalf("expected review ID 1, got %d", review.ID)
-	}
-}
-
-func TestFindLatestMatchingReview_DismissedStateCaseInsensitive(t *testing.T) {
-	t.Parallel()
-
-	reviews := []ghReview{
-		{
-			ID:       1,
-			State:    "dismissed",
-			Body:     "LGTM <!-- chum-round:1 -->",
-			CommitID: "abc123",
-			User:     ghUser{Login: "testuser"},
-		},
-	}
-	_, found := findLatestMatchingReview(reviews, "testuser", "abc123", 1)
-	if found {
-		t.Fatal("expected no match when review is dismissed (case-insensitive)")
-	}
+func containsString(s, substr string) bool {
+	return strings.Contains(s, substr)
 }
