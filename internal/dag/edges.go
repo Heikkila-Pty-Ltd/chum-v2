@@ -10,17 +10,29 @@ import (
 // An edge (A → B) means "A depends on B" — A cannot start until B completes.
 
 // AddEdge creates a dependency: from depends on to. Source defaults to "beads".
+// Returns ErrCycleDetected if the edge would create a cycle.
 func (d *DAG) AddEdge(ctx context.Context, from, to string) error {
 	return d.AddEdgeWithSource(ctx, from, to, "beads")
 }
 
 // AddEdgeWithSource creates a dependency with an explicit source tag.
 // Source is "beads" for hand-drawn edges or "ast" for auto-generated fences.
+// Returns ErrCycleDetected if the edge would create a cycle.
 func (d *DAG) AddEdgeWithSource(ctx context.Context, from, to, source string) error {
 	if from == to {
 		return errors.New("cannot add self-edge")
 	}
-	_, err := d.db.ExecContext(ctx,
+
+	// Check for cycles before inserting
+	wouldCycle, err := d.wouldCreateCycle(ctx, from, to)
+	if err != nil {
+		return fmt.Errorf("cycle check: %w", err)
+	}
+	if wouldCycle {
+		return fmt.Errorf("%w: %s → %s", ErrCycleDetected, from, to)
+	}
+
+	_, err = d.db.ExecContext(ctx,
 		"INSERT OR IGNORE INTO task_edges (from_task, to_task, source) VALUES (?, ?, ?)",
 		from, to, source)
 	if err != nil {
