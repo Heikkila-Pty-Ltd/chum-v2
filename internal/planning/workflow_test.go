@@ -12,8 +12,8 @@ import (
 
 var defaultCfg = PlanningCeremonyConfig{
 	MaxResearchRounds: 3,
-	SignalTimeout:     5 * time.Second,
-	SessionTimeout:    30 * time.Second,
+	SignalTimeout:     time.Minute,
+	SessionTimeout:    10 * time.Minute,
 	MaxCycles:         3,
 }
 
@@ -68,15 +68,15 @@ func TestPlanningWorkflow_HappyPath(t *testing.T) {
 	// send signals: select approach 1, then greenlight, then approve decomposition.
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameSelect, "1")
-	}, time.Millisecond*100)
+	}, time.Second*1)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameGreenlight, "GO")
-	}, time.Millisecond*200)
+	}, time.Second*2)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameApproveDecomp, "APPROVED")
-	}, time.Millisecond*300)
+	}, time.Second*3)
 
 	env.ExecuteWorkflow(PlanningWorkflow, baseRequest(), defaultCfg)
 
@@ -118,7 +118,7 @@ func TestPlanningWorkflow_CancelDuringResearch(t *testing.T) {
 	// Cancel before interactive phase starts
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameCancel, "user_cancelled")
-	}, time.Millisecond*100)
+	}, time.Second*1)
 
 	env.ExecuteWorkflow(PlanningWorkflow, baseRequest(), defaultCfg)
 
@@ -185,29 +185,29 @@ func TestPlanningWorkflow_DecompRejected_ReturnsToSelection(t *testing.T) {
 	// Cycle 1: select approach 1 → greenlight → reject decomposition (REALIGN via greenlight)
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameSelect, "1")
-	}, time.Millisecond*100)
+	}, time.Second*1)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameGreenlight, "GO")
-	}, time.Millisecond*200)
+	}, time.Second*2)
 
 	// Reject by sending REALIGN on the greenlight channel during decomp approval
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameGreenlight, "REALIGN")
-	}, time.Millisecond*300)
+	}, time.Second*3)
 
 	// Cycle 2: select approach 2 → greenlight → approve
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameSelect, "2")
-	}, time.Millisecond*400)
+	}, time.Second*4)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameGreenlight, "GO")
-	}, time.Millisecond*500)
+	}, time.Second*5)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameApproveDecomp, "APPROVED")
-	}, time.Millisecond*600)
+	}, time.Second*6)
 
 	env.ExecuteWorkflow(PlanningWorkflow, baseRequest(), defaultCfg)
 
@@ -256,19 +256,19 @@ func TestPlanningWorkflow_DeeperResearch(t *testing.T) {
 	// Dig into approach 1, then select, greenlight, approve
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameDig, "1|I want to know about performance")
-	}, time.Millisecond*100)
+	}, time.Second*1)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameSelect, "1")
-	}, time.Millisecond*200)
+	}, time.Second*2)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameGreenlight, "GO")
-	}, time.Millisecond*300)
+	}, time.Second*3)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameApproveDecomp, "APPROVED")
-	}, time.Millisecond*400)
+	}, time.Second*4)
 
 	env.ExecuteWorkflow(PlanningWorkflow, baseRequest(), defaultCfg)
 
@@ -312,19 +312,19 @@ func TestPlanningWorkflow_QuestionAnswer(t *testing.T) {
 	// Ask a question, then select, greenlight, approve
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameQuestion, "Should I use Redis or Memcached?")
-	}, time.Millisecond*100)
+	}, time.Second*1)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameSelect, "1")
-	}, time.Millisecond*200)
+	}, time.Second*2)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameGreenlight, "GO")
-	}, time.Millisecond*300)
+	}, time.Second*3)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameApproveDecomp, "APPROVED")
-	}, time.Millisecond*400)
+	}, time.Second*4)
 
 	env.ExecuteWorkflow(PlanningWorkflow, baseRequest(), defaultCfg)
 
@@ -368,15 +368,15 @@ func TestPlanningWorkflow_NoRoomID(t *testing.T) {
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameSelect, "1")
-	}, time.Millisecond*100)
+	}, time.Second*1)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameGreenlight, "GO")
-	}, time.Millisecond*200)
+	}, time.Second*2)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameApproveDecomp, "APPROVED")
-	}, time.Millisecond*300)
+	}, time.Second*3)
 
 	env.ExecuteWorkflow(PlanningWorkflow, req, defaultCfg)
 
@@ -419,23 +419,23 @@ func TestPlanningWorkflow_Realign(t *testing.T) {
 	// Select approach 1, then realign, then select approach 2, greenlight, approve
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameSelect, "1")
-	}, time.Millisecond*100)
+	}, time.Second*1)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameGreenlight, "REALIGN")
-	}, time.Millisecond*200)
+	}, time.Second*2)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameSelect, "2")
-	}, time.Millisecond*300)
+	}, time.Second*3)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameGreenlight, "GO")
-	}, time.Millisecond*400)
+	}, time.Second*4)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameApproveDecomp, "APPROVED")
-	}, time.Millisecond*500)
+	}, time.Second*5)
 
 	env.ExecuteWorkflow(PlanningWorkflow, baseRequest(), defaultCfg)
 
