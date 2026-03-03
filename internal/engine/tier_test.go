@@ -203,3 +203,103 @@ func TestPickProvider_StartsAtBalancedSkipsFast(t *testing.T) {
 		t.Errorf("starting at balanced should skip fast; got (%q, %q)", cli, tier)
 	}
 }
+
+func TestProviderSelection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		cfg            *config.Config
+		tier           string
+		expectedCLI    string
+		expectedModel  string
+		expectedTier   string
+		description    string
+	}{
+		{
+			name: "single_provider_in_tier",
+			cfg: &config.Config{
+				Providers: map[string]config.Provider{
+					"claude": {CLI: "claude", Model: "sonnet-3.5", Enabled: true},
+				},
+				Tiers: config.Tiers{
+					Fast: []string{"claude"},
+				},
+			},
+			tier:          "fast",
+			expectedCLI:   "claude",
+			expectedModel: "sonnet-3.5",
+			expectedTier:  "fast",
+			description:   "should select the only provider in tier",
+		},
+		{
+			name: "multiple_providers_in_tier",
+			cfg: &config.Config{
+				Providers: map[string]config.Provider{
+					"gpt4":   {CLI: "gpt4", Model: "gpt-4", Enabled: true},
+					"claude": {CLI: "claude", Model: "sonnet", Enabled: true},
+					"gemini": {CLI: "gemini", Model: "flash", Enabled: true},
+				},
+				Tiers: config.Tiers{
+					Balanced: []string{"gpt4", "claude", "gemini"},
+				},
+			},
+			tier:          "balanced",
+			expectedCLI:   "gpt4",
+			expectedModel: "gpt-4",
+			expectedTier:  "balanced",
+			description:   "should select first enabled provider from multiple in tier",
+		},
+		{
+			name: "fallback_when_preferred_tier_empty",
+			cfg: &config.Config{
+				Providers: map[string]config.Provider{
+					"claude": {CLI: "claude", Model: "sonnet", Enabled: true},
+				},
+				Tiers: config.Tiers{
+					Fast:     []string{},
+					Balanced: []string{"claude"},
+				},
+			},
+			tier:          "fast",
+			expectedCLI:   "claude",
+			expectedModel: "sonnet",
+			expectedTier:  "balanced",
+			description:   "should fallback to next tier when preferred tier is empty",
+		},
+		{
+			name: "fallback_when_no_providers_available",
+			cfg: &config.Config{
+				Providers: map[string]config.Provider{},
+				Tiers: config.Tiers{
+					Fast:     []string{},
+					Balanced: []string{},
+					Premium:  []string{},
+				},
+			},
+			tier:          "fast",
+			expectedCLI:   "claude",
+			expectedModel: "",
+			expectedTier:  "fast",
+			description:   "should return fallback claude provider when no providers are available",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cli, model, tier := PickProvider(tt.cfg, tt.tier)
+
+			if cli != tt.expectedCLI {
+				t.Errorf("CLI: got %q, want %q (%s)", cli, tt.expectedCLI, tt.description)
+			}
+			if model != tt.expectedModel {
+				t.Errorf("Model: got %q, want %q (%s)", model, tt.expectedModel, tt.description)
+			}
+			if tier != tt.expectedTier {
+				t.Errorf("Tier: got %q, want %q (%s)", tier, tt.expectedTier, tt.description)
+			}
+		})
+	}
+}
