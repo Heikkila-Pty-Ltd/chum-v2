@@ -539,17 +539,25 @@ func (c *ceremony) approveDecomp(ctx workflow.Context) (bool, error) {
 	return approved, nil
 }
 
-// handoff runs phase 8: create subtasks from the decomposition.
+// handoff runs phase 8: record decision + create subtasks from the decomposition.
 func (c *ceremony) handoff(ctx workflow.Context) (*PlanningResult, error) {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("Phase: handoff to factory", "Steps", len(c.steps))
+
+	// Record the planning decision (links selected approach to all alternatives).
+	var decisionID string
+	decCtx := workflow.WithActivityOptions(ctx, c.shortOpts)
+	if err := workflow.ExecuteActivity(decCtx, c.pa.RecordPlanningDecisionActivity, c.req, *c.selectedApproach, c.approaches).Get(ctx, &decisionID); err != nil {
+		logger.Warn("Failed to record planning decision", "error", err)
+		// Non-fatal — continue with handoff even if decision recording fails.
+	}
 
 	handoffCtx := workflow.WithActivityOptions(ctx, c.shortOpts)
 	var subtaskIDs []string
 	if err := workflow.ExecuteActivity(handoffCtx, c.pa.CreatePlanSubtasksActivity, c.req, c.steps).Get(ctx, &subtaskIDs); err != nil {
 		logger.Error("Failed to create subtasks", "error", err)
 		c.notify(fmt.Sprintf("Failed to create subtasks: %s", err))
-		return &PlanningResult{GoalID: c.req.GoalID, Approaches: c.approaches, SelectedApproach: c.selectedApproach, Cancelled: true, CancelReason: "subtask_creation_failed"}, nil
+		return &PlanningResult{GoalID: c.req.GoalID, Approaches: c.approaches, SelectedApproach: c.selectedApproach, DecisionID: decisionID, Cancelled: true, CancelReason: "subtask_creation_failed"}, nil
 	}
 
 	c.notify(fmt.Sprintf("Planning complete. %d subtasks created for approach: %s\nSubtask IDs: %s",
@@ -560,6 +568,7 @@ func (c *ceremony) handoff(ctx workflow.Context) (*PlanningResult, error) {
 		SelectedApproach: c.selectedApproach,
 		SubtaskIDs:       subtaskIDs,
 		Approaches:       c.approaches,
+		DecisionID:       decisionID,
 	}, nil
 }
 

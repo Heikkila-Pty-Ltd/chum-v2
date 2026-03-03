@@ -41,6 +41,18 @@ func SetupWorktree(ctx context.Context, baseDir, taskID string) (string, error) 
 	cmd.Dir = baseDir
 	_ = cmd.Run()
 
+	// Always start from latest origin/master to avoid stale branches.
+	// Without this, agents branch from whatever HEAD the factory workspace
+	// had when it was last pulled — leading to PRs that accidentally revert
+	// commits made since then.
+	cmd = exec.CommandContext(ctx, "git", "fetch", "origin", "master")
+	cmd.Dir = baseDir
+	_ = cmd.Run() // best-effort; if offline we still branch from local HEAD
+
+	cmd = exec.CommandContext(ctx, "git", "checkout", "origin/master")
+	cmd.Dir = baseDir
+	_ = cmd.Run() // best-effort; detached HEAD is fine for worktree base
+
 	// Create the worktree on a new branch.
 	// Use -c core.hooksPath=/dev/null to bypass any project hooks (e.g. beads)
 	// that may reference tools not installed in the execution environment.

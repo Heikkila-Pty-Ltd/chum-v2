@@ -22,6 +22,7 @@ import (
 // PlanningActivities holds dependencies for planning Temporal activities.
 type PlanningActivities struct {
 	DAG          dag.TaskStore
+	Decisions    dag.DecisionStore
 	Config       *config.Config
 	Logger       *slog.Logger
 	AST          *astpkg.Parser
@@ -396,6 +397,52 @@ func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, re
 	}
 	logger.Info("Created plan subtasks", "Parent", req.GoalID, "Count", len(ids))
 	return ids, nil
+}
+
+// RecordPlanningDecisionActivity creates a decision node in the DAG linking
+// the selected approach to all considered alternatives. This feeds the decision
+// blockchain so future planning ceremonies can learn from past choices.
+func (pa *PlanningActivities) RecordPlanningDecisionActivity(ctx context.Context, req PlanningRequest, selected ResearchedApproach, all []ResearchedApproach) (string, error) {
+	logger := activity.GetLogger(ctx)
+
+	if pa.Decisions == nil {
+		logger.Warn("No decision store configured, skipping decision recording")
+		return "", nil
+	}
+
+	dec := dag.Decision{
+		TaskID:  req.GoalID,
+		Title:   fmt.Sprintf("Planning: approach selection for %s", req.GoalID),
+		Context: fmt.Sprintf("Planning session %s evaluated %d approaches", req.SessionID, len(all)),
+		Outcome: selected.Title,
+	}
+
+	decID, err := pa.Decisions.CreateDecision(ctx, dec)
+	if err != nil {
+		return "", fmt.Errorf("create planning decision: %w", err)
+	}
+
+	for _, a := range all {
+		alt := dag.Alternative{
+			DecisionID: decID,
+			Label:      a.Title,
+			Reasoning:  fmt.Sprintf("%s\nTradeoffs: %s", a.Description, a.Tradeoffs),
+			Selected:   a.ID == selected.ID,
+			UCTScore:   a.Confidence,
+			Visits:     1,
+			Reward:     a.Confidence,
+		}
+		if _, err := pa.Decisions.CreateAlternative(ctx, alt); err != nil {
+			logger.Warn("Failed to create alternative", "title", a.Title, "error", err)
+		}
+	}
+
+	logger.Info("Recorded planning decision",
+		"DecisionID", decID,
+		"Selected", selected.Title,
+		"Alternatives", len(all))
+
+	return decID, nil
 }
 
 // NotifyChatActivity sends a message to a Matrix room.

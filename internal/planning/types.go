@@ -59,6 +59,7 @@ type PlanningResult struct {
 	GoalID           string               `json:"goal_id"`
 	SelectedApproach *ResearchedApproach  `json:"selected_approach"`
 	SubtaskIDs       []string             `json:"subtask_ids"`
+	DecisionID       string               `json:"decision_id,omitempty"`
 	Cancelled        bool                 `json:"cancelled"`
 	CancelReason     string               `json:"cancel_reason"`
 	Approaches       []ResearchedApproach `json:"approaches"`

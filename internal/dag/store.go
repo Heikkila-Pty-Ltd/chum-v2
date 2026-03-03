@@ -29,5 +29,18 @@ type TaskStore interface {
 	GetAllTargetsForStatuses(ctx context.Context, project string, statuses ...string) (map[string][]TaskTarget, error)
 }
 
-// Verify *DAG satisfies TaskStore at compile time.
+// DecisionStore abstracts decision DAG operations used by planning activities.
+type DecisionStore interface {
+	CreateDecision(ctx context.Context, dec Decision) (string, error)
+	GetDecision(ctx context.Context, id string) (Decision, error)
+	ListDecisionsForTask(ctx context.Context, taskID string) ([]Decision, error)
+	CreateAlternative(ctx context.Context, alt Alternative) (string, error)
+	ListAlternatives(ctx context.Context, decisionID string) ([]Alternative, error)
+	GetSelectedAlternative(ctx context.Context, decisionID string) (Alternative, error)
+	SelectAlternative(ctx context.Context, decisionID, alternativeID string) error
+	UpdateAlternativeUCT(ctx context.Context, id string, score float64, visits int, reward float64) error
+}
+
+// Verify *DAG satisfies TaskStore and DecisionStore at compile time.
 var _ TaskStore = (*DAG)(nil)
+var _ DecisionStore = (*DAG)(nil)
