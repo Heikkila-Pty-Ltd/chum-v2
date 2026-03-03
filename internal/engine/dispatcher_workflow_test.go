@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -274,5 +275,36 @@ func TestDispatcherWorkflow_MultipleCandidates(t *testing.T) {
 	}
 	if req3.ParentID != "parent-3" {
 		t.Fatalf("Second request ParentID = %q, want parent-3", req3.ParentID)
+	}
+}
+
+func TestDispatcherWorkflow_ScanFailure(t *testing.T) {
+	t.Parallel()
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestWorkflowEnvironment()
+
+	var da *DispatchActivities
+	env.OnActivity(da.ScanCandidatesActivity, mock.Anything).Return(nil, errors.New("database connection failed"))
+
+	dispatched := 0
+	env.OnWorkflow(AgentWorkflow, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		dispatched++
+	}).Return(nil).Maybe()
+
+	env.ExecuteWorkflow(DispatcherWorkflow, struct{}{})
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("expected workflow completion")
+	}
+	err := env.GetWorkflowError()
+	if err == nil {
+		t.Fatal("expected workflow error but got none")
+	}
+	if !strings.Contains(err.Error(), "scan") {
+		t.Fatalf("expected error to contain 'scan', got: %v", err)
+	}
+	if dispatched != 0 {
+		t.Fatalf("expected no child workflows spawned when scan fails, got %d", dispatched)
 	}
 }
