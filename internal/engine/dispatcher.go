@@ -74,6 +74,26 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 		logger.Info("Dispatched agent", "TaskID", c.TaskID, "Agent", c.Agent, "Tier", c.Tier, "ChildWorkflowID", childExecution.ID)
 	}
 
+	// Notify: tasks dispatched to sharks
+	if len(candidates) > 0 {
+		taskIDs := make([]string, 0, len(candidates))
+		for _, c := range candidates {
+			taskIDs = append(taskIDs, c.TaskID)
+		}
+		var a *Activities
+		nCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			StartToCloseTimeout: 5 * time.Second,
+			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+		})
+		_ = workflow.ExecuteActivity(nCtx, a.NotifyActivity, NotifyRequest{
+			Event: "dispatch",
+			Extra: map[string]string{
+				"count": fmt.Sprintf("%d", len(candidates)),
+				"tasks": joinTasks(taskIDs),
+			},
+		}).Get(ctx, nil)
+	}
+
 	return nil
 }
 

@@ -124,6 +124,11 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 					return fmt.Errorf("subtask creation failed: %w", err)
 				}
 				logger.Info("Task decomposed", "ParentID", req.TaskID, "Subtasks", len(subtaskIDs))
+				sendNotification(ctx, shortOpts, NotifyRequest{
+					Event:  "decomposed",
+					TaskID: req.TaskID,
+					Extra:  map[string]string{"subtasks": fmt.Sprintf("%d", len(subtaskIDs))},
+				})
 				cleanup()
 				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
 					Reason:    CloseDecomposed,
@@ -134,6 +139,11 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	}
 
 	// === EXECUTE ===
+	sendNotification(ctx, shortOpts, NotifyRequest{
+		Event:  "execute",
+		TaskID: req.TaskID,
+		Extra:  map[string]string{"agent": req.Agent},
+	})
 	execCtx := workflow.WithActivityOptions(ctx, execOpts)
 	var execResult ExecResult
 	if err := workflow.ExecuteActivity(execCtx, a.ExecuteActivity, req).Get(ctx, &execResult); err != nil {
@@ -164,6 +174,11 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 
 	if !dodResult.Passed {
 		logger.Warn("DoD FAILED — closing task", "Failures", dodResult.Failures)
+		sendNotification(ctx, shortOpts, NotifyRequest{
+			Event:  "dod_fail",
+			TaskID: req.TaskID,
+			Extra:  map[string]string{"failures": fmt.Sprintf("%v", dodResult.Failures)},
+		})
 		if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
 			Reason:    CloseDoDFailed,
 			SubReason: "dod_failed",
@@ -175,6 +190,10 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 
 	// === Push + PR ===
 	logger.Info("DoD PASSED — pushing and creating PR")
+	sendNotification(ctx, shortOpts, NotifyRequest{
+		Event:  "dod_pass",
+		TaskID: req.TaskID,
+	})
 
 	pushCtx := workflow.WithActivityOptions(ctx, shortOpts)
 	if err := workflow.ExecuteActivity(pushCtx, a.PushActivity, req.WorkDir).Get(ctx, nil); err != nil {
@@ -195,6 +214,11 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			SubReason: "pr_create_failed",
 		})
 	}
+	sendNotification(ctx, shortOpts, NotifyRequest{
+		Event:  "pr_created",
+		TaskID: req.TaskID,
+		Extra:  map[string]string{"pr": fmt.Sprintf("%d", prInfo.Number), "url": prInfo.URL},
+	})
 
 	// Resolve reviewer GitHub identity once.
 	var reviewerLogin string
@@ -262,6 +286,11 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 
 		switch state.Outcome {
 		case ReviewApproved:
+			sendNotification(ctx, shortOpts, NotifyRequest{
+				Event:  "review_approved",
+				TaskID: req.TaskID,
+				Extra:  map[string]string{"reviewer": reviewerLogin},
+			})
 			var merge MergeResult
 			if err := workflow.ExecuteActivity(prCtx, a.MergePRActivity, req.WorkDir, prInfo.Number).Get(ctx, &merge); err != nil {
 				logger.Error("Merge activity failed", "error", err)
@@ -274,6 +303,11 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			}
 			if merge.Merged {
 				logger.Info("Task merged successfully", "TaskID", req.TaskID, "PR", prInfo.Number)
+				sendNotification(ctx, shortOpts, NotifyRequest{
+					Event:  "merged",
+					TaskID: req.TaskID,
+					Extra:  map[string]string{"pr": fmt.Sprintf("%d", prInfo.Number)},
+				})
 				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
 					Reason:    CloseCompleted,
 					SubReason: "completed",
@@ -293,6 +327,11 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			})
 
 		case ReviewChangesRequested:
+			sendNotification(ctx, shortOpts, NotifyRequest{
+				Event:  "review_changes",
+				TaskID: req.TaskID,
+				Extra:  map[string]string{"reviewer": reviewerLogin, "round": fmt.Sprintf("%d", round)},
+			})
 			if round == maxReviewRounds {
 				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
 					Reason:    CloseNeedsReview,
@@ -425,8 +464,6 @@ func truncateForTitle(prompt string, maxLen int) string {
 	return "chum: automated change"
 }
 
-
-
 func augmentPromptWithReviewFeedback(prompt string, round int, feedback string) string {
 	feedback = strings.TrimSpace(feedback)
 	if feedback == "" {
@@ -440,14 +477,42 @@ func closeAndNotify(ctx workflow.Context, opts workflow.ActivityOptions, taskID 
 	actCtx := workflow.WithActivityOptions(ctx, opts)
 	closeErr := workflow.ExecuteActivity(actCtx, a.CloseTaskWithDetailActivity, taskID, detail).Get(ctx, nil)
 
-	message := fmt.Sprintf("task=%s reason=%s sub_reason=%s pr=%d review=%s",
-		taskID, detail.Reason, detail.SubReason, detail.PRNumber, detail.ReviewURL)
-	notifyErr := workflow.ExecuteActivity(actCtx, a.NotifyActivity, message).Get(ctx, nil)
+	// Map CloseDetail → structured NotifyRequest for themed output.
+	event := "escalate"
+	switch detail.Reason {
+	case CloseCompleted:
+		event = "complete"
+	case CloseDoDFailed:
+		event = "dod_fail"
+	case CloseDecomposed:
+		event = "decomposed"
+	}
+	req := NotifyRequest{
+		Event:  event,
+		TaskID: taskID,
+		Extra: map[string]string{
+			"reason":     string(detail.Reason),
+			"sub_reason": detail.SubReason,
+			"pr":         fmt.Sprintf("%d", detail.PRNumber),
+			"review_url": detail.ReviewURL,
+		},
+	}
+	// Fire-and-forget — notification failures must never block close.
+	_ = workflow.ExecuteActivity(actCtx, a.NotifyActivity, req).Get(ctx, nil)
+
 	if closeErr != nil {
 		return fmt.Errorf("close task failed: %w", closeErr)
 	}
-	if notifyErr != nil {
-		return fmt.Errorf("notify failed: %w", notifyErr)
-	}
 	return nil
+}
+
+// sendNotification sends a fire-and-forget themed notification via NotifyActivity.
+// Errors are swallowed — notifications must never block workflow progress.
+func sendNotification(ctx workflow.Context, opts workflow.ActivityOptions, req NotifyRequest) {
+	var a *Activities
+	nCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 5 * time.Second,
+		RetryPolicy:         opts.RetryPolicy,
+	})
+	_ = workflow.ExecuteActivity(nCtx, a.NotifyActivity, req).Get(ctx, nil)
 }
