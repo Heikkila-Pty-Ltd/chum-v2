@@ -168,7 +168,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	}
 
 	if !dodResult.Passed {
-		failureMsg := strings.Join(dodResult.Failures, "; ")
+		failureMsg := BuildClassifierInput(dodResult)
 		category, summary := ClassifyFailure(failureMsg)
 		logger.Warn("DoD FAILED", "Category", category, "Summary", summary, "Failures", dodResult.Failures)
 		if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
@@ -346,7 +346,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 				})
 			}
 			if !dodResult.Passed {
-				failureMsg2 := strings.Join(dodResult.Failures, "; ")
+				failureMsg2 := BuildClassifierInput(dodResult)
 				cat2, sum2 := ClassifyFailure(failureMsg2)
 				logger.Warn("DoD FAILED after review changes", "Category", cat2, "Summary", sum2)
 				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{

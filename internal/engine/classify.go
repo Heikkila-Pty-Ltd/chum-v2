@@ -1,6 +1,34 @@
 package engine
 
-import "strings"
+import (
+	"strings"
+
+	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
+)
+
+// BuildClassifierInput constructs the string fed to ClassifyFailure from a
+// DoDResult. RunDoDChecks populates Failures as summaries like "go test (exit 1)"
+// which don't contain the stderr/stdout signatures the classifier matches
+// (e.g. "--- FAIL:", "undefined:", "command not found"). This function
+// concatenates the summary failures WITH the full output from each failed
+// check so the classifier can pattern-match on real error output.
+func BuildClassifierInput(dod gitpkg.DoDResult) string {
+	var parts []string
+	// Include the summary lines first (provides check names + exit codes).
+	parts = append(parts, dod.Failures...)
+	// Append truncated output from each failed check for pattern matching.
+	for _, check := range dod.Checks {
+		if !check.Passed && check.Output != "" {
+			// Cap at 2000 chars per check to avoid huge inputs.
+			out := check.Output
+			if len(out) > 2000 {
+				out = out[:2000]
+			}
+			parts = append(parts, out)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
 
 // FailureCategory is a machine-readable classification of a DoD failure.
 // Used for structured logging, telemetry, and retry/escalation decisions.
