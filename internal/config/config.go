@@ -23,6 +23,7 @@ type Config struct {
 	General   General             `toml:"general"`
 	Projects  map[string]Project  `toml:"projects"`
 	Providers map[string]Provider `toml:"providers"`
+	RateLimit RateLimit           `toml:"rate_limit"`
 }
 
 // General holds scheduler-level settings.
@@ -53,6 +54,22 @@ type Provider struct {
 	Model    string `toml:"model"`
 	Reviewer string `toml:"reviewer"`
 	Enabled  bool   `toml:"enabled"`
+}
+
+// RateLimit configures request rate limiting.
+type RateLimit struct {
+	Enabled         bool             `toml:"enabled"`
+	DefaultRate     float64          `toml:"default_rate"`     // requests/sec
+	DefaultBurst    int              `toml:"default_burst"`
+	CleanupInterval Duration         `toml:"cleanup_interval"` // stale-limiter eviction interval
+	Rules           []RateLimitRule  `toml:"rules"`            // per-endpoint overrides
+}
+
+// RateLimitRule defines per-endpoint rate limiting overrides.
+type RateLimitRule struct {
+	Path  string  `toml:"path"`
+	Rate  float64 `toml:"rate"`  // requests/sec
+	Burst int     `toml:"burst"`
 }
 
 // Load reads and parses a TOML config file.
@@ -86,6 +103,16 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.General.HealthPort == "" {
 		cfg.General.HealthPort = ":8080"
+	}
+	// RateLimit defaults
+	if cfg.RateLimit.DefaultRate == 0 {
+		cfg.RateLimit.DefaultRate = 10.0 // 10 req/s
+	}
+	if cfg.RateLimit.DefaultBurst == 0 {
+		cfg.RateLimit.DefaultBurst = 20
+	}
+	if cfg.RateLimit.CleanupInterval.Duration == 0 {
+		cfg.RateLimit.CleanupInterval.Duration = 5 * time.Minute
 	}
 	return &cfg, nil
 }
