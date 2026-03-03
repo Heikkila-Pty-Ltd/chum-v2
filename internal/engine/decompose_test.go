@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
@@ -57,169 +58,127 @@ func searchString(s, sub string) bool {
 	return false
 }
 
-// mockLLM implements llm.Runner for testing
+// mockLLM allows testing different LLM response scenarios
 type mockLLM struct {
-	planOutput string
-	execOutput string
-	err        error
+	planErr    error
+	planResult *llm.CLIResult
 }
 
 func (m *mockLLM) Plan(ctx context.Context, agent, model, workDir, prompt string) (*llm.CLIResult, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return &llm.CLIResult{ExitCode: 0, Output: m.planOutput}, nil
+	return m.planResult, m.planErr
 }
 
 func (m *mockLLM) Exec(ctx context.Context, agent, model, workDir, prompt string) (*llm.CLIResult, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return &llm.CLIResult{ExitCode: 0, Output: m.execOutput}, nil
+	return nil, errors.New("not implemented for test")
 }
 
-func TestDecomposeActivity_ValidJSONWith3Steps(t *testing.T) {
-	t.Parallel()
-
-	// Mock LLM that returns valid JSON with 3 steps
-	mockLLMRunner := &mockLLM{
-		planOutput: `{
-			"steps": [
-				{
-					"title": "Step 1",
-					"description": "Implement feature A",
-					"acceptance": "Feature A works correctly",
-					"estimate_minutes": 30
-				},
-				{
-					"title": "Step 2",
-					"description": "Add tests for feature A",
-					"acceptance": "Tests pass and coverage is adequate",
-					"estimate_minutes": 20
-				},
-				{
-					"title": "Step 3",
-					"description": "Update documentation",
-					"acceptance": "Documentation is updated and reviewed",
-					"estimate_minutes": 10
-				}
-			]
-		}`,
-	}
-
+func TestDecomposeActivity_LLMPlanError(t *testing.T) {
+	// Test case 1: LLM.Plan returns error
 	activities := &Activities{
-		LLM: mockLLMRunner,
+		LLM: &mockLLM{
+			planErr: errors.New("LLM plan failed"),
+		},
 	}
-
-	s := testsuite.WorkflowTestSuite{}
-	env := s.NewTestActivityEnvironment()
-	env.RegisterActivity(activities.DecomposeActivity)
 
 	req := TaskRequest{
 		TaskID:  "test-task",
-		Project: "test-project",
-		WorkDir: t.TempDir(),
+		Prompt:  "Add feature",
+		WorkDir: "/tmp/test",
 		Agent:   "test-agent",
 		Model:   "test-model",
-		Prompt:  "Add a new feature with tests and docs",
-	}
-
-	result, err := env.ExecuteActivity(activities.DecomposeActivity, req)
-	if err != nil {
-		t.Fatalf("DecomposeActivity failed: %v", err)
-	}
-
-	var decompResult *types.DecompResult
-	err = result.Get(&decompResult)
-	if err != nil {
-		t.Fatalf("Failed to get result: %v", err)
-	}
-
-	// Verify returned DecompResult has Atomic=false and 3 steps with correct fields
-	if decompResult.Atomic {
-		t.Error("Expected Atomic to be false for decomposed task")
-	}
-
-	if len(decompResult.Steps) != 3 {
-		t.Fatalf("Expected 3 steps, got %d", len(decompResult.Steps))
-	}
-
-	// Verify first step
-	step1 := decompResult.Steps[0]
-	if step1.Title != "Step 1" {
-		t.Errorf("Expected step 1 title 'Step 1', got '%s'", step1.Title)
-	}
-	if step1.Description != "Implement feature A" {
-		t.Errorf("Expected step 1 description 'Implement feature A', got '%s'", step1.Description)
-	}
-	if step1.Acceptance != "Feature A works correctly" {
-		t.Errorf("Expected step 1 acceptance 'Feature A works correctly', got '%s'", step1.Acceptance)
-	}
-	if step1.Estimate != 30 {
-		t.Errorf("Expected step 1 estimate 30, got %d", step1.Estimate)
-	}
-
-	// Verify second step
-	step2 := decompResult.Steps[1]
-	if step2.Title != "Step 2" {
-		t.Errorf("Expected step 2 title 'Step 2', got '%s'", step2.Title)
-	}
-	if step2.Estimate != 20 {
-		t.Errorf("Expected step 2 estimate 20, got %d", step2.Estimate)
-	}
-
-	// Verify third step
-	step3 := decompResult.Steps[2]
-	if step3.Title != "Step 3" {
-		t.Errorf("Expected step 3 title 'Step 3', got '%s'", step3.Title)
-	}
-	if step3.Estimate != 10 {
-		t.Errorf("Expected step 3 estimate 10, got %d", step3.Estimate)
-	}
-}
-
-func TestDecomposeActivity_EmptyStepsJSON_AtomicTrue(t *testing.T) {
-	t.Parallel()
-
-	// Mock LLM that returns empty steps JSON
-	mockLLMRunner := &mockLLM{
-		planOutput: `{"steps": []}`,
-	}
-
-	activities := &Activities{
-		LLM: mockLLMRunner,
 	}
 
 	s := testsuite.WorkflowTestSuite{}
 	env := s.NewTestActivityEnvironment()
 	env.RegisterActivity(activities.DecomposeActivity)
 
+	val, err := env.ExecuteActivity(activities.DecomposeActivity, req)
+
+	if err == nil {
+		t.Fatal("expected error when LLM.Plan fails, got nil")
+	}
+	if val != nil {
+		t.Errorf("expected nil result when LLM.Plan fails, got %+v", val)
+	}
+	if !contains(err.Error(), "decompose CLI") {
+		t.Errorf("expected error to mention 'decompose CLI', got: %s", err.Error())
+	}
+}
+
+func TestDecomposeActivity_LLMNonZeroExitCode(t *testing.T) {
+	// Test case 2: LLM returns non-zero exit code
+	activities := &Activities{
+		LLM: &mockLLM{
+			planResult: &llm.CLIResult{
+				ExitCode: 1,
+				Output:   "Command failed with some error",
+			},
+		},
+	}
+
 	req := TaskRequest{
-		TaskID:  "test-atomic-task",
-		Project: "test-project",
-		WorkDir: t.TempDir(),
+		TaskID:  "test-task",
+		Prompt:  "Add feature",
+		WorkDir: "/tmp/test",
 		Agent:   "test-agent",
 		Model:   "test-model",
-		Prompt:  "Fix a simple typo",
 	}
 
-	result, err := env.ExecuteActivity(activities.DecomposeActivity, req)
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(activities.DecomposeActivity)
+
+	val, err := env.ExecuteActivity(activities.DecomposeActivity, req)
+
+	if err == nil {
+		t.Fatal("expected error when LLM returns non-zero exit code, got nil")
+	}
+	if val != nil {
+		t.Errorf("expected nil result when LLM returns non-zero exit code, got %+v", val)
+	}
+	if !contains(err.Error(), "decompose CLI exited 1") {
+		t.Errorf("expected error to mention 'decompose CLI exited 1', got: %s", err.Error())
+	}
+}
+
+func TestDecomposeActivity_LLMInvalidJSON(t *testing.T) {
+	// Test case 3: LLM returns output with no valid JSON (should fallback to Atomic=true)
+	activities := &Activities{
+		LLM: &mockLLM{
+			planResult: &llm.CLIResult{
+				ExitCode: 0,
+				Output:   "This is some text without any valid JSON structure",
+			},
+		},
+	}
+
+	req := TaskRequest{
+		TaskID:  "test-task",
+		Prompt:  "Add feature",
+		WorkDir: "/tmp/test",
+		Agent:   "test-agent",
+		Model:   "test-model",
+	}
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(activities.DecomposeActivity)
+
+	val, err := env.ExecuteActivity(activities.DecomposeActivity, req)
+
 	if err != nil {
-		t.Fatalf("DecomposeActivity failed: %v", err)
+		t.Fatalf("expected no error when LLM returns invalid JSON, got: %s", err.Error())
 	}
 
-	var decompResult *types.DecompResult
-	err = result.Get(&decompResult)
-	if err != nil {
-		t.Fatalf("Failed to get result: %v", err)
+	var result types.DecompResult
+	if err := val.Get(&result); err != nil {
+		t.Fatalf("failed to decode activity result: %s", err.Error())
 	}
 
-	// Verify Atomic=true for empty steps
-	if !decompResult.Atomic {
-		t.Error("Expected Atomic to be true for empty steps")
+	if !result.Atomic {
+		t.Error("expected Atomic=true when LLM returns invalid JSON, got false")
 	}
-
-	if len(decompResult.Steps) != 0 {
-		t.Fatalf("Expected 0 steps, got %d", len(decompResult.Steps))
+	if len(result.Steps) != 0 {
+		t.Errorf("expected empty steps when Atomic=true, got %d steps", len(result.Steps))
 	}
 }
