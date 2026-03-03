@@ -9,7 +9,7 @@ import (
 )
 
 // StoreLesson persists a lesson and updates the FTS5 index via triggers.
-func (s *Store) StoreLesson(morselID, project, category, summary, detail string, filePaths []string, labels []string) (int64, error) {
+func (s *Store) StoreLesson(taskID, project, category, summary, detail string, filePaths []string, labels []string) (int64, error) {
 	filePathsJSON, err := json.Marshal(filePaths)
 	if err != nil {
 		return 0, fmt.Errorf("store: marshal file_paths: %w", err)
@@ -17,9 +17,9 @@ func (s *Store) StoreLesson(morselID, project, category, summary, detail string,
 	labelsStr := strings.Join(labels, ",")
 
 	result, err := s.db.Exec(`
-		INSERT INTO lessons (morsel_id, project, category, summary, detail, file_paths, labels)
+		INSERT INTO lessons (task_id, project, category, summary, detail, file_paths, labels)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		morselID, project, category, summary, detail, string(filePathsJSON), labelsStr,
+		taskID, project, category, summary, detail, string(filePathsJSON), labelsStr,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("store: insert lesson: %w", err)
@@ -37,7 +37,7 @@ func (s *Store) SearchLessons(query string, limit int) ([]StoredLesson, error) {
 		return nil, nil
 	}
 	rows, err := s.db.Query(`
-		SELECT l.id, l.morsel_id, l.project, l.category, l.summary, l.detail,
+		SELECT l.id, l.task_id, l.project, l.category, l.summary, l.detail,
 		       l.file_paths, l.labels, l.created_at
 		FROM lessons l
 		JOIN lessons_fts f ON l.id = f.rowid
@@ -88,7 +88,7 @@ func (s *Store) GetRecentLessons(project string, limit int) ([]StoredLesson, err
 		limit = 10
 	}
 	rows, err := s.db.Query(`
-		SELECT id, morsel_id, project, category, summary, detail,
+		SELECT id, task_id, project, category, summary, detail,
 		       file_paths, labels, created_at
 		FROM lessons WHERE project = ?
 		ORDER BY created_at DESC LIMIT ?`, project, limit)
@@ -99,15 +99,15 @@ func (s *Store) GetRecentLessons(project string, limit int) ([]StoredLesson, err
 	return scanLessons(rows)
 }
 
-// GetLessonsByMorsel returns all lessons for a specific morsel.
-func (s *Store) GetLessonsByMorsel(morselID string) ([]StoredLesson, error) {
+// GetLessonsByTask returns all lessons for a specific task.
+func (s *Store) GetLessonsByTask(taskID string) ([]StoredLesson, error) {
 	rows, err := s.db.Query(`
-		SELECT id, morsel_id, project, category, summary, detail,
+		SELECT id, task_id, project, category, summary, detail,
 		       file_paths, labels, created_at
-		FROM lessons WHERE morsel_id = ?
-		ORDER BY created_at DESC`, morselID)
+		FROM lessons WHERE task_id = ?
+		ORDER BY created_at DESC`, taskID)
 	if err != nil {
-		return nil, fmt.Errorf("store: get lessons by morsel: %w", err)
+		return nil, fmt.Errorf("store: get lessons by task: %w", err)
 	}
 	defer rows.Close()
 	return scanLessons(rows)
@@ -134,7 +134,7 @@ func scanLessons(rows *sql.Rows) ([]StoredLesson, error) {
 	for rows.Next() {
 		var l StoredLesson
 		var filePathsJSON, labelsStr, createdAt string
-		if err := rows.Scan(&l.ID, &l.MorselID, &l.Project, &l.Category,
+		if err := rows.Scan(&l.ID, &l.TaskID, &l.Project, &l.Category,
 			&l.Summary, &l.Detail, &filePathsJSON, &labelsStr, &createdAt); err != nil {
 			return nil, fmt.Errorf("store: scan lesson: %w", err)
 		}

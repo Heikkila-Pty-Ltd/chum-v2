@@ -134,9 +134,9 @@ func (s *Store) GetBlockCountsByType() (map[string]int, error) {
 	return counts, rows.Err()
 }
 
-// IsMorselValidating returns whether a morsel is currently marked as validating.
-func (s *Store) IsMorselValidating(morselID string) (bool, error) {
-	block, err := s.GetBlock(strings.TrimSpace(morselID), "morsel_validating")
+// IsTaskValidating returns whether a task is currently marked as validating.
+func (s *Store) IsTaskValidating(taskID string) (bool, error) {
+	block, err := s.GetBlock(strings.TrimSpace(taskID), "task_validating")
 	if err != nil {
 		return false, err
 	}
@@ -146,14 +146,14 @@ func (s *Store) IsMorselValidating(morselID string) (bool, error) {
 	return time.Now().Before(block.BlockedUntil), nil
 }
 
-// SetMorselValidating sets a validating block until the given time.
-func (s *Store) SetMorselValidating(morselID string, until time.Time) error {
-	return s.SetBlock(strings.TrimSpace(morselID), "morsel_validating", until, "morsel validating")
+// SetTaskValidating sets a validating block until the given time.
+func (s *Store) SetTaskValidating(taskID string, until time.Time) error {
+	return s.SetBlock(strings.TrimSpace(taskID), "task_validating", until, "task validating")
 }
 
-// ClearMorselValidating removes the validating block for a morsel.
-func (s *Store) ClearMorselValidating(morselID string) error {
-	return s.RemoveBlock(strings.TrimSpace(morselID), "morsel_validating")
+// ClearTaskValidating removes the validating block for a task.
+func (s *Store) ClearTaskValidating(taskID string) error {
+	return s.RemoveBlock(strings.TrimSpace(taskID), "task_validating")
 }
 
 // scanBlocks scans rows into SafetyBlock slices.

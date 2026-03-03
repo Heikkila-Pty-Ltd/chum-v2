@@ -73,10 +73,10 @@ func TestLessonStoreAndSearch(t *testing.T) {
 		t.Fatalf("expected 0 results for metachar query, got %d", len(results))
 	}
 
-	// Get by morsel.
-	results, err = s.GetLessonsByMorsel("chum-abc")
+	// Get by task.
+	results, err = s.GetLessonsByTask("chum-abc")
 	if err != nil {
-		t.Fatalf("GetLessonsByMorsel: %v", err)
+		t.Fatalf("GetLessonsByTask: %v", err)
 	}
 	if len(results) != 1 {
 		t.Fatalf("expected 1 lesson for chum-abc, got %d", len(results))

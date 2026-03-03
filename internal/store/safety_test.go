@@ -98,7 +98,7 @@ func TestActiveBlocksAndCounts(t *testing.T) {
 	// Create active blocks.
 	s.SetBlock("proj-a", "churn_block", time.Now().Add(5*time.Minute), "high failure rate")
 	s.SetBlock("proj-b", "churn_block", time.Now().Add(5*time.Minute), "high failure rate b")
-	s.SetBlock("morsel-xyz", "quarantine", time.Now().Add(10*time.Minute), "consecutive failures")
+	s.SetBlock("task-xyz", "quarantine", time.Now().Add(10*time.Minute), "consecutive failures")
 	s.SetBlockWithMetadata("system", "circuit_breaker", time.Now().Add(15*time.Minute), "tripped", map[string]interface{}{"failures": float64(5)})
 
 	// Expired block should not appear.
@@ -145,20 +145,20 @@ func TestActiveBlocksAndCounts(t *testing.T) {
 	}
 }
 
-func TestMorselValidatingRoundTrip(t *testing.T) {
+func TestTaskValidatingRoundTrip(t *testing.T) {
 	s := tempStore(t)
 
-	s.SetMorselValidating("morsel-v", time.Now().Add(2*time.Minute))
+	s.SetTaskValidating("task-v", time.Now().Add(2*time.Minute))
 
-	validating, _ := s.IsMorselValidating("morsel-v")
+	validating, _ := s.IsTaskValidating("task-v")
 	if !validating {
-		t.Fatal("expected morsel to be validating")
+		t.Fatal("expected task to be validating")
 	}
 
-	s.ClearMorselValidating("morsel-v")
-	validating, _ = s.IsMorselValidating("morsel-v")
+	s.ClearTaskValidating("task-v")
+	validating, _ = s.IsTaskValidating("task-v")
 	if validating {
-		t.Fatal("expected morsel to not be validating after clear")
+		t.Fatal("expected task to not be validating after clear")
 	}
 }
 

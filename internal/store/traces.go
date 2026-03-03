@@ -13,12 +13,12 @@ import (
 )
 
 // StartExecutionTrace creates a new trace row for a workflow task.
-func (s *Store) StartExecutionTrace(taskID, species, goalSignature string) (int64, error) {
+func (s *Store) StartExecutionTrace(taskID, profile, goalSignature string) (int64, error) {
 	result, err := s.db.Exec(`
-		INSERT INTO execution_traces (task_id, species, goal_signature)
+		INSERT INTO execution_traces (task_id, profile, goal_signature)
 		VALUES (?, ?, ?)`,
 		strings.TrimSpace(taskID),
-		strings.TrimSpace(species),
+		strings.TrimSpace(profile),
 		strings.TrimSpace(goalSignature),
 	)
 	if err != nil {
@@ -69,7 +69,7 @@ func (s *Store) CompleteExecutionTrace(traceID int64, status, outcome string, at
 // ListExecutionTraces returns all traces for a task, oldest first.
 func (s *Store) ListExecutionTraces(taskID string) ([]ExecutionTrace, error) {
 	rows, err := s.db.Query(`
-		SELECT id, task_id, species, goal_signature, status, started_at, completed_at,
+		SELECT id, task_id, profile, goal_signature, status, started_at, completed_at,
 		       outcome, attempt_count, success_count, success_rate, created_at, updated_at
 		FROM execution_traces WHERE task_id = ? ORDER BY created_at ASC`, taskID)
 	if err != nil {
@@ -82,7 +82,7 @@ func (s *Store) ListExecutionTraces(taskID string) ([]ExecutionTrace, error) {
 		var t ExecutionTrace
 		var completed sql.NullTime
 		if err := rows.Scan(
-			&t.ID, &t.TaskID, &t.Species, &t.GoalSignature, &t.Status,
+			&t.ID, &t.TaskID, &t.Profile, &t.GoalSignature, &t.Status,
 			&t.StartedAt, &completed, &t.Outcome, &t.AttemptCount,
 			&t.SuccessCount, &t.SuccessRate, &t.CreatedAt, &t.UpdatedAt,
 		); err != nil {

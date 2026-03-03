@@ -6,7 +6,7 @@ const schemaTraces = `
 CREATE TABLE IF NOT EXISTS execution_traces (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	task_id TEXT NOT NULL,
-	species TEXT NOT NULL DEFAULT '',
+	profile TEXT NOT NULL DEFAULT '',
 	goal_signature TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL DEFAULT 'running',
 	outcome TEXT NOT NULL DEFAULT '',
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS graph_trace_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_execution_traces_task ON execution_traces(task_id);
-CREATE INDEX IF NOT EXISTS idx_execution_traces_species ON execution_traces(species);
+CREATE INDEX IF NOT EXISTS idx_execution_traces_profile ON execution_traces(profile);
 CREATE INDEX IF NOT EXISTS idx_execution_traces_status ON execution_traces(status);
 CREATE INDEX IF NOT EXISTS idx_trace_events_trace_id ON trace_events(trace_id);
 CREATE INDEX IF NOT EXISTS idx_trace_events_stage ON trace_events(stage);

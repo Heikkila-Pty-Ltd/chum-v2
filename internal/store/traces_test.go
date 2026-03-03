@@ -57,8 +57,8 @@ func TestExecutionTraceLifecycle(t *testing.T) {
 		t.Fatalf("expected 1 trace, got %d", len(traces))
 	}
 	tr := traces[0]
-	if tr.Species != "coder" {
-		t.Errorf("species = %q, want coder", tr.Species)
+	if tr.Profile != "coder" {
+		t.Errorf("profile = %q, want coder", tr.Profile)
 	}
 	if tr.Status != "completed" {
 		t.Errorf("status = %q, want completed", tr.Status)

@@ -5,7 +5,7 @@ package store
 const schemaLessons = `
 CREATE TABLE IF NOT EXISTS lessons (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	morsel_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
 	project TEXT NOT NULL,
 	category TEXT NOT NULL,
 	summary TEXT NOT NULL,
@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS lessons (
 	created_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_lessons_morsel ON lessons(morsel_id);
+CREATE INDEX IF NOT EXISTS idx_lessons_task ON lessons(task_id);
 CREATE INDEX IF NOT EXISTS idx_lessons_project ON lessons(project);
 CREATE INDEX IF NOT EXISTS idx_lessons_category ON lessons(category);
 CREATE INDEX IF NOT EXISTS idx_lessons_created ON lessons(created_at);

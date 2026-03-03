@@ -2,7 +2,7 @@
 //
 // The store is split into focused sub-stores, each with its own interface and schema:
 //   - TraceStore: execution traces and graph trace events
-//   - SafetyStore: safety blocks and morsel validation guards
+//   - SafetyStore: safety blocks and task validation guards
 //   - LessonStore: lessons learned with FTS5 full-text search
 //
 // All sub-stores share a single SQLite database connection with WAL mode
