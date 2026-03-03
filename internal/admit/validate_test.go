@@ -41,7 +41,7 @@ func TestValidateStructure(t *testing.T) {
 			reason: "too short",
 		},
 		{
-			name:   "description restating title fails",
+			name: "description restating title fails",
 			modify: func(t dag.Task) dag.Task {
 				t.Title = "Add mtime-based caching to the Parser ParseFile method"
 				t.Description = "Add mtime-based caching to the Parser ParseFile method."
@@ -60,13 +60,13 @@ func TestValidateStructure(t *testing.T) {
 			reason: "estimate_minutes must be set",
 		},
 		{
-			name:   "over 30 min fails",
-			modify: func(t dag.Task) dag.Task { t.EstimateMinutes = 45; return t },
+			name:   "over 15 min fails",
+			modify: func(t dag.Task) dag.Task { t.EstimateMinutes = 20; return t },
 			reason: "broken down",
 		},
 		{
-			name:   "exactly 30 min passes",
-			modify: func(t dag.Task) dag.Task { t.EstimateMinutes = 30; return t },
+			name:   "exactly 15 min passes",
+			modify: func(t dag.Task) dag.Task { t.EstimateMinutes = 15; return t },
 			pass:   true,
 		},
 		{

@@ -21,6 +21,8 @@ const taskTableSchema = `CREATE TABLE IF NOT EXISTS tasks (
 	project TEXT NOT NULL DEFAULT '',
 	error_log TEXT NOT NULL DEFAULT '',
 	metadata TEXT NOT NULL DEFAULT '{}',
+	actual_duration_sec INTEGER NOT NULL DEFAULT 0,
+	iterations_used INTEGER NOT NULL DEFAULT 0,
 	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
 	updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );`
@@ -70,7 +72,8 @@ const indexDecisionsTaskID = `CREATE INDEX IF NOT EXISTS idx_decisions_task_id O
 const indexAlternativesDecisionID = `CREATE INDEX IF NOT EXISTS idx_alternatives_decision_id ON decision_alternatives(decision_id);`
 
 const taskColumns = `id, title, description, status, priority, type, assignee, labels,
-	estimate_minutes, parent_id, acceptance, project, error_log, metadata, created_at, updated_at`
+	estimate_minutes, parent_id, acceptance, project, error_log, metadata,
+	actual_duration_sec, iterations_used, created_at, updated_at`
 
 // EnsureSchema creates the tasks, task_edges, and task_targets tables
 // if they don't exist, and runs any necessary migrations.
@@ -84,6 +87,9 @@ func (d *DAG) EnsureSchema(ctx context.Context) error {
 		return fmt.Errorf("migrate schema: %w", err)
 	}
 	if err := d.migrateTaskMetadata(ctx); err != nil {
+		return fmt.Errorf("migrate schema: %w", err)
+	}
+	if err := d.migrateTaskExecMetrics(ctx); err != nil {
 		return fmt.Errorf("migrate schema: %w", err)
 	}
 	return nil
@@ -138,4 +144,12 @@ func (d *DAG) migrateEdgeSource(ctx context.Context) error {
 // migrateTaskMetadata adds the metadata column to tasks if it doesn't exist.
 func (d *DAG) migrateTaskMetadata(ctx context.Context) error {
 	return d.migrateAddColumn(ctx, "tasks", "metadata", "TEXT NOT NULL DEFAULT '{}'")
+}
+
+// migrateTaskExecMetrics adds execution metric columns to tasks if they don't exist.
+func (d *DAG) migrateTaskExecMetrics(ctx context.Context) error {
+	if err := d.migrateAddColumn(ctx, "tasks", "actual_duration_sec", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	return d.migrateAddColumn(ctx, "tasks", "iterations_used", "INTEGER NOT NULL DEFAULT 0")
 }

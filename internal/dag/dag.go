@@ -313,7 +313,7 @@ func (d *DAG) UpdateTask(ctx context.Context, id string, fields map[string]any) 
 		"title": true, "description": true, "status": true, "priority": true,
 		"type": true, "assignee": true, "labels": true, "estimate_minutes": true,
 		"parent_id": true, "acceptance": true, "project": true, "error_log": true,
-		"metadata": true,
+		"metadata": true, "actual_duration_sec": true, "iterations_used": true,
 	}
 	for k, v := range fields {
 		if !allowed[k] {
@@ -407,7 +407,8 @@ func scanTask(row *sql.Row) (Task, error) {
 		&t.ID, &t.Title, &t.Description, &t.Status, &t.Priority,
 		&t.Type, &t.Assignee, &labelsJSON, &t.EstimateMinutes,
 		&t.ParentID, &t.Acceptance, &t.Project, &t.ErrorLog,
-		&metadataJSON, &t.CreatedAt, &t.UpdatedAt,
+		&metadataJSON, &t.ActualDurationS, &t.IterationsUsed,
+		&t.CreatedAt, &t.UpdatedAt,
 	)
 	if err != nil {
 		return t, fmt.Errorf("scan task: %w", err)
@@ -432,7 +433,8 @@ func scanTaskRows(rows *sql.Rows) (Task, error) {
 		&t.ID, &t.Title, &t.Description, &t.Status, &t.Priority,
 		&t.Type, &t.Assignee, &labelsJSON, &t.EstimateMinutes,
 		&t.ParentID, &t.Acceptance, &t.Project, &t.ErrorLog,
-		&metadataJSON, &t.CreatedAt, &t.UpdatedAt,
+		&metadataJSON, &t.ActualDurationS, &t.IterationsUsed,
+		&t.CreatedAt, &t.UpdatedAt,
 	)
 	if err != nil {
 		return t, fmt.Errorf("scan task: %w", err)
