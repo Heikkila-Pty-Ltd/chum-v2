@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"time"
+
 	"go.temporal.io/sdk/activity"
 
 	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
@@ -19,6 +21,8 @@ import (
 	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/notify"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/perf"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
@@ -31,6 +35,8 @@ type Activities struct {
 	BeadsClients map[string]beads.Store
 	ChatSend     notify.ChatSender
 	LLM          llm.Runner
+	Traces       store.TraceStore // execution trace recording (nil = no-op)
+	Perf         *perf.Tracker    // performance tracking (nil = no-op)
 }
 
 // --- 1. SetupWorktreeActivity ---
@@ -301,6 +307,87 @@ func fallbackFileList(ctx context.Context, workDir string) string {
 		return "(could not determine project structure)"
 	}
 	return strings.Join(sections, "\n")
+}
+
+// --- 8. RecordTraceActivity ---
+
+// TraceOutcome captures the result of an AgentWorkflow for trace recording.
+type TraceOutcome struct {
+	TaskID    string
+	SessionID string // Temporal workflow run ID
+	Agent     string
+	Model     string
+	Tier      string
+	Reason    string // CloseCompleted, CloseDoDFailed, etc.
+	SubReason string
+	Duration  time.Duration
+}
+
+// rewardForReason maps close reasons to terminal reward values.
+func rewardForReason(reason CloseReason) float64 {
+	switch reason {
+	case CloseCompleted:
+		return 1.0
+	case CloseDecomposed:
+		return 0.5
+	default:
+		return -1.0
+	}
+}
+
+// RecordTraceActivity writes execution trace and perf data for a completed workflow.
+// Best-effort: errors are logged but do not fail the workflow.
+func (a *Activities) RecordTraceActivity(ctx context.Context, outcome TraceOutcome) error {
+	logger := activity.GetLogger(ctx)
+
+	success := outcome.Reason == string(CloseCompleted)
+	successCount := 0
+	if success {
+		successCount = 1
+	}
+	reward := rewardForReason(CloseReason(outcome.Reason))
+
+	// Record execution trace.
+	if a.Traces != nil {
+		traceID, err := a.Traces.StartExecutionTrace(outcome.TaskID, outcome.Agent, "")
+		if err != nil {
+			logger.Error("Failed to start execution trace", "error", err)
+		} else {
+			_ = a.Traces.AppendTraceEvent(traceID, store.TraceEvent{
+				Stage:        outcome.Reason,
+				Step:         outcome.SubReason,
+				Tool:         outcome.Agent,
+				DurationMs:   outcome.Duration.Milliseconds(),
+				Success:      success,
+				ErrorContext:  outcome.SubReason,
+			})
+			if err := a.Traces.CompleteExecutionTrace(traceID, outcome.Reason, outcome.SubReason, 1, successCount); err != nil {
+				logger.Error("Failed to complete execution trace", "error", err)
+			}
+		}
+
+		// Backpropagate reward to any graph trace events for this session.
+		if outcome.SessionID != "" {
+			if err := a.Traces.BackpropagateReward(ctx, outcome.SessionID, reward); err != nil {
+				logger.Error("Failed to backpropagate reward", "error", err)
+			}
+		}
+	}
+
+	// Record perf run.
+	if a.Perf != nil {
+		if err := a.Perf.Record(ctx, outcome.Agent, outcome.Model, outcome.Tier, success, outcome.Duration.Seconds()); err != nil {
+			logger.Error("Failed to record perf run", "error", err)
+		}
+	}
+
+	logger.Info("Trace recorded",
+		"task", outcome.TaskID,
+		"reason", outcome.Reason,
+		"reward", reward,
+		"duration", outcome.Duration,
+	)
+	return nil
 }
 
 // --- helpers ---

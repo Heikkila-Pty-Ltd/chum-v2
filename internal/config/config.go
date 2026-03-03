@@ -92,6 +92,8 @@ type General struct {
 	DoltPort                int      `toml:"dolt_port"`
 
 	JarvisPort int `toml:"jarvis_port"` // HTTP API port for Jarvis integration (0 = disabled)
+
+	TracesDBPath string `toml:"traces_db_path"` // SQLite path for execution traces + perf (default: chum-traces.db)
 }
 
 // Project configures a single managed project.
@@ -138,6 +140,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.General.DBPath == "" {
 		cfg.General.DBPath = "chum.db"
+	}
+	if cfg.General.TracesDBPath == "" {
+		cfg.General.TracesDBPath = "chum-traces.db"
 	}
 	if cfg.General.ExecTimeout.Duration == 0 {
 		cfg.General.ExecTimeout.Duration = 45 * time.Minute

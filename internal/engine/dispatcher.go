@@ -16,6 +16,7 @@ import (
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/perf"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
@@ -131,6 +132,7 @@ type DispatchActivities struct {
 	DAG    dag.TaskStore
 	Config *config.Config
 	Logger *slog.Logger
+	Perf   *perf.Tracker // performance-based provider selection (nil = config-only)
 }
 
 // MarkTaskRunningActivity marks a task as "running" in the DAG.
@@ -163,9 +165,9 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 		}
 
 		for _, t := range tasks {
-			// Pick provider based on task's estimated difficulty
+			// Pick provider: try perf-informed selection first, fall back to config.
 			startTier := TierForEstimate(t.EstimateMinutes)
-			agent, model, tier := PickProvider(da.Config, startTier)
+			agent, model, tier := da.pickProvider(ctx, startTier)
 
 			prompt := t.Description
 			if t.Acceptance != "" {
@@ -189,6 +191,21 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 	}
 
 	return candidates, nil
+}
+
+// pickProvider tries perf-informed UCT selection first, then falls back to config.
+func (da *DispatchActivities) pickProvider(ctx context.Context, tier string) (cli, model, resolvedTier string) {
+	if da.Perf != nil {
+		logger := activity.GetLogger(ctx)
+		p, err := da.Perf.Pick(ctx, tier)
+		if err != nil {
+			logger.Warn("Perf provider selection failed, using config", "tier", tier, "error", err)
+		} else if p != nil {
+			logger.Info("Perf-informed provider selected", "agent", p.Agent, "model", p.Model, "tier", p.Tier)
+			return p.Agent, p.Model, p.Tier
+		}
+	}
+	return PickProvider(da.Config, tier)
 }
 
 // pullMaster fetches and fast-forwards master so agents start from the latest code.
