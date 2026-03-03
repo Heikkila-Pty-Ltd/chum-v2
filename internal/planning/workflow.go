@@ -243,21 +243,10 @@ func (c *ceremony) storeAndPresent(ctx workflow.Context) {
 	summary := formatApproachesSummary(c.req.SessionID, c.goal, c.approaches)
 	c.notify(summary)
 
-	// Drain any signals that arrived during autonomous phases 1-4.
-	drainChannel := func(ch workflow.ReceiveChannel) {
-		for {
-			var discard string
-			if !ch.ReceiveAsync(&discard) {
-				return
-			}
-			logger.Warn("Drained premature signal", "value", discard)
-		}
-	}
-	drainChannel(c.selectCh)
-	drainChannel(c.digCh)
-	drainChannel(c.questionCh)
-	drainChannel(c.greenlightCh)
-	drainChannel(c.approveDecompCh)
+	// NOTE: we intentionally do NOT drain signals here. Any signals that
+	// arrived during autonomous phases (1-4) represent valid user intent
+	// and will be consumed by interactiveSelect. Draining them caused
+	// race conditions in tests and lost legitimate early selections.
 }
 
 // runInteractiveCycles runs phases 5-7 in a loop until approval or max cycles.
