@@ -76,7 +76,7 @@ func main() {
 			}
 
 			eng := jarvis.NewEngine(d, c, cfg.General.TaskQueue, workDirs, logger)
-			api := &jarvis.API{Engine: eng, Logger: logger}
+			api := &jarvis.API{Engine: eng, DAG: d, Logger: logger, WebDir: "web"}
 
 			addr := fmt.Sprintf("127.0.0.1:%d", port)
 			ln, err := net.Listen("tcp", addr)
@@ -162,10 +162,11 @@ func main() {
 
 	case "task":
 		if len(os.Args) < 3 || os.Args[2] != "create" {
-			fmt.Fprintf(os.Stderr, "Usage: chum task create --project NAME --title TITLE [--status STATUS] [--description DESC]\n")
+			fmt.Fprintf(os.Stderr, "Usage: chum task create --project NAME --title TITLE [--description DESC] [--acceptance CRITERIA] [--estimate MINUTES] [--status STATUS]\n")
 			os.Exit(1)
 		}
-		var project, title, description, status string
+		var project, title, description, status, acceptance string
+		var estimate int
 		for i := 3; i < len(os.Args); i++ {
 			switch os.Args[i] {
 			case "--project":
@@ -180,6 +181,13 @@ func main() {
 			case "--status":
 				status = requireFlagValue(os.Args, i)
 				i++
+			case "--acceptance":
+				acceptance = requireFlagValue(os.Args, i)
+				i++
+			case "--estimate":
+				v := requireFlagValue(os.Args, i)
+				i++
+				fmt.Sscanf(v, "%d", &estimate)
 			}
 		}
 		if title == "" || project == "" {
@@ -190,10 +198,12 @@ func main() {
 			status = types.StatusReady
 		}
 		task := dag.Task{
-			Title:       title,
-			Description: description,
-			Status:      status,
-			Project:     project,
+			Title:           title,
+			Description:     description,
+			Status:          status,
+			Project:         project,
+			Acceptance:      acceptance,
+			EstimateMinutes: estimate,
 		}
 		id, err := d.CreateTask(context.Background(), task)
 		if err != nil {
