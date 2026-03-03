@@ -5,18 +5,24 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
-	"os/signal"
-	"sync"
-	"syscall"
+	"time"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/admit"
 	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beadsync"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/engine"
-	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/health"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/jarvis"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
+
+	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/worker"
 )
 
 func main() {
@@ -53,44 +59,45 @@ func main() {
 
 	switch subcmd {
 	case "serve":
-		fmt.Println("CHUM v2 — starting worker and health server")
+		fmt.Println("CHUM v2 — starting worker")
 
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		// Handle shutdown signals
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-		var wg sync.WaitGroup
-
-		// Start health server
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			healthServer := health.NewServer(cfg, logger)
-			if err := healthServer.Start(ctx, cfg.General.HealthPort); err != nil {
-				logger.Error("Health server failed", "error", err)
+		// Register Jarvis integration hook.
+		engine.RegisterWorkerHook(func(w worker.Worker, c client.Client, d *dag.DAG, cfg *config.Config, logger *slog.Logger) {
+			port := cfg.General.JarvisPort
+			if port == 0 {
+				return
 			}
-		}()
 
-		// Start Temporal worker
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := engine.StartWorker(cfg, d, logger); err != nil {
-				logger.Error("Worker failed", "error", err)
-				cancel() // Signal other goroutines to stop
+			workDirs := make(map[string]string)
+			for name, proj := range cfg.Projects {
+				if proj.Enabled {
+					workDirs[name] = proj.Workspace
+				}
 			}
-		}()
 
-		// Wait for shutdown signal
-		<-sigCh
-		logger.Info("Shutdown signal received, stopping services...")
-		cancel()
+			eng := jarvis.NewEngine(d, c, cfg.General.TaskQueue, workDirs, logger)
+			api := &jarvis.API{Engine: eng, Logger: logger}
 
-		wg.Wait()
-		logger.Info("All services stopped")
+			addr := fmt.Sprintf("127.0.0.1:%d", port)
+			ln, err := net.Listen("tcp", addr)
+			if err != nil {
+				logger.Error("Failed to start Jarvis API", "addr", addr, "error", err)
+				return
+			}
+
+			srv := &http.Server{Handler: api.Handler()}
+			go func() {
+				logger.Info("Jarvis API listening", "addr", addr)
+				if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+					logger.Error("Jarvis API error", "error", err)
+				}
+			}()
+		})
+
+		if err := engine.StartWorker(cfg, d, logger); err != nil {
+			logger.Error("Worker failed", "error", err)
+			os.Exit(1)
+		}
 
 	case "sync":
 		fmt.Println("CHUM v2 — syncing from beads")
@@ -103,12 +110,12 @@ func main() {
 			}
 
 			// Phase 1: Import from beads
-			client, err := beads.NewClient(project.Workspace)
+			client, err := beads.NewReadOnlyClient(project.Workspace)
 			if err != nil {
 				logger.Error("Beads client failed", "project", projectName, "error", err)
 				continue
 			}
-			syncResult, err := beads.SyncToDAG(context.Background(), client, d, projectName, logger)
+			syncResult, err := beadsync.SyncToDAG(context.Background(), client, d, projectName, logger)
 			if err != nil {
 				logger.Error("Sync failed", "project", projectName, "error", err)
 				continue
@@ -146,7 +153,7 @@ func main() {
 
 	case "init":
 		fmt.Printf("CHUM v2 — creating Temporal namespace %q\n", cfg.General.TemporalNamespace)
-		if err := engine.EnsureNamespace(cfg, logger); err != nil {
+		if err := engine.EnsureNamespace(context.Background(), cfg, logger); err != nil {
 			logger.Error("Namespace creation failed", "error", err)
 			fmt.Println("  Hint: make sure Temporal server is running and temporal CLI is on PATH")
 			os.Exit(1)
@@ -159,16 +166,20 @@ func main() {
 			os.Exit(1)
 		}
 		var project, title, description, status string
-		for i := 3; i < len(os.Args)-1; i++ {
+		for i := 3; i < len(os.Args); i++ {
 			switch os.Args[i] {
 			case "--project":
-				project = os.Args[i+1]
+				project = requireFlagValue(os.Args, i)
+				i++
 			case "--title":
-				title = os.Args[i+1]
+				title = requireFlagValue(os.Args, i)
+				i++
 			case "--description":
-				description = os.Args[i+1]
+				description = requireFlagValue(os.Args, i)
+				i++
 			case "--status":
-				status = os.Args[i+1]
+				status = requireFlagValue(os.Args, i)
+				i++
 			}
 		}
 		if title == "" || project == "" {
@@ -176,7 +187,7 @@ func main() {
 			os.Exit(1)
 		}
 		if status == "" {
-			status = "ready"
+			status = types.StatusReady
 		}
 		task := dag.Task{
 			Title:       title,
@@ -191,8 +202,93 @@ func main() {
 		}
 		fmt.Printf("Created task %s [%s] %s\n", id, status, title)
 
+	case "plan":
+		// CLI fallback for planning ceremony (when Matrix is not available)
+		var project, agent, goalID string
+		for i := 2; i < len(os.Args); i++ {
+			switch os.Args[i] {
+			case "--project":
+				project = requireFlagValue(os.Args, i)
+				i++
+			case "--agent":
+				agent = requireFlagValue(os.Args, i)
+				i++
+			case "--goal":
+				goalID = requireFlagValue(os.Args, i)
+				i++
+			}
+		}
+		if project == "" || goalID == "" {
+			fmt.Fprintf(os.Stderr, "Usage: chum plan --project NAME --goal ISSUE_ID [--agent claude]\n")
+			os.Exit(1)
+		}
+		projCfg, ok := cfg.Projects[project]
+		if !ok || !projCfg.Enabled {
+			fmt.Fprintf(os.Stderr, "Error: project %q not found or not enabled\n", project)
+			os.Exit(1)
+		}
+		if agent == "" {
+			agent = "claude"
+		}
+		fmt.Printf("CHUM v2 — starting planning ceremony for %s\n", project)
+
+		c, err := engine.DialTemporal(cfg, nil)
+		if err != nil {
+			logger.Error("Failed to connect to Temporal", "error", err)
+			os.Exit(1)
+		}
+		defer c.Close()
+
+		sessionID := fmt.Sprintf("planning-%s-%d", project, time.Now().UnixNano())
+		req := planning.PlanningRequest{
+			GoalID:    goalID,
+			Project:   project,
+			WorkDir:   projCfg.Workspace,
+			Agent:     agent,
+			Source:    "cli",
+			SessionID: sessionID,
+		}
+
+		opts := client.StartWorkflowOptions{
+			ID:        sessionID,
+			TaskQueue: cfg.General.TaskQueue,
+		}
+		ceremonyCfg := planning.PlanningCeremonyConfig{
+			MaxResearchRounds: cfg.Planning.MaxResearchRounds,
+			SignalTimeout:     cfg.Planning.SignalTimeout.Duration,
+			SessionTimeout:    cfg.Planning.SessionTimeout.Duration,
+			MaxCycles:         cfg.Planning.MaxCycles,
+		}
+		run, err := c.ExecuteWorkflow(context.Background(), opts, planning.PlanningWorkflow, req, ceremonyCfg)
+		if err != nil {
+			logger.Error("Failed to start planning workflow", "error", err)
+			os.Exit(1)
+		}
+		fmt.Printf("  Planning session started: %s (run: %s)\n", sessionID, run.GetRunID())
+		fmt.Println("  Monitor via Matrix chat or wait for completion.")
+
+		var result planning.PlanningResult
+		if err := run.Get(context.Background(), &result); err != nil {
+			logger.Error("Planning workflow failed", "error", err)
+			os.Exit(1)
+		}
+		if result.Cancelled {
+			fmt.Printf("  Planning cancelled: %s\n", result.CancelReason)
+		} else {
+			fmt.Printf("  Planning complete. %d subtasks created.\n", len(result.SubtaskIDs))
+		}
+
 	default:
-		fmt.Fprintf(os.Stderr, "Usage: chum [serve|sync|tasks|task create|init] [--config path]\n")
+		fmt.Fprintf(os.Stderr, "Usage: chum [serve|sync|tasks|task create|plan|init] [--config path]\n")
 		os.Exit(1)
 	}
+}
+
+// requireFlagValue returns args[i+1] or exits with an error if missing.
+func requireFlagValue(args []string, i int) string {
+	if i+1 >= len(args) {
+		fmt.Fprintf(os.Stderr, "Error: %s requires a value\n", args[i])
+		os.Exit(1)
+	}
+	return args[i+1]
 }

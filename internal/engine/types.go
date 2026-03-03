@@ -1,18 +1,29 @@
 // Package engine implements the Temporal workflows and activities for CHUM v2.
 package engine
 
-import gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
+import (
+	"time"
+
+	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
+)
+
 
 // TaskRequest is the input to the AgentWorkflow.
 // Tasks arrive fully planned and scoped from beads — description, acceptance
 // criteria, and design notes are all in the Prompt field.
 type TaskRequest struct {
-	TaskID  string `json:"task_id"`
-	Project string `json:"project"`
-	Prompt  string `json:"prompt"`   // full task context from beads
-	WorkDir string `json:"work_dir"` // project workspace root
-	Agent   string `json:"agent"`    // CLI name (claude, gemini, codex)
-	Model   string `json:"model"`    // optional model override
+	TaskID   string `json:"task_id"`
+	Project  string `json:"project"`
+	Prompt   string `json:"prompt"`     // full task context from beads
+	WorkDir  string `json:"work_dir"`   // project workspace root
+	Agent    string `json:"agent"`      // CLI name (claude, gemini, codex)
+	Model    string `json:"model"`      // optional model override
+	ParentID string `json:"parent_id"`  // non-empty for subtasks (skip decomposition)
+
+	// Timeouts (zero = use defaults). Populated from config by dispatcher.
+	ExecTimeout   time.Duration `json:"exec_timeout,omitempty"`
+	ShortTimeout  time.Duration `json:"short_timeout,omitempty"`
+	ReviewTimeout time.Duration `json:"review_timeout,omitempty"`
 }
 
 // ExecResult is the output of the execute activity.
@@ -65,6 +76,7 @@ const (
 	CloseCompleted   CloseReason = "completed"
 	CloseDoDFailed   CloseReason = "dod_failed"
 	CloseNeedsReview CloseReason = "needs_review"
+	CloseDecomposed  CloseReason = "decomposed"
 )
 
 // CloseDetail is persisted for auditability in task error_log.

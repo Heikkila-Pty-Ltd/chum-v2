@@ -9,6 +9,9 @@ import (
 	"strings"
 
 	"go.temporal.io/sdk/activity"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 type ghUser struct {
@@ -45,12 +48,12 @@ func (a *Activities) RunReviewActivity(ctx context.Context, workDir string, prNu
 	}
 
 	prompt := buildReviewPrompt(prNumber, round, diffText)
-	result, err := RunCLI(reviewerAgent, reviewerModel, workDir, prompt)
+	result, err := a.LLM.Plan(ctx, reviewerAgent, reviewerModel, workDir, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("review CLI: %w", err)
 	}
 	if result.ExitCode != 0 {
-		return nil, fmt.Errorf("review CLI exited %d: %s", result.ExitCode, truncate(result.Output, 500))
+		return nil, fmt.Errorf("review CLI exited %d: %s", result.ExitCode, types.Truncate(result.Output, 500))
 	}
 
 	signal, body, invalid := parseReviewSignal(result.Output)
@@ -187,7 +190,7 @@ func (a *Activities) ReadReviewFeedbackActivity(ctx context.Context, workDir str
 		}
 		lines = append(lines, fmt.Sprintf("- %s %s", pathLoc, body))
 	}
-	return truncate(strings.Join(lines, "\n"), 4000), nil
+	return types.Truncate(strings.Join(lines, "\n"), 4000), nil
 }
 
 // MergePRActivity checks mergeability then merges if clean.
@@ -243,7 +246,7 @@ func (a *Activities) ResolveReviewerLoginActivity(ctx context.Context, workDir s
 
 // DefaultReviewer maps execution provider to a cross-review provider.
 func DefaultReviewer(agent string) string {
-	switch normalizeCLIName(agent) {
+	switch llm.NormalizeCLIName(agent) {
 	case "claude":
 		return "gemini"
 	case "gemini":
@@ -264,7 +267,7 @@ func (a *Activities) resolveReviewer(execAgent string) (reviewerAgent string, re
 
 	// explicit config override on executor provider
 	for _, p := range a.Config.Providers {
-		if normalizeCLIName(p.CLI) == normalizeCLIName(execAgent) {
+		if llm.NormalizeCLIName(p.CLI) == llm.NormalizeCLIName(execAgent) {
 			if strings.TrimSpace(p.Reviewer) != "" {
 				reviewerAgent = strings.TrimSpace(p.Reviewer)
 			}
@@ -272,7 +275,7 @@ func (a *Activities) resolveReviewer(execAgent string) (reviewerAgent string, re
 		}
 	}
 	for _, p := range a.Config.Providers {
-		if normalizeCLIName(p.CLI) == normalizeCLIName(reviewerAgent) {
+		if llm.NormalizeCLIName(p.CLI) == llm.NormalizeCLIName(reviewerAgent) {
 			reviewerModel = p.Model
 			break
 		}
@@ -299,7 +302,7 @@ PR diff:
 }
 
 func parseReviewSignal(output string) (signal string, body string, invalid bool) {
-	output = unwrapClaudeJSON(output)
+	output = llm.UnwrapClaudeJSON(output)
 	lines := strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n")
 	first := -1
 	for i, line := range lines {
@@ -325,7 +328,7 @@ func parseReviewSignal(output string) (signal string, body string, invalid bool)
 		}
 		return s, rest, false
 	default:
-		raw := truncate(strings.TrimSpace(output), 2000)
+		raw := types.Truncate(strings.TrimSpace(output), 2000)
 		return "REQUEST_CHANGES", "Invalid reviewer signal. Expected APPROVE or REQUEST_CHANGES.\n\nRaw output:\n" + raw, true
 	}
 }
@@ -369,7 +372,7 @@ func reviewStateToOutcome(state string) ReviewOutcome {
 func listPRReviews(ctx context.Context, workDir string, prNumber int) ([]ghReview, error) {
 	repoSlug, err := repoSlugFromWorkDir(ctx, workDir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list PR reviews: %w", err)
 	}
 
 	out, err := runCommand(ctx, workDir, "gh", "api", fmt.Sprintf("repos/%s/pulls/%d/reviews", repoSlug, prNumber))

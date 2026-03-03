@@ -1,0 +1,115 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"go.temporal.io/sdk/activity"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/admit"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
+)
+
+// DecomposeActivity runs the LLM in plan mode to break a task into sub-steps.
+// Returns Atomic=true (empty Steps) if the task is already concrete enough.
+func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*types.DecompResult, error) {
+	logger := activity.GetLogger(ctx)
+	logger.Info("Decomposing task", "TaskID", req.TaskID)
+
+	codeContext := a.buildCodebaseContext(ctx, req.WorkDir)
+	prompt := buildDecompPrompt(req.Prompt, codeContext)
+
+	result, err := a.LLM.Plan(ctx, req.Agent, req.Model, req.WorkDir, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("decompose CLI: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return nil, fmt.Errorf("decompose CLI exited %d: %s", result.ExitCode, types.Truncate(result.Output, 500))
+	}
+
+	jsonStr := llm.ExtractJSON(result.Output)
+	if jsonStr == "" {
+		logger.Warn("Decomposition produced no JSON, treating as atomic")
+		return &types.DecompResult{Atomic: true}, nil
+	}
+
+	var decomp types.DecompResult
+	if err := json.Unmarshal([]byte(jsonStr), &decomp); err != nil {
+		logger.Warn("Failed to parse decomposition JSON, treating as atomic", "error", err)
+		return &types.DecompResult{Atomic: true}, nil
+	}
+
+	if len(decomp.Steps) == 0 {
+		decomp.Atomic = true
+	}
+
+	logger.Info("Decomposition result", "Steps", len(decomp.Steps), "Atomic", decomp.Atomic)
+	return &decomp, nil
+}
+
+// CreateSubtasksActivity creates DAG tasks from decomposition steps,
+// wires sequential dependencies, rewires parent dependents to the last
+// subtask, and marks the parent as "decomposed" — all atomically.
+// If any step fails, the entire operation is rolled back (no partial children).
+func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, project string, steps []types.DecompStep) ([]string, error) {
+	logger := activity.GetLogger(ctx)
+
+	var tasks []dag.Task
+	for _, step := range steps {
+		tasks = append(tasks, dag.Task{
+			Title:           step.Title,
+			Description:     step.Description,
+			ParentID:        parentID,
+			Acceptance:      step.Acceptance,
+			EstimateMinutes: step.Estimate,
+			Project:         project,
+		})
+	}
+
+	ids, err := a.DAG.CreateSubtasksAtomic(ctx, parentID, tasks)
+	if err != nil {
+		return nil, fmt.Errorf("create subtasks for %s: %w", parentID, err)
+	}
+	logger.Info("Created subtasks atomically", "Parent", parentID, "Count", len(ids), "IDs", ids)
+
+	// Run admission gate to validate, resolve targets, and promote open → ready.
+	// Subtasks must pass the same structural checks and conflict fence logic as
+	// any other task. Without this they'd sit in "open" until the next chum sync.
+	proj, ok := a.Config.Projects[project]
+	if ok && a.AST != nil {
+		gateResult, err := admit.RunGate(ctx, a.DAG, a.AST, project, proj.Workspace, a.Logger)
+		if err != nil {
+			logger.Warn("Admission gate failed after subtask creation", "error", err)
+		} else {
+			logger.Info("Admission gate ran inline", "result", gateResult.String())
+		}
+	}
+
+	return ids, nil
+}
+
+func buildDecompPrompt(taskPrompt, codeContext string) string {
+	return fmt.Sprintf(`You are a senior software architect. Analyze the following task and decide whether it should be broken into smaller sub-tasks.
+
+TASK:
+%s
+
+CODEBASE:
+%s
+
+OUTPUT CONTRACT (strict):
+Return a JSON object with this schema:
+{"steps": [{"title": "...", "description": "...", "acceptance": "...", "estimate_minutes": N}]}
+
+Rules:
+- Each step must be independently implementable and testable.
+- Each step must have a clear title, detailed description, acceptance criteria, and time estimate.
+- If the task is already atomic (a single clear, bounded change), return {"steps": []} to indicate no decomposition needed.
+- Do NOT decompose tasks that are already specific and bounded (e.g. "add field X to struct Y", "fix bug in function Z").
+- DO decompose tasks that are vague, multi-part, or touch multiple subsystems.
+- Maximum 5 steps. Prefer fewer, larger steps over many tiny ones.
+- Output ONLY the JSON object. No commentary, no markdown fences.`, taskPrompt, codeContext)
+}

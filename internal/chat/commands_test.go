@@ -1,0 +1,252 @@
+package chat
+
+import (
+	"testing"
+)
+
+func TestParseCommand_Help(t *testing.T) {
+	t.Parallel()
+	cmd, matched, err := ParseCommand("/plan")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cmd.Kind != CommandHelp {
+		t.Fatalf("expected CommandHelp, got %d", cmd.Kind)
+	}
+}
+
+func TestParseCommand_Start(t *testing.T) {
+	t.Parallel()
+	cmd, matched, err := ParseCommand("/plan start myproject goal-123 agent=gemini")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cmd.Kind != CommandStart {
+		t.Fatalf("expected CommandStart, got %d", cmd.Kind)
+	}
+	if cmd.Project != "myproject" {
+		t.Fatalf("expected project=myproject, got %q", cmd.Project)
+	}
+	if cmd.Value != "goal-123" {
+		t.Fatalf("expected value=goal-123, got %q", cmd.Value)
+	}
+	if cmd.Agent != "gemini" {
+		t.Fatalf("expected agent=gemini, got %q", cmd.Agent)
+	}
+}
+
+func TestParseCommand_StartMissingProject(t *testing.T) {
+	t.Parallel()
+	_, matched, err := ParseCommand("/plan start")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err == nil {
+		t.Fatal("expected error for missing project")
+	}
+}
+
+func TestParseCommand_StartMissingGoal(t *testing.T) {
+	t.Parallel()
+	_, matched, err := ParseCommand("/plan start myproject")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err == nil {
+		t.Fatal("expected error for missing goal id")
+	}
+}
+
+func TestParseCommand_StartWithGoalKey(t *testing.T) {
+	t.Parallel()
+	cmd, matched, err := ParseCommand("/plan start project=myproject goal=goal-123 agent=claude")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cmd.Project != "myproject" {
+		t.Fatalf("expected project=myproject, got %q", cmd.Project)
+	}
+	if cmd.Value != "goal-123" {
+		t.Fatalf("expected goal value, got %q", cmd.Value)
+	}
+}
+
+func TestParseCommand_Select(t *testing.T) {
+	t.Parallel()
+	cmd, matched, err := ParseCommand("/plan select 2")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cmd.Kind != CommandSelect {
+		t.Fatalf("expected CommandSelect, got %d", cmd.Kind)
+	}
+	if cmd.Value != "2" {
+		t.Fatalf("expected value=2, got %q", cmd.Value)
+	}
+}
+
+func TestParseCommand_Dig(t *testing.T) {
+	t.Parallel()
+	cmd, matched, err := ParseCommand("/plan dig 1 explore the OAuth approach more")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cmd.Kind != CommandDig {
+		t.Fatalf("expected CommandDig, got %d", cmd.Kind)
+	}
+	if cmd.Value != "1" {
+		t.Fatalf("expected value=1, got %q", cmd.Value)
+	}
+	if cmd.Reason != "explore the OAuth approach more" {
+		t.Fatalf("expected reason, got %q", cmd.Reason)
+	}
+}
+
+func TestParseCommand_Answer(t *testing.T) {
+	t.Parallel()
+	cmd, matched, err := ParseCommand("/plan answer what about Redis caching?")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cmd.Kind != CommandAnswer {
+		t.Fatalf("expected CommandAnswer, got %d", cmd.Kind)
+	}
+	if cmd.Value != "what about Redis caching?" {
+		t.Fatalf("expected answer text, got %q", cmd.Value)
+	}
+}
+
+func TestParseCommand_Go(t *testing.T) {
+	t.Parallel()
+	cmd, matched, err := ParseCommand("/plan go")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cmd.Kind != CommandGo {
+		t.Fatalf("expected CommandGo, got %d", cmd.Kind)
+	}
+}
+
+func TestParseCommand_Realign(t *testing.T) {
+	t.Parallel()
+	cmd, matched, err := ParseCommand("/plan realign")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cmd.Kind != CommandRealign {
+		t.Fatalf("expected CommandRealign, got %d", cmd.Kind)
+	}
+}
+
+func TestParseCommand_Stop(t *testing.T) {
+	t.Parallel()
+	cmd, matched, err := ParseCommand("/plan stop not needed anymore")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cmd.Kind != CommandStop {
+		t.Fatalf("expected CommandStop, got %d", cmd.Kind)
+	}
+	if cmd.Reason != "not needed anymore" {
+		t.Fatalf("expected reason, got %q", cmd.Reason)
+	}
+}
+
+func TestParseCommand_Approve(t *testing.T) {
+	t.Parallel()
+	cmd, matched, err := ParseCommand("/plan approve")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cmd.Kind != CommandApprove {
+		t.Fatalf("expected CommandApprove, got %d", cmd.Kind)
+	}
+}
+
+func TestParseCommand_NotMatched(t *testing.T) {
+	t.Parallel()
+	_, matched, _ := ParseCommand("hello world")
+	if matched {
+		t.Fatal("expected no match for non-plan message")
+	}
+}
+
+func TestParseCommand_BarePlanNotMatched(t *testing.T) {
+	t.Parallel()
+	_, matched, _ := ParseCommand("plan start myproject")
+	if matched {
+		t.Fatal("expected no match for bare 'plan' without slash prefix")
+	}
+}
+
+func TestParseCommand_PrefixBoundaryNotMatched(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"/planner start x",
+		"/planets",
+	}
+	for _, tc := range cases {
+		_, matched, _ := ParseCommand(tc)
+		if matched {
+			t.Fatalf("expected no match for %q", tc)
+		}
+	}
+}
+
+func TestParseCommand_UnknownAction(t *testing.T) {
+	t.Parallel()
+	_, matched, err := ParseCommand("/plan foobar")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err == nil {
+		t.Fatal("expected error for unknown action")
+	}
+}
+
+func TestParseCommand_WithSession(t *testing.T) {
+	t.Parallel()
+	cmd, matched, err := ParseCommand("/plan select planning-abc123 item-1")
+	if !matched {
+		t.Fatal("expected match")
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cmd.SessionID != "planning-abc123" {
+		t.Fatalf("expected sessionID=planning-abc123, got %q", cmd.SessionID)
+	}
+	if cmd.Value != "item-1" {
+		t.Fatalf("expected value=item-1, got %q", cmd.Value)
+	}
+}

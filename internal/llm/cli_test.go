@@ -1,6 +1,7 @@
-package engine
+package llm
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"strings"
@@ -37,9 +38,9 @@ func TestRunWithPromptSuccess(t *testing.T) {
 	t.Parallel()
 
 	cmd := exec.Command("sh", "-c", "read line; echo \"$line\"")
-	res, err := runWithPrompt(cmd, "hello-stdin", "claude")
+	res, err := RunWithPrompt(cmd, "hello-stdin", "claude")
 	if err != nil {
-		t.Fatalf("runWithPrompt unexpected error: %v", err)
+		t.Fatalf("RunWithPrompt unexpected error: %v", err)
 	}
 	if res.ExitCode != 0 {
 		t.Fatalf("ExitCode = %d, want 0", res.ExitCode)
@@ -53,7 +54,7 @@ func TestRunWithPromptRateLimited(t *testing.T) {
 	t.Parallel()
 
 	cmd := exec.Command("sh", "-c", "cat >/dev/null; echo 'RATE LIMIT exceeded'; exit 2")
-	res, err := runWithPrompt(cmd, "prompt", "claude")
+	res, err := RunWithPrompt(cmd, "prompt", "claude")
 	if err == nil {
 		t.Fatal("expected rate limit error, got nil")
 	}
@@ -71,7 +72,7 @@ func TestRunWithPromptRateLimited(t *testing.T) {
 func TestBuildPlanCommandShape(t *testing.T) {
 	t.Parallel()
 
-	cmd := buildPlanCommand("claude", "claude-sonnet", "/tmp")
+	cmd := BuildPlanCommand(context.Background(), "claude", "claude-sonnet", "/tmp")
 	args := strings.Join(cmd.Args, " ")
 
 	if !strings.Contains(args, "--print") {
@@ -88,7 +89,7 @@ func TestBuildPlanCommandShape(t *testing.T) {
 func TestBuildExecCommandShape(t *testing.T) {
 	t.Parallel()
 
-	cmd := buildExecCommand("claude", "claude-sonnet", "/tmp")
+	cmd := BuildExecCommand(context.Background(), "claude", "claude-sonnet", "/tmp")
 	args := strings.Join(cmd.Args, " ")
 
 	if strings.Contains(args, "--print") {
@@ -101,4 +102,3 @@ func TestBuildExecCommandShape(t *testing.T) {
 		t.Fatalf("exec command missing model flag: %v", cmd.Args)
 	}
 }
-

@@ -20,7 +20,6 @@ func TestHealthEndpoint_TemporalUnreachable(t *testing.T) {
 		General: config.General{
 			TemporalHostPort:  "localhost:9999", // Non-existent port
 			TemporalNamespace: "test-namespace",
-			HealthPort:        ":8080",
 		},
 	}
 
@@ -60,7 +59,6 @@ func TestHealthEndpoint_MethodNotAllowed(t *testing.T) {
 		General: config.General{
 			TemporalHostPort:  "localhost:7233",
 			TemporalNamespace: "test-namespace",
-			HealthPort:        ":8080",
 		},
 	}
 
@@ -83,7 +81,6 @@ func TestHealthEndpoint_ResponseTime(t *testing.T) {
 		General: config.General{
 			TemporalHostPort:  "localhost:9999", // Non-existent port to ensure timeout
 			TemporalNamespace: "test-namespace",
-			HealthPort:        ":8080",
 		},
 	}
 
@@ -109,7 +106,6 @@ func TestStartServer_ContextCancellation(t *testing.T) {
 		General: config.General{
 			TemporalHostPort:  "localhost:7233",
 			TemporalNamespace: "test-namespace",
-			HealthPort:        ":0", // Let OS choose port
 		},
 	}
 

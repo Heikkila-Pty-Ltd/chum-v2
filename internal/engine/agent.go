@@ -9,6 +9,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 // AgentWorkflow is the core CHUM execution loop:
@@ -23,22 +24,34 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 
 	var a *Activities
 
-	// --- Activity options ---
+	// --- Activity options (from config via dispatcher, with defaults) ---
+	shortTimeout := req.ShortTimeout
+	if shortTimeout <= 0 {
+		shortTimeout = 2 * time.Minute
+	}
+	execTimeout := req.ExecTimeout
+	if execTimeout <= 0 {
+		execTimeout = 45 * time.Minute
+	}
+	reviewTimeout := req.ReviewTimeout
+	if reviewTimeout <= 0 {
+		reviewTimeout = 10 * time.Minute
+	}
+
 	shortOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 2 * time.Minute,
+		StartToCloseTimeout: shortTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 	execOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 45 * time.Minute,
-		HeartbeatTimeout:    2 * time.Minute,
+		StartToCloseTimeout: execTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 	dodOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 10 * time.Minute,
+		StartToCloseTimeout: reviewTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 	reviewOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: 10 * time.Minute,
+		StartToCloseTimeout: reviewTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 
@@ -73,6 +86,52 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		_ = workflow.ExecuteActivity(cleanCtx, a.CleanupWorktreeActivity, baseWorkDir, worktreePath).Get(ctx, nil)
 	}
 	defer cleanup()
+
+	// === DECOMPOSE ===
+	// Version gate: workflows started before decomposition was added must skip
+	// this block to avoid Temporal nondeterminism errors during replay.
+	decompVersion := workflow.GetVersion(ctx, "add-decompose", workflow.DefaultVersion, 1)
+	if decompVersion == 1 {
+		// Every task must pass through decomposition. Subtasks (already decomposed)
+		// skip this step. If decomposition fails, the task fails — no direct execution
+		// without decomposition.
+		if req.ParentID != "" {
+			logger.Info("Subtask — skipping decomposition", "ParentID", req.ParentID)
+		} else {
+			decompCtx := workflow.WithActivityOptions(ctx, dodOpts)
+			var decompResult types.DecompResult
+			if err := workflow.ExecuteActivity(decompCtx, a.DecomposeActivity, req).Get(ctx, &decompResult); err != nil {
+				logger.Error("Decomposition failed", "error", err)
+				if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+					Reason:    CloseNeedsReview,
+					SubReason: "decompose_failed",
+				}); cerr != nil {
+					return fmt.Errorf("decompose failed: %w (close/notify failed: %v)", err, cerr)
+				}
+				return fmt.Errorf("decompose failed: %w", err)
+			}
+			if !decompResult.Atomic && len(decompResult.Steps) > 0 {
+				var subtaskIDs []string
+				if err := workflow.ExecuteActivity(decompCtx, a.CreateSubtasksActivity,
+					req.TaskID, req.Project, decompResult.Steps).Get(ctx, &subtaskIDs); err != nil {
+					logger.Error("Failed to create subtasks", "error", err)
+					if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+						Reason:    CloseNeedsReview,
+						SubReason: "subtask_creation_failed",
+					}); cerr != nil {
+						return fmt.Errorf("subtask creation failed: %w (close/notify failed: %v)", err, cerr)
+					}
+					return fmt.Errorf("subtask creation failed: %w", err)
+				}
+				logger.Info("Task decomposed", "ParentID", req.TaskID, "Subtasks", len(subtaskIDs))
+				cleanup()
+				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+					Reason:    CloseDecomposed,
+					SubReason: "decomposed",
+				})
+			}
+		}
+	}
 
 	// === EXECUTE ===
 	execCtx := workflow.WithActivityOptions(ctx, execOpts)
@@ -355,7 +414,7 @@ func truncateForTitle(prompt string, maxLen int) string {
 	// Use first line as title
 	if idx := len(prompt); idx > 0 {
 		lines := prompt
-		if nlIdx := indexOf(lines, '\n'); nlIdx >= 0 {
+		if nlIdx := strings.IndexByte(lines, '\n'); nlIdx >= 0 {
 			lines = lines[:nlIdx]
 		}
 		if len(lines) > maxLen {
@@ -366,14 +425,7 @@ func truncateForTitle(prompt string, maxLen int) string {
 	return "chum: automated change"
 }
 
-func indexOf(s string, c byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
-}
+
 
 func augmentPromptWithReviewFeedback(prompt string, round int, feedback string) string {
 	feedback = strings.TrimSpace(feedback)

@@ -1,5 +1,4 @@
-// Package beads wraps the bd CLI for reading issues into CHUM.
-// Ported from cortex/internal/beadsfork — stripped to read-only surface.
+// Package beads wraps the bd CLI for reading and writing issues in CHUM.
 package beads
 
 import (
@@ -7,12 +6,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/jsonutil"
 )
 
-const DefaultBinary = "bd"
+// DefaultBinary is the default bd CLI binary name.
+// Override with BD_BINARY env var if multiple versions are installed.
+var DefaultBinary = defaultBinaryPath()
+
+func defaultBinaryPath() string {
+	if v := os.Getenv("BD_BINARY"); v != "" {
+		return v
+	}
+	return "bd"
+}
 
 // Issue is a beads issue — the source-of-truth for task definitions.
 type Issue struct {
@@ -38,12 +49,13 @@ type Dependency struct {
 
 // Client is a local wrapper around the bd CLI.
 type Client struct {
-	binary  string
-	workDir string
-	flags   []string
+	binary   string
+	workDir  string
+	flags    []string
+	readOnly bool
 }
 
-// NewClient creates a beads client pointing at a project directory.
+// NewClient creates a read-write beads client pointing at a project directory.
 func NewClient(workDir string) (*Client, error) {
 	if workDir == "" {
 		return nil, errors.New("workdir is required")
@@ -54,8 +66,18 @@ func NewClient(workDir string) (*Client, error) {
 	return &Client{
 		binary:  DefaultBinary,
 		workDir: workDir,
-		flags:   []string{"--sandbox"},
 	}, nil
+}
+
+// NewReadOnlyClient creates a sandboxed beads client that cannot modify issues.
+func NewReadOnlyClient(workDir string) (*Client, error) {
+	c, err := NewClient(workDir)
+	if err != nil {
+		return nil, err
+	}
+	c.readOnly = true
+	c.flags = []string{"--sandbox"}
+	return c, nil
 }
 
 // List returns all issues from bd.
@@ -91,6 +113,106 @@ func (c *Client) Show(ctx context.Context, issueID string) (Issue, error) {
 		return Issue{}, err
 	}
 	return decodeSingleIssue(out)
+}
+
+// Close closes an issue in beads with an optional reason.
+func (c *Client) Close(ctx context.Context, issueID, reason string) error {
+	if c.readOnly {
+		return errors.New("beads client is read-only")
+	}
+	args := []string{"close", issueID}
+	if reason != "" {
+		args = append(args, "--reason", reason)
+	}
+	_, err := c.run(ctx, args...)
+	if err != nil {
+		return fmt.Errorf("close issue %s: %w", issueID, err)
+	}
+	return nil
+}
+
+// CreateParams holds parameters for creating a new beads issue.
+type CreateParams struct {
+	Title       string
+	Description string
+	IssueType   string
+	Priority    int // -1 means unset (use CLI default); 0+ passed as -p flag
+	Labels      []string
+	ParentID    string
+}
+
+// Create creates a new issue in beads and returns its ID.
+func (c *Client) Create(ctx context.Context, params CreateParams) (string, error) {
+	if c.readOnly {
+		return "", errors.New("beads client is read-only")
+	}
+	args := []string{"create", params.Title, "--json"}
+	if params.Description != "" {
+		args = append(args, "-d", params.Description)
+	}
+	if params.IssueType != "" {
+		args = append(args, "-t", params.IssueType)
+	}
+	if params.Priority >= 0 {
+		args = append(args, "-p", strconv.Itoa(params.Priority))
+	}
+	if params.ParentID != "" {
+		args = append(args, "--parent", params.ParentID)
+	}
+	if len(params.Labels) > 0 {
+		args = append(args, "--labels", strings.Join(params.Labels, ","))
+	}
+	out, err := c.run(ctx, args...)
+	if err != nil {
+		return "", err
+	}
+	// Extract the issue ID from the JSON output
+	issue, err := decodeSingleIssue(out)
+	if err != nil {
+		return "", fmt.Errorf("parse created issue: %w", err)
+	}
+	return issue.ID, nil
+}
+
+// Update updates fields on an issue in beads.
+// Supported keys: "status", "title", "description", "acceptance", "priority", "estimate".
+func (c *Client) Update(ctx context.Context, issueID string, fields map[string]string) error {
+	if c.readOnly {
+		return errors.New("beads client is read-only")
+	}
+	args := []string{"update", issueID}
+	for k, v := range fields {
+		switch k {
+		case "status":
+			args = append(args, "--status", v)
+		case "title":
+			args = append(args, "--title", v)
+		case "description":
+			args = append(args, "-d", v)
+		case "acceptance":
+			args = append(args, "--acceptance", v)
+		case "priority":
+			args = append(args, "--priority", v)
+		case "estimate":
+			args = append(args, "--estimate", v)
+		default:
+			return fmt.Errorf("unsupported beads update field: %s", k)
+		}
+	}
+	_, err := c.run(ctx, args...)
+	if err != nil {
+		return fmt.Errorf("update issue %s: %w", issueID, err)
+	}
+	return nil
+}
+
+// Children returns child issues of the given parent.
+func (c *Client) Children(ctx context.Context, parentID string) ([]Issue, error) {
+	out, err := c.run(ctx, "list", "--json", "--parent", parentID)
+	if err != nil {
+		return nil, err
+	}
+	return decodeIssueList(out)
 }
 
 func (c *Client) run(ctx context.Context, args ...string) ([]byte, error) {
@@ -153,68 +275,9 @@ func decodeIssueList(out []byte) ([]Issue, error) {
 }
 
 func extractJSON(out []byte) []byte {
-	s := strings.TrimSpace(string(out))
-	if json.Valid([]byte(s)) {
-		return []byte(s)
-	}
-	// Find the first balanced JSON object or array, tolerating
-	// leading/trailing non-JSON output from the bd CLI.
-	for i := 0; i < len(s); i++ {
-		open := s[i]
-		var close byte
-		switch open {
-		case '{':
-			close = '}'
-		case '[':
-			close = ']'
-		default:
-			continue
-		}
-		if end := findBalancedEnd(s, i, open, close); end > i {
-			candidate := s[i : end+1]
-			if json.Valid([]byte(candidate)) {
-				return []byte(candidate)
-			}
-		}
-	}
-	return nil
+	return jsonutil.ExtractJSON(out)
 }
 
-// findBalancedEnd returns the index of the closing bracket that balances
-// the opener at position start, respecting JSON string escaping.
-// Returns -1 if no balanced close is found.
-func findBalancedEnd(s string, start int, open, close byte) int {
-	depth := 0
-	inString := false
-	escaped := false
-	for i := start; i < len(s); i++ {
-		ch := s[i]
-		if escaped {
-			escaped = false
-			continue
-		}
-		if ch == '\\' && inString {
-			escaped = true
-			continue
-		}
-		if ch == '"' {
-			inString = !inString
-			continue
-		}
-		if inString {
-			continue
-		}
-		if ch == open {
-			depth++
-		} else if ch == close {
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
-}
 
 func compact(out []byte) string {
 	s := strings.TrimSpace(string(out))

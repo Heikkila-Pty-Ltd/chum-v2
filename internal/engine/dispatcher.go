@@ -14,6 +14,7 @@ import (
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 // DispatcherWorkflow scans the DAG for ready tasks and spawns AgentWorkflow
@@ -60,14 +61,7 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 		}
 		childCtx := workflow.WithChildOptions(ctx, childOpts)
 
-		req := TaskRequest{
-			TaskID:  c.TaskID,
-			Project: c.Project,
-			Prompt:  c.Prompt,
-			WorkDir: c.WorkDir,
-			Agent:   c.Agent,
-			Model:   c.Model,
-		}
+		req := TaskRequest(c)
 
 		// Wait for child workflow to actually start — without this,
 		// the parent completes before the server creates the child
@@ -85,17 +79,21 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 
 // DispatchCandidate is a ready task that should be dispatched.
 type DispatchCandidate struct {
-	TaskID  string
-	Project string
-	Prompt  string
-	WorkDir string
-	Agent   string
-	Model   string
+	TaskID        string
+	Project       string
+	Prompt        string
+	WorkDir       string
+	Agent         string
+	Model         string
+	ParentID      string
+	ExecTimeout   time.Duration
+	ShortTimeout  time.Duration
+	ReviewTimeout time.Duration
 }
 
 // DispatchActivities holds dependencies for dispatch-related activities.
 type DispatchActivities struct {
-	DAG    *dag.DAG
+	DAG    dag.TaskStore
 	Config *config.Config
 	Logger *slog.Logger
 }
@@ -103,7 +101,7 @@ type DispatchActivities struct {
 // MarkTaskRunningActivity marks a task as "running" in the DAG.
 // Called before spawning the child workflow to prevent double-dispatch.
 func (da *DispatchActivities) MarkTaskRunningActivity(ctx context.Context, taskID string) error {
-	return da.DAG.UpdateTaskStatus(ctx, taskID, "running")
+	return da.DAG.UpdateTaskStatus(ctx, taskID, types.StatusRunning)
 }
 
 // ScanCandidatesActivity discovers ready tasks across all enabled projects.
@@ -139,12 +137,16 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 			}
 
 			candidates = append(candidates, DispatchCandidate{
-				TaskID:  t.ID,
-				Project: projectName,
-				Prompt:  prompt,
-				WorkDir: project.Workspace,
-				Agent:   agent,
-				Model:   model,
+				TaskID:        t.ID,
+				Project:       projectName,
+				Prompt:        prompt,
+				WorkDir:       project.Workspace,
+				Agent:         agent,
+				Model:         model,
+				ParentID:      t.ParentID,
+				ExecTimeout:   da.Config.General.ExecTimeout.Duration,
+				ShortTimeout:  da.Config.General.ShortTimeout.Duration,
+				ReviewTimeout: da.Config.General.ReviewTimeout.Duration,
 			})
 		}
 	}
