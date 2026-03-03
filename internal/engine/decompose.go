@@ -19,7 +19,7 @@ func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*t
 	logger := activity.GetLogger(ctx)
 	logger.Info("Decomposing task", "TaskID", req.TaskID)
 
-	codeContext := a.buildCodebaseContext(ctx, req.WorkDir)
+	codeContext := a.buildCodebaseContextForTask(ctx, req.WorkDir, req.Prompt)
 	prompt := buildDecompPrompt(req.Prompt, codeContext)
 
 	result, err := a.LLM.Plan(ctx, req.Agent, req.Model, req.WorkDir, prompt)

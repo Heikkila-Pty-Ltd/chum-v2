@@ -51,7 +51,7 @@ func (pa *PlanningActivities) ClarifyGoalActivity(ctx context.Context, req Plann
 		goalDesc = req.GoalID
 	}
 
-	codeContext := pa.buildCodebaseContext(ctx, req.WorkDir)
+	codeContext := pa.buildCodebaseContextForTask(ctx, req.WorkDir, goalDesc)
 	prompt := fmt.Sprintf(`You are a senior software architect. Analyze this goal and extract the core intent.
 
 GOAL:
@@ -95,7 +95,7 @@ func (pa *PlanningActivities) ResearchApproachesActivity(ctx context.Context, re
 	logger := activity.GetLogger(ctx)
 	logger.Info("Researching approaches", "GoalID", req.GoalID)
 
-	codeContext := pa.buildCodebaseContext(ctx, req.WorkDir)
+	codeContext := pa.buildCodebaseContextForTask(ctx, req.WorkDir, goal.Intent)
 	prompt := fmt.Sprintf(`You are a senior software architect conducting a thorough design review.
 
 GOAL: %s
@@ -255,7 +255,7 @@ func (pa *PlanningActivities) DeeperResearchActivity(ctx context.Context, req Pl
 	logger := activity.GetLogger(ctx)
 	logger.Info("Deeper research", "Approach", approach.Title, "Feedback", feedback)
 
-	codeContext := pa.buildCodebaseContext(ctx, req.WorkDir)
+	codeContext := pa.buildCodebaseContextForTask(ctx, req.WorkDir, approach.Title+" "+approach.Description)
 	prompt := fmt.Sprintf(`You are doing a deep-dive research on a specific approach.
 
 APPROACH: %s
@@ -310,7 +310,7 @@ func (pa *PlanningActivities) AnswerQuestionActivity(ctx context.Context, req Pl
 	logger.Info("Answering question", "Question", question)
 
 	approachJSON, _ := json.Marshal(approaches)
-	codeContext := pa.buildCodebaseContext(ctx, req.WorkDir)
+	codeContext := pa.buildCodebaseContextForTask(ctx, req.WorkDir, goal.Intent+" "+question)
 	prompt := fmt.Sprintf(`You are answering a planning question.
 
 GOAL: %s
@@ -335,7 +335,7 @@ func (pa *PlanningActivities) DecomposeApproachActivity(ctx context.Context, req
 	logger := activity.GetLogger(ctx)
 	logger.Info("Decomposing approach", "Title", approach.Title)
 
-	codeContext := pa.buildCodebaseContext(ctx, req.WorkDir)
+	codeContext := pa.buildCodebaseContextForTask(ctx, req.WorkDir, approach.Title+" "+approach.Description)
 	prompt := fmt.Sprintf(`You are a senior software architect. Break this selected approach into implementation subtasks.
 
 APPROACH: %s
@@ -463,9 +463,22 @@ func (pa *PlanningActivities) beadsClient(project string) beads.Store {
 }
 
 func (pa *PlanningActivities) buildCodebaseContext(ctx context.Context, workDir string) string {
+	return pa.buildCodebaseContextForTask(ctx, workDir, "")
+}
+
+// buildCodebaseContextForTask produces AST-based codebase context filtered by
+// relevance to the given task prompt. Relevant files get full source detail,
+// the rest get signatures only.
+func (pa *PlanningActivities) buildCodebaseContextForTask(ctx context.Context, workDir, taskPrompt string) string {
 	if pa.AST != nil {
 		files, err := pa.AST.ParseDir(ctx, workDir)
 		if err == nil && len(files) > 0 {
+			if taskPrompt != "" {
+				relevant, surrounding := astpkg.FilterRelevant(taskPrompt, files)
+				if len(relevant) > 0 {
+					return astpkg.SummarizeTargeted(surrounding, relevant)
+				}
+			}
 			return astpkg.Summarize(files)
 		}
 	}

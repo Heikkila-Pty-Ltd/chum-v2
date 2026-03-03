@@ -87,8 +87,8 @@ func (a *Activities) ExecuteActivity(ctx context.Context, req TaskRequest) (*Exe
 		}
 	}
 
-	// Build AST codebase context
-	codeContext := a.buildCodebaseContext(ctx, req.WorkDir)
+	// Build AST codebase context (filtered by task relevance)
+	codeContext := a.buildCodebaseContextForTask(ctx, req.WorkDir, req.Prompt)
 
 	prompt := fmt.Sprintf(`You are a senior software engineer. Implement the following task.
 
@@ -242,9 +242,27 @@ func (a *Activities) CleanupWorktreeActivity(ctx context.Context, baseDir, wtDir
 // buildCodebaseContext produces AST-based codebase context for the agent prompt.
 // Falls back to file listing if AST parsing fails.
 func (a *Activities) buildCodebaseContext(ctx context.Context, workDir string) string {
+	return a.buildCodebaseContextForTask(ctx, workDir, "")
+}
+
+// buildCodebaseContextForTask produces AST-based codebase context filtered by
+// relevance to the given task prompt. When taskPrompt is non-empty, files are
+// scored against it: relevant files get full source detail while the rest get
+// signatures only. This dramatically reduces token usage.
+func (a *Activities) buildCodebaseContextForTask(ctx context.Context, workDir, taskPrompt string) string {
 	if a.AST != nil {
 		files, err := a.AST.ParseDir(ctx, workDir)
 		if err == nil && len(files) > 0 {
+			if taskPrompt != "" {
+				relevant, surrounding := astpkg.FilterRelevant(taskPrompt, files)
+				if len(relevant) > 0 {
+					a.Logger.Info("Targeted context injection",
+						"relevant", len(relevant),
+						"surrounding", len(surrounding),
+						"total", len(files))
+					return astpkg.SummarizeTargeted(surrounding, relevant)
+				}
+			}
 			return astpkg.Summarize(files)
 		}
 		a.Logger.Warn("AST parse failed, falling back to file listing", "Error", err)
