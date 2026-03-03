@@ -108,7 +108,7 @@ func (e *Engine) Submit(ctx context.Context, req WorkRequest) (string, error) {
 	task := dag.Task{
 		Title:       req.Title,
 		Description: req.Description,
-		Status:      types.StatusReady,
+		Status:      string(types.StatusReady),
 		Project:     req.Project,
 		Labels:      labels,
 		ParentID:    req.ParentTaskID,
@@ -212,7 +212,7 @@ func (e *Engine) GetStatus(ctx context.Context, taskID string) (WorkResult, erro
 
 // ListPending returns all Jarvis-submitted tasks that haven't completed yet.
 func (e *Engine) ListPending(ctx context.Context, project string) ([]WorkResult, error) {
-	tasks, err := e.dag.ListTasks(ctx, project, types.StatusReady, types.StatusRunning)
+	tasks, err := e.dag.ListTasks(ctx, project, string(types.StatusReady), string(types.StatusRunning))
 	if err != nil {
 		return nil, fmt.Errorf("list tasks: %w", err)
 	}

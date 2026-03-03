@@ -49,7 +49,7 @@ func RunGate(ctx context.Context, d dag.TaskStore, parser CodebaseParser, projec
 	}
 
 	// Step 2: Process 'open' tasks → validate and promote
-	openTasks, err := d.ListTasks(ctx, project, types.StatusOpen)
+	openTasks, err := d.ListTasks(ctx, project, string(types.StatusOpen))
 	if err != nil {
 		return result, fmt.Errorf("list open tasks: %w", err)
 	}
@@ -85,7 +85,7 @@ func RunGate(ctx context.Context, d dag.TaskStore, parser CodebaseParser, projec
 	}
 
 	// Step 3: Re-check ready tasks for staleness
-	readyTasks, err := d.ListTasks(ctx, project, types.StatusReady)
+	readyTasks, err := d.ListTasks(ctx, project, string(types.StatusReady))
 	if err != nil {
 		return result, fmt.Errorf("list ready tasks: %w", err)
 	}
@@ -120,11 +120,11 @@ func RunGate(ctx context.Context, d dag.TaskStore, parser CodebaseParser, projec
 	}
 
 	// Step 4: Compute conflict fences for ready + running tasks
-	allActive, err := d.ListTasks(ctx, project, types.StatusReady, types.StatusRunning)
+	allActive, err := d.ListTasks(ctx, project, string(types.StatusReady), string(types.StatusRunning))
 	if err != nil {
 		return result, fmt.Errorf("list active tasks: %w", err)
 	}
-	activeTargets, err := d.GetAllTargetsForStatuses(ctx, project, types.StatusReady, types.StatusRunning)
+	activeTargets, err := d.GetAllTargetsForStatuses(ctx, project, string(types.StatusReady), string(types.StatusRunning))
 	if err != nil {
 		return result, fmt.Errorf("get active targets: %w", err)
 	}

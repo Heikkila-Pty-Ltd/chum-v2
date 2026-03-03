@@ -195,7 +195,7 @@ func main() {
 			os.Exit(1)
 		}
 		if status == "" {
-			status = types.StatusReady
+			status = string(types.StatusReady)
 		}
 		task := dag.Task{
 			Title:           title,

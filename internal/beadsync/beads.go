@@ -41,7 +41,7 @@ func SyncToDAG(ctx context.Context, client IssueLister, d *dag.DAG, project stri
 	var result SyncResult
 	for _, issue := range issues {
 		// Skip completed/closed — we only ingest work that needs doing
-		if issue.Status == "closed" || issue.Status == types.StatusCompleted || issue.Status == "done" {
+		if issue.Status == "closed" || issue.Status == string(types.StatusCompleted) || issue.Status == "done" {
 			result.Skipped++
 			continue
 		}
@@ -78,8 +78,8 @@ func SyncToDAG(ctx context.Context, client IssueLister, d *dag.DAG, project stri
 
 		// Create new task
 		status := issue.Status
-		if status == "" || status == types.StatusOpen {
-			status = types.StatusOpen // beads "open" → DAG "open" (not yet ready)
+		if status == "" || status == string(types.StatusOpen) {
+			status = string(types.StatusOpen) // beads "open" → DAG "open" (not yet ready)
 		}
 
 		task := dag.Task{

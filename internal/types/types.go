@@ -15,17 +15,20 @@ type DecompResult struct {
 	Atomic bool         `json:"atomic"` // true when steps is empty (task needs no decomposition)
 }
 
+// Status represents the state of a task in the system.
+type Status string
+
 // Task status constants used across the DAG, engine, and planning packages.
 const (
-	StatusOpen            = "open"
-	StatusReady           = "ready"
-	StatusRunning         = "running"
-	StatusCompleted       = "completed"
-	StatusFailed          = "failed"
-	StatusDecomposed      = "decomposed"
-	StatusDoDFailed       = "dod_failed"
-	StatusNeedsRefinement = "needs_refinement"
-	StatusStale           = "stale"
+	StatusOpen            Status = "open"
+	StatusReady           Status = "ready"
+	StatusRunning         Status = "running"
+	StatusCompleted       Status = "completed"
+	StatusFailed          Status = "failed"
+	StatusDecomposed      Status = "decomposed"
+	StatusDoDFailed       Status = "dod_failed"
+	StatusNeedsRefinement Status = "needs_refinement"
+	StatusStale           Status = "stale"
 )
 
 // Truncate returns s truncated to maxLen runes with "..." appended if truncated.

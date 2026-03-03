@@ -90,7 +90,7 @@ func (d *DAG) CreateTask(ctx context.Context, t Task) (string, error) {
 	}
 	status := t.Status
 	if status == "" {
-		status = types.StatusOpen
+		status = string(types.StatusOpen)
 	}
 	taskType := t.Type
 	if taskType == "" {
@@ -153,7 +153,7 @@ func (d *DAG) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks [
 		}
 		status := t.Status
 		if status == "" {
-			status = types.StatusOpen
+			status = string(types.StatusOpen)
 		}
 		taskType := t.Type
 		if taskType == "" {
