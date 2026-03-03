@@ -163,7 +163,10 @@ func (pa *PlanningActivities) GoalCheckActivity(ctx context.Context, req Plannin
 	logger := activity.GetLogger(ctx)
 	logger.Info("Goal check", "Approaches", len(approaches))
 
-	approachJSON, _ := json.Marshal(approaches)
+	approachJSON, err := json.Marshal(approaches)
+	if err != nil {
+		return approaches, fmt.Errorf("marshal approaches for goal check: %w", err)
+	}
 	prompt := fmt.Sprintf(`You are reviewing research approaches for goal alignment.
 
 ORIGINAL GOAL: %s
@@ -309,7 +312,10 @@ func (pa *PlanningActivities) AnswerQuestionActivity(ctx context.Context, req Pl
 	logger := activity.GetLogger(ctx)
 	logger.Info("Answering question", "Question", question)
 
-	approachJSON, _ := json.Marshal(approaches)
+	approachJSON, err := json.Marshal(approaches)
+	if err != nil {
+		return "", fmt.Errorf("marshal approaches for question: %w", err)
+	}
 	codeContext := pa.buildCodebaseContextForTask(ctx, req.WorkDir, goal.Intent+" "+question)
 	prompt := fmt.Sprintf(`You are answering a planning question.
 
