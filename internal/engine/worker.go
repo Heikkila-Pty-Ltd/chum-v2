@@ -110,6 +110,7 @@ func registerEngineWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Confi
 
 	w.RegisterWorkflow(AgentWorkflow)
 	w.RegisterWorkflow(DispatcherWorkflow)
+	w.RegisterWorkflow(ReviewWorkflow)
 
 	a := &Activities{
 		DAG:          d,
