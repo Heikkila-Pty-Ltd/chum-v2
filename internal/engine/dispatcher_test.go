@@ -1,0 +1,389 @@
+package engine
+
+import (
+	"context"
+	"io"
+	"log/slog"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+)
+
+type mockTaskStore struct {
+	tasks map[string][]dag.Task
+}
+
+func (m *mockTaskStore) GetReadyNodes(ctx context.Context, project string) ([]dag.Task, error) {
+	return m.tasks[project], nil
+}
+
+func (m *mockTaskStore) GetTask(ctx context.Context, id string) (dag.Task, error) {
+	return dag.Task{}, nil
+}
+
+func (m *mockTaskStore) CreateTask(ctx context.Context, t dag.Task) (string, error) {
+	return "", nil
+}
+
+func (m *mockTaskStore) UpdateTask(ctx context.Context, id string, fields map[string]any) error {
+	return nil
+}
+
+func (m *mockTaskStore) UpdateTaskStatus(ctx context.Context, id, status string) error {
+	return nil
+}
+
+func (m *mockTaskStore) CloseTask(ctx context.Context, id, status string) error {
+	return nil
+}
+
+func (m *mockTaskStore) ListTasks(ctx context.Context, project string, statuses ...string) ([]dag.Task, error) {
+	return nil, nil
+}
+
+func (m *mockTaskStore) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks []dag.Task) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockTaskStore) AddEdge(ctx context.Context, from, to string) error {
+	return nil
+}
+
+func (m *mockTaskStore) AddEdgeWithSource(ctx context.Context, from, to, source string) error {
+	return nil
+}
+
+func (m *mockTaskStore) RemoveEdge(ctx context.Context, from, to string) error {
+	return nil
+}
+
+func (m *mockTaskStore) DeleteEdgesBySource(ctx context.Context, project, source string) error {
+	return nil
+}
+
+func (m *mockTaskStore) GetDependencies(ctx context.Context, id string) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockTaskStore) GetDependents(ctx context.Context, id string) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockTaskStore) GetEdgeSource(ctx context.Context, from, to string) (string, error) {
+	return "", nil
+}
+
+func (m *mockTaskStore) SetTaskTargets(ctx context.Context, taskID string, targets []dag.TaskTarget) error {
+	return nil
+}
+
+func (m *mockTaskStore) GetTaskTargets(ctx context.Context, taskID string) ([]dag.TaskTarget, error) {
+	return nil, nil
+}
+
+func (m *mockTaskStore) GetAllTargetsForStatuses(ctx context.Context, project string, statuses ...string) (map[string][]dag.TaskTarget, error) {
+	return nil, nil
+}
+
+func TestScanCandidatesActivity(t *testing.T) {
+	tests := []struct {
+		name                    string
+		config                  *config.Config
+		tasks                   map[string][]dag.Task
+		expectedCount           int
+		expectedProjects        []string
+		checkPrompts            bool
+		checkNoAcceptance       bool
+	}{
+		{
+			name: "empty - no tasks",
+			config: &config.Config{
+				General: config.General{
+					MaxConcurrent: 5,
+					ExecTimeout:   config.Duration{Duration: 45 * time.Minute},
+					ShortTimeout:  config.Duration{Duration: 2 * time.Minute},
+					ReviewTimeout: config.Duration{Duration: 10 * time.Minute},
+				},
+				Projects: map[string]config.Project{
+					"enabled-project": {
+						Enabled:   true,
+						Workspace: "/tmp/enabled-project",
+					},
+				},
+				Providers: map[string]config.Provider{
+					"claude": {
+						CLI:     "claude",
+						Model:   "claude-sonnet",
+						Enabled: true,
+						Tier:    "fast",
+					},
+				},
+			},
+			tasks:            map[string][]dag.Task{},
+			expectedCount:    0,
+			expectedProjects: []string{},
+		},
+		{
+			name: "single task",
+			config: &config.Config{
+				General: config.General{
+					MaxConcurrent: 5,
+					ExecTimeout:   config.Duration{Duration: 45 * time.Minute},
+					ShortTimeout:  config.Duration{Duration: 2 * time.Minute},
+					ReviewTimeout: config.Duration{Duration: 10 * time.Minute},
+				},
+				Projects: map[string]config.Project{
+					"enabled-project": {
+						Enabled:   true,
+						Workspace: "/tmp/enabled-project",
+					},
+				},
+				Providers: map[string]config.Provider{
+					"claude": {
+						CLI:     "claude",
+						Model:   "claude-sonnet",
+						Enabled: true,
+						Tier:    "fast",
+					},
+				},
+			},
+			tasks: map[string][]dag.Task{
+				"enabled-project": {
+					{
+						ID:              "task-1",
+						Description:     "Fix the bug",
+						EstimateMinutes: 30,
+						Acceptance:      "Bug is fixed and tests pass",
+						ParentID:        "",
+					},
+				},
+			},
+			expectedCount:    1,
+			expectedProjects: []string{"enabled-project"},
+			checkPrompts:     true,
+		},
+		{
+			name: "max+1 tasks capped at MaxConcurrent",
+			config: &config.Config{
+				General: config.General{
+					MaxConcurrent: 2,
+					ExecTimeout:   config.Duration{Duration: 45 * time.Minute},
+					ShortTimeout:  config.Duration{Duration: 2 * time.Minute},
+					ReviewTimeout: config.Duration{Duration: 10 * time.Minute},
+				},
+				Projects: map[string]config.Project{
+					"enabled-project": {
+						Enabled:   true,
+						Workspace: "/tmp/enabled-project",
+					},
+				},
+				Providers: map[string]config.Provider{
+					"claude": {
+						CLI:     "claude",
+						Model:   "claude-sonnet",
+						Enabled: true,
+						Tier:    "fast",
+					},
+				},
+			},
+			tasks: map[string][]dag.Task{
+				"enabled-project": {
+					{
+						ID:              "task-1",
+						Description:     "First task",
+						EstimateMinutes: 30,
+						ParentID:        "",
+					},
+					{
+						ID:              "task-2",
+						Description:     "Second task",
+						EstimateMinutes: 30,
+						ParentID:        "",
+					},
+					{
+						ID:              "task-3",
+						Description:     "Third task should be dropped",
+						EstimateMinutes: 30,
+						ParentID:        "",
+					},
+				},
+			},
+			expectedCount:    2, // Should be capped at MaxConcurrent
+			expectedProjects: []string{"enabled-project"},
+		},
+		{
+			name: "disabled project skipped",
+			config: &config.Config{
+				General: config.General{
+					MaxConcurrent: 5,
+					ExecTimeout:   config.Duration{Duration: 45 * time.Minute},
+					ShortTimeout:  config.Duration{Duration: 2 * time.Minute},
+					ReviewTimeout: config.Duration{Duration: 10 * time.Minute},
+				},
+				Projects: map[string]config.Project{
+					"enabled-project": {
+						Enabled:   true,
+						Workspace: "/tmp/enabled-project",
+					},
+					"disabled-project": {
+						Enabled:   false,
+						Workspace: "/tmp/disabled-project",
+					},
+				},
+				Providers: map[string]config.Provider{
+					"claude": {
+						CLI:     "claude",
+						Model:   "claude-sonnet",
+						Enabled: true,
+						Tier:    "fast",
+					},
+				},
+			},
+			tasks: map[string][]dag.Task{
+				"enabled-project": {
+					{
+						ID:              "task-1",
+						Description:     "Enabled task",
+						EstimateMinutes: 30,
+						ParentID:        "",
+					},
+				},
+				"disabled-project": {
+					{
+						ID:              "task-2",
+						Description:     "Disabled task should not appear",
+						EstimateMinutes: 30,
+						ParentID:        "",
+					},
+				},
+			},
+			expectedCount:    1, // Only from enabled project
+			expectedProjects: []string{"enabled-project"},
+		},
+		{
+			name: "task without acceptance criteria",
+			config: &config.Config{
+				General: config.General{
+					MaxConcurrent: 5,
+					ExecTimeout:   config.Duration{Duration: 45 * time.Minute},
+					ShortTimeout:  config.Duration{Duration: 2 * time.Minute},
+					ReviewTimeout: config.Duration{Duration: 10 * time.Minute},
+				},
+				Projects: map[string]config.Project{
+					"enabled-project": {
+						Enabled:   true,
+						Workspace: "/tmp/enabled-project",
+					},
+				},
+				Providers: map[string]config.Provider{
+					"claude": {
+						CLI:     "claude",
+						Model:   "claude-sonnet",
+						Enabled: true,
+						Tier:    "fast",
+					},
+				},
+			},
+			tasks: map[string][]dag.Task{
+				"enabled-project": {
+					{
+						ID:              "task-no-acceptance",
+						Description:     "Simple task without acceptance criteria",
+						EstimateMinutes: 30,
+						Acceptance:      "", // Empty acceptance criteria
+						ParentID:        "",
+					},
+				},
+			},
+			expectedCount:     1,
+			expectedProjects:  []string{"enabled-project"},
+			checkNoAcceptance: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockStore := &mockTaskStore{tasks: tt.tasks}
+			da := &DispatchActivities{
+				DAG:    mockStore,
+				Config: tt.config,
+				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			}
+
+			candidates, err := da.ScanCandidatesActivity(context.Background())
+			if err != nil {
+				t.Fatalf("ScanCandidatesActivity failed: %v", err)
+			}
+
+			if len(candidates) != tt.expectedCount {
+				t.Errorf("expected %d candidates, got %d", tt.expectedCount, len(candidates))
+			}
+
+			// Check that only expected projects appear
+			projectsSeen := make(map[string]bool)
+			for _, candidate := range candidates {
+				projectsSeen[candidate.Project] = true
+			}
+
+			for _, expectedProject := range tt.expectedProjects {
+				if !projectsSeen[expectedProject] {
+					t.Errorf("expected project %q not found in candidates", expectedProject)
+				}
+			}
+
+			// Verify acceptance criteria are included in prompt when present
+			if tt.checkPrompts {
+				for _, candidate := range candidates {
+					// Should contain task description
+					if !strings.Contains(candidate.Prompt, "Fix the bug") {
+						t.Errorf("expected task description in prompt, got: %q", candidate.Prompt)
+					}
+					// Should contain acceptance criteria
+					if !strings.Contains(candidate.Prompt, "Bug is fixed and tests pass") {
+						t.Errorf("expected acceptance criteria in prompt, got: %q", candidate.Prompt)
+					}
+					// Should have acceptance criteria header
+					if !strings.Contains(candidate.Prompt, "Acceptance Criteria:") {
+						t.Errorf("expected acceptance criteria header in prompt, got: %q", candidate.Prompt)
+					}
+				}
+			}
+
+			// Verify no acceptance criteria when empty
+			if tt.checkNoAcceptance {
+				for _, candidate := range candidates {
+					// Should contain task description
+					if !strings.Contains(candidate.Prompt, "Simple task without acceptance criteria") {
+						t.Errorf("expected task description in prompt, got: %q", candidate.Prompt)
+					}
+					// Should NOT contain acceptance criteria header
+					if strings.Contains(candidate.Prompt, "Acceptance Criteria:") {
+						t.Errorf("did not expect acceptance criteria header in prompt, got: %q", candidate.Prompt)
+					}
+				}
+			}
+
+			// Verify basic field population
+			for _, candidate := range candidates {
+				if candidate.TaskID == "" {
+					t.Error("TaskID should not be empty")
+				}
+				if candidate.Project == "" {
+					t.Error("Project should not be empty")
+				}
+				if candidate.Prompt == "" {
+					t.Error("Prompt should not be empty")
+				}
+				if candidate.WorkDir == "" {
+					t.Error("WorkDir should not be empty")
+				}
+				if candidate.Agent == "" {
+					t.Error("Agent should not be empty")
+				}
+			}
+		})
+	}
+}
