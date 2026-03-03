@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"modernc.org/sqlite"
+	_ "modernc.org/sqlite"
 )
 
 func setupTestAuth(t *testing.T) *Auth {

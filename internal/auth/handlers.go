@@ -1,12 +1,9 @@
 package auth
 
 import (
-	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
