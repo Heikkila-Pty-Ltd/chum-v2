@@ -85,9 +85,13 @@ func main() {
 		}()
 
 		// Wait for shutdown signal
-		<-sigCh
-		logger.Info("Shutdown signal received, stopping services...")
-		cancel()
+		select {
+		case <-sigCh:
+			logger.Info("Shutdown signal received, stopping services...")
+			cancel()
+		case <-ctx.Done():
+			logger.Info("Context cancelled by service failure, stopping...")
+		}
 
 		wg.Wait()
 		logger.Info("All services stopped")
