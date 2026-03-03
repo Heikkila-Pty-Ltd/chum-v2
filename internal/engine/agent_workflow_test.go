@@ -270,23 +270,57 @@ func TestAgentWorkflow_Subtask_SkipsDecomposition(t *testing.T) {
 	}
 }
 
-func TestAgentWorkflow_SetupFailure(t *testing.T) {
+func TestAgentWorkflow_MergeFailure(t *testing.T) {
 	t.Parallel()
 
 	s := testsuite.WorkflowTestSuite{}
 	env := s.NewTestWorkflowEnvironment()
 
 	var a *Activities
-	// Mock SetupWorktreeActivity to return error
-	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-setup-fail").Return("", errors.New("worktree setup failed"))
-	// Mock close and notify activities
-	env.OnActivity(a.CloseTaskWithDetailActivity, mock.Anything, "task-setup-fail", mock.Anything).Return(nil)
+	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-merge-fail").Return("/tmp/wt-task-merge-fail", nil)
+	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return(&types.DecompResult{Atomic: true}, nil)
+	env.OnActivity(a.ExecuteActivity, mock.Anything, mock.Anything).Return(&ExecResult{
+		ExitCode: 0,
+		Output:   "ok",
+	}, nil)
+	env.OnActivity(a.DoDCheckActivity, mock.Anything, "/tmp/wt-task-merge-fail", "p").Return(&gitpkg.DoDResult{
+		Passed: true,
+	}, nil)
+	env.OnActivity(a.PushActivity, mock.Anything, "/tmp/wt-task-merge-fail").Return(nil)
+	env.OnActivity(a.CreatePRInfoActivity, mock.Anything, "/tmp/wt-task-merge-fail", mock.Anything).Return(&PRInfo{
+		Number:  124,
+		HeadSHA: "def456",
+		URL:     "https://github.com/Heikkila-Pty-Ltd/chum-v2/pull/3",
+	}, nil)
+	env.OnActivity(a.ResolveReviewerLoginActivity, mock.Anything, "/tmp/wt-task-merge-fail").Return("review-bot", nil)
+	env.OnActivity(a.RunReviewActivity, mock.Anything, "/tmp/wt-task-merge-fail", 124, 1, "claude").Return(&ReviewDraft{
+		Signal: "APPROVE",
+		Body:   "Looks good.",
+	}, nil)
+	env.OnActivity(a.GuardReviewerCleanActivity, mock.Anything, "/tmp/wt-task-merge-fail").Return(nil)
+	env.OnActivity(a.SubmitReviewActivity, mock.Anything, "/tmp/wt-task-merge-fail", 124, 1, "review-bot", "def456", "APPROVE", "Looks good.").Return(&ReviewResult{
+		Outcome:   ReviewApproved,
+		ReviewURL: "https://github.com/Heikkila-Pty-Ltd/chum-v2/pull/3#pullrequestreview-2",
+	}, nil)
+	env.OnActivity(a.CheckPRStateActivity, mock.Anything, "/tmp/wt-task-merge-fail", 124, 1, "review-bot", "def456").Return(&ReviewResult{
+		Outcome:   ReviewApproved,
+		ReviewURL: "https://github.com/Heikkila-Pty-Ltd/chum-v2/pull/3#pullrequestreview-2",
+	}, nil)
+	// Mock MergePRActivity to return Merged=false with SubReason merge_blocked
+	env.OnActivity(a.MergePRActivity, mock.Anything, "/tmp/wt-task-merge-fail", 124).Return(&MergeResult{
+		Merged:    false,
+		SubReason: "merge_blocked",
+	}, nil)
+	// Verify task is closed as needs_review (not completed)
+	env.OnActivity(a.CloseTaskWithDetailActivity, mock.Anything, "task-merge-fail", mock.MatchedBy(func(detail CloseDetail) bool {
+		return detail.Reason == CloseNeedsReview && detail.SubReason == "merge_blocked"
+	})).Return(nil)
 	env.OnActivity(a.NotifyActivity, mock.Anything, mock.Anything).Return(nil)
-	// Assert that cleanup is still called even when setup fails
-	env.OnActivity(a.CleanupWorktreeActivity, mock.Anything, "/repo", "/tmp/chum-worktrees/task-setup-fail").Return(nil)
+	// Assert cleanup runs
+	env.OnActivity(a.CleanupWorktreeActivity, mock.Anything, "/repo", "/tmp/wt-task-merge-fail").Return(nil)
 
 	env.ExecuteWorkflow(AgentWorkflow, TaskRequest{
-		TaskID:  "task-setup-fail",
+		TaskID:  "task-merge-fail",
 		Project: "p",
 		Prompt:  "do thing",
 		WorkDir: "/repo",
@@ -296,7 +330,7 @@ func TestAgentWorkflow_SetupFailure(t *testing.T) {
 	if !env.IsWorkflowCompleted() {
 		t.Fatal("expected workflow completion")
 	}
-	if err := env.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "worktree setup failed") {
-		t.Fatalf("expected setup failure error, got %v", err)
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("unexpected workflow error: %v", err)
 	}
 }
