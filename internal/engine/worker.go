@@ -118,7 +118,7 @@ func registerEngineWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Confi
 		AST:          parser,
 		BeadsClients: beadsClients,
 		ChatSend:     chatSender,
-		LLM:          llm.CLIRunner{},
+		LLM:          buildRetryRunner(cfg, logger),
 	}
 	w.RegisterActivity(a.SetupWorktreeActivity)
 	w.RegisterActivity(a.ExecuteActivity)
@@ -164,7 +164,7 @@ func registerPlanningWorkflows(w worker.Worker, d *dag.DAG, cfg *config.Config,
 		AST:          parser,
 		BeadsClients: beadsClients,
 		ChatSend:     chatSender,
-		LLM:          llm.CLIRunner{},
+		LLM:          buildRetryRunner(cfg, logger),
 	}
 	w.RegisterActivity(pa.ClarifyGoalActivity)
 	w.RegisterActivity(pa.ResearchApproachesActivity)
@@ -324,4 +324,31 @@ func EnsureNamespace(ctx context.Context, cfg *config.Config, logger *slog.Logge
 	}
 	logger.Info("Namespace created", "namespace", ns)
 	return nil
+}
+
+// buildRetryRunner creates an LLM Runner with retry and provider fallback from config.
+func buildRetryRunner(cfg *config.Config, logger *slog.Logger) llm.Runner {
+	if cfg == nil {
+		return llm.CLIRunner{}
+	}
+
+	// Convert config providers to llm.ProviderConfig map.
+	providers := make(map[string]llm.ProviderConfig, len(cfg.Providers))
+	for name, p := range cfg.Providers {
+		providers[name] = llm.ProviderConfig{
+			CLI:     p.CLI,
+			Model:   p.Model,
+			Tier:    p.Tier,
+			Enabled: p.Enabled,
+		}
+	}
+
+	tiers := llm.TierConfig{
+		Fast:     cfg.Tiers.Fast,
+		Balanced: cfg.Tiers.Balanced,
+		Premium:  cfg.Tiers.Premium,
+	}
+
+	selector := llm.NewConfigSelector(providers, tiers)
+	return llm.NewRetryRunner(llm.CLIRunner{}, selector, logger)
 }
