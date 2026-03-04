@@ -48,6 +48,9 @@ func Open(dbPath string) (*DAG, error) {
 // Close closes the underlying database connection.
 func (d *DAG) Close() error { return d.db.Close() }
 
+// DB returns the underlying database connection for direct queries.
+func (d *DAG) DB() *sql.DB { return d.db }
+
 func generateTaskID(project string) (string, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(99999))
 	if err != nil {
