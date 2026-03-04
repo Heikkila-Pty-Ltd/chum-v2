@@ -159,6 +159,105 @@ func TestRecordTraceActivity_NilStores(t *testing.T) {
 	}
 }
 
+func TestRecordTraceActivity_InfraFailureSkipsPerf(t *testing.T) {
+	t.Parallel()
+	ts, tracker := tempTraceStore(t)
+
+	a := &Activities{Traces: ts, Perf: tracker}
+	suite := testsuite.WorkflowTestSuite{}
+	env := suite.NewTestActivityEnvironment()
+	env.RegisterActivity(a.RecordTraceActivity)
+
+	// reviewer_error is infra noise — should record trace but NOT perf.
+	_, err := env.ExecuteActivity(a.RecordTraceActivity, TraceOutcome{
+		TaskID:    "task-infra",
+		SessionID: "session-infra",
+		Agent:     "claude",
+		Model:     "sonnet-4",
+		Tier:      "fast",
+		Reason:    string(CloseNeedsReview),
+		SubReason: "reviewer_error",
+		Duration:  60 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("RecordTraceActivity failed: %v", err)
+	}
+
+	// Trace should be recorded.
+	traces, err := ts.ListExecutionTraces("task-infra")
+	if err != nil {
+		t.Fatalf("list traces: %v", err)
+	}
+	if len(traces) != 1 {
+		t.Fatalf("expected 1 trace, got %d", len(traces))
+	}
+
+	// Perf should NOT be recorded — reviewer_error is not the provider's fault.
+	stats, err := tracker.StatsForTier(t.Context(), "fast")
+	if err != nil {
+		t.Fatalf("stats for tier: %v", err)
+	}
+	if len(stats) != 0 {
+		t.Errorf("expected 0 perf stats for infra failure, got %d", len(stats))
+	}
+}
+
+func TestRecordTraceActivity_DecomposedIsPerfSuccess(t *testing.T) {
+	t.Parallel()
+	ts, tracker := tempTraceStore(t)
+
+	a := &Activities{Traces: ts, Perf: tracker}
+	suite := testsuite.WorkflowTestSuite{}
+	env := suite.NewTestActivityEnvironment()
+	env.RegisterActivity(a.RecordTraceActivity)
+
+	_, err := env.ExecuteActivity(a.RecordTraceActivity, TraceOutcome{
+		TaskID:    "task-decomp",
+		SessionID: "session-decomp",
+		Agent:     "claude",
+		Model:     "sonnet-4",
+		Tier:      "balanced",
+		Reason:    string(CloseDecomposed),
+		SubReason: "decomposed",
+		Duration:  20 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("RecordTraceActivity failed: %v", err)
+	}
+
+	// Decomposed should be recorded as perf SUCCESS (provider correctly split work).
+	stats, err := tracker.StatsForTier(t.Context(), "balanced")
+	if err != nil {
+		t.Fatalf("stats for tier: %v", err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("expected 1 perf stat, got %d", len(stats))
+	}
+	if stats[0].Successes != 1 {
+		t.Errorf("expected decomposed to count as perf success, got %d successes", stats[0].Successes)
+	}
+}
+
+func TestIsPerfRelevant(t *testing.T) {
+	t.Parallel()
+
+	relevant := []string{"completed", "exec_failed", "dod_failed", "dod_error", "decomposed", "decompose_failed"}
+	for _, r := range relevant {
+		if !isPerfRelevant(r) {
+			t.Errorf("isPerfRelevant(%q) = false, want true", r)
+		}
+	}
+
+	irrelevant := []string{"worktree_failed", "push_failed", "pr_create_failed", "reviewer_error",
+		"reviewer_modified_code", "review_submit_failed", "merge_failed", "merge_blocked",
+		"no_reviewer_activity", "max_rounds_reached", "subtask_creation_failed"}
+	for _, r := range irrelevant {
+		if isPerfRelevant(r) {
+			t.Errorf("isPerfRelevant(%q) = true, want false", r)
+		}
+	}
+}
+
 func TestRewardForReason(t *testing.T) {
 	t.Parallel()
 

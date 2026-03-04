@@ -335,8 +335,25 @@ func rewardForReason(reason CloseReason) float64 {
 	}
 }
 
+// isPerfRelevant returns true if the outcome reflects provider execution quality
+// rather than infrastructure/review noise. Only execution-related outcomes should
+// feed UCT provider ranking.
+func isPerfRelevant(subReason string) bool {
+	switch subReason {
+	case "completed", "exec_failed", "dod_failed", "dod_error",
+		"decomposed", "decompose_failed":
+		return true
+	default:
+		return false
+	}
+}
+
 // RecordTraceActivity writes execution trace and perf data for a completed workflow.
 // Best-effort: errors are logged but do not fail the workflow.
+//
+// Traces are always recorded (full workflow history). Perf runs are only recorded
+// for execution-relevant outcomes to avoid polluting UCT provider ranking with
+// infrastructure/review noise.
 func (a *Activities) RecordTraceActivity(ctx context.Context, outcome TraceOutcome) error {
 	logger := activity.GetLogger(ctx)
 
@@ -347,20 +364,22 @@ func (a *Activities) RecordTraceActivity(ctx context.Context, outcome TraceOutco
 	}
 	reward := rewardForReason(CloseReason(outcome.Reason))
 
-	// Record execution trace.
+	// Record execution trace (always — full workflow history).
 	if a.Traces != nil {
 		traceID, err := a.Traces.StartExecutionTrace(outcome.TaskID, outcome.Agent, "")
 		if err != nil {
 			logger.Error("Failed to start execution trace", "error", err)
 		} else {
-			_ = a.Traces.AppendTraceEvent(traceID, store.TraceEvent{
-				Stage:        outcome.Reason,
-				Step:         outcome.SubReason,
-				Tool:         outcome.Agent,
-				DurationMs:   outcome.Duration.Milliseconds(),
-				Success:      success,
-				ErrorContext:  outcome.SubReason,
-			})
+			if err := a.Traces.AppendTraceEvent(traceID, store.TraceEvent{
+				Stage:       outcome.Reason,
+				Step:        outcome.SubReason,
+				Tool:        outcome.Agent,
+				DurationMs:  outcome.Duration.Milliseconds(),
+				Success:     success,
+				ErrorContext: outcome.SubReason,
+			}); err != nil {
+				logger.Error("Failed to append trace event", "error", err)
+			}
 			if err := a.Traces.CompleteExecutionTrace(traceID, outcome.Reason, outcome.SubReason, 1, successCount); err != nil {
 				logger.Error("Failed to complete execution trace", "error", err)
 			}
@@ -374,9 +393,12 @@ func (a *Activities) RecordTraceActivity(ctx context.Context, outcome TraceOutco
 		}
 	}
 
-	// Record perf run.
-	if a.Perf != nil {
-		if err := a.Perf.Record(ctx, outcome.Agent, outcome.Model, outcome.Tier, success, outcome.Duration.Seconds()); err != nil {
+	// Record perf run only for execution-relevant outcomes.
+	// Infra/review failures (push, PR, merge, reviewer) are not the provider's fault.
+	// Decomposed is neutral — the provider correctly identified work needed splitting.
+	if a.Perf != nil && isPerfRelevant(outcome.SubReason) {
+		perfSuccess := success || outcome.Reason == string(CloseDecomposed)
+		if err := a.Perf.Record(ctx, outcome.Agent, outcome.Model, outcome.Tier, perfSuccess, outcome.Duration.Seconds()); err != nil {
 			logger.Error("Failed to record perf run", "error", err)
 		}
 	}

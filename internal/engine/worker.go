@@ -344,12 +344,7 @@ func EnsureNamespace(ctx context.Context, cfg *config.Config, logger *slog.Logge
 }
 
 // openTraceStore opens the trace database and creates a perf tracker.
-// Returns (nil, nil, nil) if traces_db_path is empty (disabled).
 func openTraceStore(cfg *config.Config, logger *slog.Logger) (*store.Store, *perf.Tracker, error) {
-	if cfg.General.TracesDBPath == "" {
-		logger.Info("Trace store disabled (no traces_db_path)")
-		return nil, nil, nil
-	}
 	s, err := store.Open(cfg.General.TracesDBPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open traces db %s: %w", cfg.General.TracesDBPath, err)
