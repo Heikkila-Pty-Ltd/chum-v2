@@ -317,7 +317,7 @@ func TestAgentWorkflow_MergeFailure(t *testing.T) {
 	})).Return(nil)
 	env.OnActivity(a.NotifyActivity, mock.Anything, mock.Anything).Return(nil)
 	// Assert cleanup runs
-	env.OnActivity(a.CleanupWorktreeActivity, mock.Anything, "/repo", "/tmp/wt-task-merge-fail").Return(nil)
+	env.OnActivity(a.CleanupWorktreeActivity, mock.Anything, "/repo", "/tmp/chum-worktrees/task-merge-fail").Return(nil)
 
 	env.ExecuteWorkflow(AgentWorkflow, TaskRequest{
 		TaskID:  "task-merge-fail",
