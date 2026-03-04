@@ -26,6 +26,10 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 
 	var a *Activities
 
+	// Version gate: trace recording added after initial release.
+	traceVersion := workflow.GetVersion(ctx, "add-trace-recording", workflow.DefaultVersion, 1)
+	startTime := workflow.Now(ctx)
+
 	// --- Activity options (from config via dispatcher, with defaults) ---
 	shortTimeout := req.ShortTimeout
 	if shortTimeout <= 0 {
@@ -77,11 +81,30 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	}
 	defer cleanup()
 
+	// closeAndTrace wraps closeAndNotify and records an execution trace.
+	closeAndTrace := func(detail CloseDetail) error {
+		cerr := closeAndNotify(ctx, shortOpts, req.TaskID, detail)
+		if traceVersion == 1 {
+			traceCtx := workflow.WithActivityOptions(ctx, shortOpts)
+			info := workflow.GetInfo(ctx)
+			_ = workflow.ExecuteActivity(traceCtx, a.RecordTraceActivity, TraceOutcome{
+				TaskID:    req.TaskID,
+				SessionID: info.WorkflowExecution.RunID,
+				Agent:     req.Agent,
+				Model:     req.Model,
+				Tier:      req.Tier,
+				Reason:    string(detail.Reason),
+				SubReason: detail.SubReason,
+				Duration:  workflow.Now(ctx).Sub(startTime),
+			}).Get(ctx, nil)
+		}
+		return cerr
+	}
 	wtCtx := workflow.WithActivityOptions(ctx, shortOpts)
 	var worktreePath string
 	if err := workflow.ExecuteActivity(wtCtx, a.SetupWorktreeActivity, baseWorkDir, req.TaskID).Get(ctx, &worktreePath); err != nil {
 		logger.Error("Worktree setup failed — refusing to work on master", "error", err)
-		if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+		if cerr := closeAndTrace(CloseDetail{
 			Reason:    CloseNeedsReview,
 			SubReason: "worktree_failed",
 		}); cerr != nil {
@@ -107,7 +130,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			var decompResult types.DecompResult
 			if err := workflow.ExecuteActivity(decompCtx, a.DecomposeActivity, req).Get(ctx, &decompResult); err != nil {
 				logger.Error("Decomposition failed", "error", err)
-				if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+				if cerr := closeAndTrace(CloseDetail{
 					Reason:    CloseNeedsReview,
 					SubReason: "decompose_failed",
 				}); cerr != nil {
@@ -120,7 +143,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 				if err := workflow.ExecuteActivity(decompCtx, a.CreateSubtasksActivity,
 					req.TaskID, req.Project, decompResult.Steps).Get(ctx, &subtaskIDs); err != nil {
 					logger.Error("Failed to create subtasks", "error", err)
-					if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+					if cerr := closeAndTrace(CloseDetail{
 						Reason:    CloseNeedsReview,
 						SubReason: "subtask_creation_failed",
 					}); cerr != nil {
@@ -130,7 +153,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 				}
 				logger.Info("Task decomposed", "ParentID", req.TaskID, "Subtasks", len(subtaskIDs))
 				cleanup()
-				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+				return closeAndTrace(CloseDetail{
 					Reason:    CloseDecomposed,
 					SubReason: "decomposed",
 				})
@@ -143,7 +166,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	var execResult ExecResult
 	if err := workflow.ExecuteActivity(execCtx, a.ExecuteActivity, req).Get(ctx, &execResult); err != nil {
 		logger.Error("Execute failed", "error", err)
-		if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+		if cerr := closeAndTrace(CloseDetail{
 			Reason:    CloseNeedsReview,
 			SubReason: "exec_failed",
 		}); cerr != nil {
@@ -158,7 +181,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	var dodResult gitpkg.DoDResult
 	if err := workflow.ExecuteActivity(dodCtx, a.DoDCheckActivity, req.WorkDir, req.Project).Get(ctx, &dodResult); err != nil {
 		logger.Error("DoD check error", "error", err)
-		if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+		if cerr := closeAndTrace(CloseDetail{
 			Reason:    CloseNeedsReview,
 			SubReason: "dod_error",
 		}); cerr != nil {
@@ -171,7 +194,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		failureMsg := BuildClassifierInput(dodResult)
 		category, summary := ClassifyFailure(failureMsg)
 		logger.Warn("DoD FAILED", "Category", category, "Summary", summary, "Failures", dodResult.Failures)
-		if cerr := closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+		if cerr := closeAndTrace(CloseDetail{
 			Reason:    CloseDoDFailed,
 			SubReason: string(category),
 			Category:  string(category),
@@ -188,7 +211,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	pushCtx := workflow.WithActivityOptions(ctx, shortOpts)
 	if err := workflow.ExecuteActivity(pushCtx, a.PushActivity, req.WorkDir).Get(ctx, nil); err != nil {
 		logger.Error("Push failed", "error", err)
-		return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+		return closeAndTrace(CloseDetail{
 			Reason:    CloseNeedsReview,
 			SubReason: "push_failed",
 		})
@@ -199,7 +222,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	var prInfo PRInfo
 	if err := workflow.ExecuteActivity(prCtx, a.CreatePRInfoActivity, req.WorkDir, prTitle).Get(ctx, &prInfo); err != nil {
 		logger.Error("PR creation failed", "error", err)
-		return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+		return closeAndTrace(CloseDetail{
 			Reason:    CloseNeedsReview,
 			SubReason: "pr_create_failed",
 		})
@@ -209,7 +232,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	var reviewerLogin string
 	if err := workflow.ExecuteActivity(prCtx, a.ResolveReviewerLoginActivity, req.WorkDir).Get(ctx, &reviewerLogin); err != nil {
 		logger.Error("Reviewer login resolution failed", "error", err)
-		return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+		return closeAndTrace(CloseDetail{
 			Reason:    CloseNeedsReview,
 			SubReason: "reviewer_error",
 			PRNumber:  prInfo.Number,
@@ -227,7 +250,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		if err := workflow.ExecuteActivity(reviewCtx, a.RunReviewActivity,
 			req.WorkDir, prInfo.Number, round, req.Agent).Get(ctx, &draft); err != nil {
 			logger.Error("Reviewer run failed", "error", err)
-			return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+			return closeAndTrace(CloseDetail{
 				Reason:    CloseNeedsReview,
 				SubReason: "reviewer_error",
 				PRNumber:  prInfo.Number,
@@ -237,7 +260,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 
 		if err := workflow.ExecuteActivity(prCtx, a.GuardReviewerCleanActivity, req.WorkDir).Get(ctx, nil); err != nil {
 			logger.Error("Reviewer guard failed", "error", err)
-			return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+			return closeAndTrace(CloseDetail{
 				Reason:    CloseNeedsReview,
 				SubReason: "reviewer_modified_code",
 				PRNumber:  prInfo.Number,
@@ -249,7 +272,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		if err := workflow.ExecuteActivity(prCtx, a.SubmitReviewActivity,
 			req.WorkDir, prInfo.Number, round, reviewerLogin, prInfo.HeadSHA, draft.Signal, draft.Body).Get(ctx, &submitted); err != nil {
 			logger.Error("Submit review failed", "error", err)
-			return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+			return closeAndTrace(CloseDetail{
 				Reason:    CloseNeedsReview,
 				SubReason: "review_submit_failed",
 				PRNumber:  prInfo.Number,
@@ -261,7 +284,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		if err := workflow.ExecuteActivity(prCtx, a.CheckPRStateActivity,
 			req.WorkDir, prInfo.Number, round, reviewerLogin, prInfo.HeadSHA).Get(ctx, &state); err != nil {
 			logger.Error("Check review state failed", "error", err)
-			return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+			return closeAndTrace(CloseDetail{
 				Reason:    CloseNeedsReview,
 				SubReason: "reviewer_error",
 				PRNumber:  prInfo.Number,
@@ -274,7 +297,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			var merge MergeResult
 			if err := workflow.ExecuteActivity(prCtx, a.MergePRActivity, req.WorkDir, prInfo.Number).Get(ctx, &merge); err != nil {
 				logger.Error("Merge activity failed", "error", err)
-				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+				return closeAndTrace(CloseDetail{
 					Reason:    CloseNeedsReview,
 					SubReason: "merge_failed",
 					PRNumber:  prInfo.Number,
@@ -283,7 +306,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			}
 			if merge.Merged {
 				logger.Info("Task merged successfully", "TaskID", req.TaskID, "PR", prInfo.Number)
-				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+				return closeAndTrace(CloseDetail{
 					Reason:    CloseCompleted,
 					SubReason: "completed",
 					PRNumber:  prInfo.Number,
@@ -294,7 +317,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			if sub == "" {
 				sub = "merge_blocked"
 			}
-			return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+			return closeAndTrace(CloseDetail{
 				Reason:    CloseNeedsReview,
 				SubReason: sub,
 				PRNumber:  prInfo.Number,
@@ -303,7 +326,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 
 		case ReviewChangesRequested:
 			if round == maxReviewRounds {
-				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+				return closeAndTrace(CloseDetail{
 					Reason:    CloseNeedsReview,
 					SubReason: "max_rounds_reached",
 					PRNumber:  prInfo.Number,
@@ -329,7 +352,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 
 			if err := workflow.ExecuteActivity(execCtx, a.ExecuteActivity, req).Get(ctx, &execResult); err != nil {
 				logger.Error("Re-execute failed after review changes", "error", err)
-				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+				return closeAndTrace(CloseDetail{
 					Reason:    CloseNeedsReview,
 					SubReason: "exec_failed",
 					PRNumber:  prInfo.Number,
@@ -338,7 +361,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			}
 			if err := workflow.ExecuteActivity(dodCtx, a.DoDCheckActivity, req.WorkDir, req.Project).Get(ctx, &dodResult); err != nil {
 				logger.Error("DoD error after review changes", "error", err)
-				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+				return closeAndTrace(CloseDetail{
 					Reason:    CloseNeedsReview,
 					SubReason: "dod_error",
 					PRNumber:  prInfo.Number,
@@ -349,7 +372,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 				failureMsg2 := BuildClassifierInput(dodResult)
 				cat2, sum2 := ClassifyFailure(failureMsg2)
 				logger.Warn("DoD FAILED after review changes", "Category", cat2, "Summary", sum2)
-				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+				return closeAndTrace(CloseDetail{
 					Reason:    CloseDoDFailed,
 					SubReason: string(cat2),
 					Category:  string(cat2),
@@ -360,7 +383,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			}
 			if err := workflow.ExecuteActivity(pushCtx, a.PushActivity, req.WorkDir).Get(ctx, nil); err != nil {
 				logger.Error("Push failed after review changes", "error", err)
-				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+				return closeAndTrace(CloseDetail{
 					Reason:    CloseNeedsReview,
 					SubReason: "push_failed",
 					PRNumber:  prInfo.Number,
@@ -371,7 +394,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			var refreshed PRInfo
 			if err := workflow.ExecuteActivity(prCtx, a.GetPRInfoActivity, req.WorkDir, prInfo.Number).Get(ctx, &refreshed); err != nil {
 				logger.Error("Failed to refresh PR head SHA after push", "error", err)
-				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+				return closeAndTrace(CloseDetail{
 					Reason:    CloseNeedsReview,
 					SubReason: "reviewer_error",
 					PRNumber:  prInfo.Number,
@@ -380,7 +403,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			}
 			if refreshed.HeadSHA == "" {
 				logger.Error("Refreshed PR metadata missing head SHA", "PR", prInfo.Number)
-				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+				return closeAndTrace(CloseDetail{
 					Reason:    CloseNeedsReview,
 					SubReason: "reviewer_error",
 					PRNumber:  prInfo.Number,
@@ -390,7 +413,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			prInfo = refreshed
 
 		case ReviewNoActivity:
-			return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+			return closeAndTrace(CloseDetail{
 				Reason:    CloseNeedsReview,
 				SubReason: "no_reviewer_activity",
 				PRNumber:  prInfo.Number,
@@ -398,7 +421,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			})
 
 		case ReviewerFailed:
-			return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+			return closeAndTrace(CloseDetail{
 				Reason:    CloseNeedsReview,
 				SubReason: "reviewer_error",
 				PRNumber:  prInfo.Number,
@@ -406,7 +429,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			})
 
 		default:
-			return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+			return closeAndTrace(CloseDetail{
 				Reason:    CloseNeedsReview,
 				SubReason: "reviewer_error",
 				PRNumber:  prInfo.Number,
@@ -415,7 +438,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		}
 	}
 
-	return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+	return closeAndTrace(CloseDetail{
 		Reason:    CloseNeedsReview,
 		SubReason: "max_rounds_reached",
 		PRNumber:  prInfo.Number,

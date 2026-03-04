@@ -4,12 +4,15 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/perf"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
 )
 
 type mockTaskStore struct {
@@ -385,5 +388,68 @@ func TestScanCandidatesActivity(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPickProvider_PerfInformed(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "perf-test.db")
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer s.Close()
+
+	if err := perf.Migrate(s.DB()); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	tracker := perf.New(s.DB(), 0)
+	ctx := context.Background()
+
+	// Record history: gemini succeeds often, claude fails often in "fast" tier.
+	for i := 0; i < 10; i++ {
+		_ = tracker.Record(ctx, "gemini", "flash", "fast", true, 5.0)
+		_ = tracker.Record(ctx, "claude", "haiku", "fast", false, 10.0)
+	}
+
+	// Verify directly via perf.Pick (avoids needing Temporal activity context).
+	p, err := tracker.Pick(ctx, "fast")
+	if err != nil {
+		t.Fatalf("perf.Pick failed: %v", err)
+	}
+	if p == nil {
+		t.Fatal("expected perf to return a provider, got nil")
+	}
+	if p.Agent != "gemini" {
+		t.Errorf("expected perf to pick gemini (higher success), got %q", p.Agent)
+	}
+	if p.Model != "flash" {
+		t.Errorf("expected model flash, got %q", p.Model)
+	}
+}
+
+func TestPickProvider_FallbackToConfig(t *testing.T) {
+	t.Parallel()
+
+	da := &DispatchActivities{
+		Config: &config.Config{
+			Providers: map[string]config.Provider{
+				"claude": {CLI: "claude", Model: "sonnet", Enabled: true, Tier: "balanced"},
+			},
+			Tiers: config.Tiers{
+				Balanced: []string{"claude"},
+			},
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Perf:   nil,
+	}
+
+	agent, _, tier := da.pickProvider(context.Background(), "balanced")
+	if agent != "claude" {
+		t.Errorf("expected config fallback to claude, got %q", agent)
+	}
+	if tier != "balanced" {
+		t.Errorf("expected tier balanced, got %q", tier)
 	}
 }

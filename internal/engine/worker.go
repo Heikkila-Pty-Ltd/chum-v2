@@ -19,7 +19,9 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/notify"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/perf"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/watch"
 )
 
@@ -45,11 +47,20 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 
 	w := worker.New(c, cfg.General.TaskQueue, worker.Options{})
 
+	// Open trace store and perf tracker (best-effort — worker runs without tracing).
+	traceStore, tracker, err := openTraceStore(cfg, logger)
+	if err != nil {
+		logger.Warn("Trace store unavailable, continuing without tracing", "error", err)
+	}
+	if traceStore != nil {
+		defer traceStore.Close()
+	}
+
 	parser := astpkg.NewParser(logger)
 	beadsClients := buildBeadsClients(cfg, logger)
 	chatSender := buildChatSender(cfg, logger)
 
-	registerEngineWorkflows(w, d, cfg, logger, parser, beadsClients, chatSender)
+	registerEngineWorkflows(w, d, cfg, logger, parser, beadsClients, chatSender, traceStore, tracker)
 	registerPlanningWorkflows(w, d, cfg, logger, parser, beadsClients, chatSender)
 	registerHealthWorkflows(w, logger, chatSender)
 
@@ -106,7 +117,8 @@ func buildChatSender(cfg *config.Config, logger *slog.Logger) notify.ChatSender 
 // registerEngineWorkflows registers the core agent and dispatcher workflows/activities.
 func registerEngineWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Config,
 	logger *slog.Logger, parser *astpkg.Parser,
-	beadsClients map[string]beads.Store, chatSender notify.ChatSender) {
+	beadsClients map[string]beads.Store, chatSender notify.ChatSender,
+	traceStore store.TraceStore, tracker *perf.Tracker) {
 
 	w.RegisterWorkflow(AgentWorkflow)
 	w.RegisterWorkflow(DispatcherWorkflow)
@@ -120,6 +132,8 @@ func registerEngineWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Confi
 		BeadsClients: beadsClients,
 		ChatSend:     chatSender,
 		LLM:          buildRetryRunner(cfg, logger),
+		Traces:       traceStore,
+		Perf:         tracker,
 	}
 	w.RegisterActivity(a.SetupWorktreeActivity)
 	w.RegisterActivity(a.ExecuteActivity)
@@ -141,11 +155,13 @@ func registerEngineWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Confi
 	w.RegisterActivity(a.NotifyActivity)
 	w.RegisterActivity(a.DecomposeActivity)
 	w.RegisterActivity(a.CreateSubtasksActivity)
+	w.RegisterActivity(a.RecordTraceActivity)
 
 	da := &DispatchActivities{
 		DAG:    d,
 		Config: cfg,
 		Logger: logger,
+		Perf:   tracker,
 	}
 	w.RegisterActivity(da)
 }
@@ -325,6 +341,21 @@ func EnsureNamespace(ctx context.Context, cfg *config.Config, logger *slog.Logge
 	}
 	logger.Info("Namespace created", "namespace", ns)
 	return nil
+}
+
+// openTraceStore opens the trace database and creates a perf tracker.
+func openTraceStore(cfg *config.Config, logger *slog.Logger) (*store.Store, *perf.Tracker, error) {
+	s, err := store.Open(cfg.General.TracesDBPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open traces db %s: %w", cfg.General.TracesDBPath, err)
+	}
+	if err := perf.Migrate(s.DB()); err != nil {
+		s.Close()
+		return nil, nil, fmt.Errorf("migrate perf schema: %w", err)
+	}
+	t := perf.New(s.DB(), 0) // default exploration factor
+	logger.Info("Trace store and perf tracker initialized", "path", cfg.General.TracesDBPath)
+	return s, t, nil
 }
 
 // buildRetryRunner creates an LLM Runner with retry and provider fallback from config.

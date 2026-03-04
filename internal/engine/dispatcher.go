@@ -16,6 +16,7 @@ import (
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/perf"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
@@ -131,6 +132,7 @@ type DispatchActivities struct {
 	DAG    dag.TaskStore
 	Config *config.Config
 	Logger *slog.Logger
+	Perf   *perf.Tracker // performance-based provider selection (nil = config-only)
 }
 
 // MarkTaskRunningActivity marks a task as "running" in the DAG.
@@ -163,9 +165,9 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 		}
 
 		for _, t := range tasks {
-			// Pick provider based on task's estimated difficulty
+			// Pick provider: try perf-informed selection first, fall back to config.
 			startTier := TierForEstimate(t.EstimateMinutes)
-			agent, model, tier := PickProvider(da.Config, startTier)
+			agent, model, tier := da.pickProvider(ctx, startTier)
 
 			prompt := t.Description
 			if t.Acceptance != "" {
@@ -189,6 +191,38 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 	}
 
 	return candidates, nil
+}
+
+// pickProvider tries perf-informed UCT selection first, then falls back to config.
+// Perf picks are validated against enabled providers — stale/disabled providers are ignored.
+func (da *DispatchActivities) pickProvider(ctx context.Context, tier string) (cli, model, resolvedTier string) {
+	if da.Perf != nil {
+		logger := activity.GetLogger(ctx)
+		p, err := da.Perf.Pick(ctx, tier)
+		if err != nil {
+			logger.Warn("Perf provider selection failed, using config", "tier", tier, "error", err)
+		} else if p != nil && da.isProviderConfigured(p.Agent, p.Model) {
+			logger.Info("Perf-informed provider selected", "agent", p.Agent, "model", p.Model, "tier", p.Tier)
+			return p.Agent, p.Model, p.Tier
+		}
+	}
+	return PickProvider(da.Config, tier)
+}
+
+// isProviderConfigured checks if an (agent, model) pair is enabled in the current config.
+// This prevents perf from selecting stale models after config rotation.
+func (da *DispatchActivities) isProviderConfigured(agent, model string) bool {
+	for _, p := range da.Config.Providers {
+		if !p.Enabled || p.CLI != agent {
+			continue
+		}
+		// If perf recorded no model (legacy data), accept any enabled CLI match.
+		// Otherwise require exact model match.
+		if model == "" || p.Model == model {
+			return true
+		}
+	}
+	return false
 }
 
 // pullMaster fetches and fast-forwards master so agents start from the latest code.
