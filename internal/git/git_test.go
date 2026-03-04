@@ -39,6 +39,13 @@ func initRepo(t *testing.T) string {
 	return dir
 }
 
+func setOriginHeadRef(t *testing.T, repo, branch string) {
+	t.Helper()
+	head := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+	runGit(t, repo, "update-ref", "refs/remotes/origin/"+branch, head)
+	runGit(t, repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/"+branch)
+}
+
 func TestRunDoDChecks_FailsWhenGitDirMissing(t *testing.T) {
 	t.Parallel()
 
@@ -155,3 +162,67 @@ func TestSetupWorktree_ConfiguresHooksBypass(t *testing.T) {
 	}
 }
 
+func TestResolveDefaultBranch_FromOriginHead(t *testing.T) {
+	t.Parallel()
+
+	repo := initRepo(t)
+	setOriginHeadRef(t, repo, "master")
+
+	got, err := resolveDefaultBranch(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("resolveDefaultBranch error: %v", err)
+	}
+	if got != "master" {
+		t.Fatalf("branch = %q, want master", got)
+	}
+}
+
+func TestResolveDefaultBranch_FallbackToMainRef(t *testing.T) {
+	t.Parallel()
+
+	repo := initRepo(t)
+	head := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+	runGit(t, repo, "update-ref", "refs/remotes/origin/main", head)
+
+	got, err := resolveDefaultBranch(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("resolveDefaultBranch error: %v", err)
+	}
+	if got != "main" {
+		t.Fatalf("branch = %q, want main", got)
+	}
+}
+
+func TestCreatePR_UsesResolvedBaseBranch(t *testing.T) {
+	repo := initRepo(t)
+	setOriginHeadRef(t, repo, "master")
+
+	binDir := t.TempDir()
+	argsFile := filepath.Join(binDir, "gh.args")
+	ghPath := filepath.Join(binDir, "gh")
+	script := `#!/bin/sh
+: > "$GH_ARGS_FILE"
+for a in "$@"; do
+  printf '%s\n' "$a" >> "$GH_ARGS_FILE"
+done
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+
+	t.Setenv("GH_ARGS_FILE", argsFile)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := CreatePR(context.Background(), repo, "Test PR"); err != nil {
+		t.Fatalf("CreatePR error: %v", err)
+	}
+
+	argsRaw, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read gh args: %v", err)
+	}
+	args := string(argsRaw)
+	if !strings.Contains(args, "--base\nmaster\n") {
+		t.Fatalf("expected --base master in gh args, got:\n%s", args)
+	}
+}
