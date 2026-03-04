@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -80,6 +81,7 @@ func RegisterSchedule(ctx context.Context, c client.Client, spec ScheduleSpec, l
 // paused or stale schedules would silently block dispatching.
 func ensureScheduleActive(ctx context.Context, schedClient client.ScheduleClient, spec ScheduleSpec, logger *slog.Logger) error {
 	handle := schedClient.GetHandle(ctx, spec.ID)
+	var activationErrs []error
 
 	// Update the schedule with the current configuration (handles tick_interval changes).
 	if err := handle.Update(ctx, client.ScheduleUpdateOptions{
@@ -101,6 +103,7 @@ func ensureScheduleActive(ctx context.Context, schedClient client.ScheduleClient
 		},
 	}); err != nil {
 		logger.Warn("Failed to update schedule, continuing", "id", spec.ID, "error", err)
+		activationErrs = append(activationErrs, fmt.Errorf("update schedule %s: %w", spec.ID, err))
 	} else {
 		logger.Info("Schedule updated", "id", spec.ID, "interval", spec.Interval)
 	}
@@ -110,6 +113,7 @@ func ensureScheduleActive(ctx context.Context, schedClient client.ScheduleClient
 		Note: "unpaused on chum serve startup",
 	}); err != nil {
 		logger.Warn("Failed to unpause schedule", "id", spec.ID, "error", err)
+		activationErrs = append(activationErrs, fmt.Errorf("unpause schedule %s: %w", spec.ID, err))
 	}
 
 	// Trigger an immediate run so ready tasks don't wait for the first tick.
@@ -117,8 +121,13 @@ func ensureScheduleActive(ctx context.Context, schedClient client.ScheduleClient
 		Overlap: enumspb.SCHEDULE_OVERLAP_POLICY_SKIP,
 	}); err != nil {
 		logger.Warn("Failed to trigger immediate schedule run", "id", spec.ID, "error", err)
+		activationErrs = append(activationErrs, fmt.Errorf("trigger schedule %s: %w", spec.ID, err))
 	} else {
 		logger.Info("Triggered immediate schedule run", "id", spec.ID)
+	}
+
+	if len(activationErrs) > 0 {
+		return fmt.Errorf("ensure schedule %s active: %w", spec.ID, errors.Join(activationErrs...))
 	}
 
 	return nil
