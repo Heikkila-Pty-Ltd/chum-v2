@@ -323,6 +323,26 @@ max_review_rounds = -1
 	}
 }
 
+func TestMaxReviewRoundsZeroDefaultsToFive(t *testing.T) {
+	t.Parallel()
+	content := `
+[general]
+max_review_rounds = 0
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chum.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.General.MaxReviewRounds != 5 {
+		t.Fatalf("max_review_rounds = %d, want default 5", cfg.General.MaxReviewRounds)
+	}
+}
+
 func TestTiersExplicitConfig(t *testing.T) {
 	t.Parallel()
 	content := `

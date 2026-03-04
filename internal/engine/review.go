@@ -42,7 +42,15 @@ type ghPRMergeState struct {
 func (a *Activities) RunReviewActivity(ctx context.Context, workDir string, prNumber, round int, execAgent string) (*ReviewDraft, error) {
 	logger := activity.GetLogger(ctx)
 
-	reviewerAgent, reviewerModel, crossProvider := a.resolveReviewer(execAgent)
+	reviewerAgent, reviewerModel, crossProvider, stage := a.resolveReviewerWithStage(execAgent)
+	logger.Debug("Reviewer resolved",
+		"executor", llm.NormalizeCLIName(execAgent),
+		"reviewer", llm.NormalizeCLIName(reviewerAgent),
+		"model", reviewerModel,
+		"cross_provider", crossProvider,
+		"stage", stage,
+	)
+
 	if a.Config != nil && a.Config.General.RequireCrossProviderReview && !crossProvider {
 		return nil, fmt.Errorf("cross-provider reviewer required but unavailable for executor %q", execAgent)
 	}
@@ -276,10 +284,15 @@ type namedProvider struct {
 }
 
 func (a *Activities) resolveReviewer(execAgent string) (reviewerAgent string, reviewerModel string, crossProvider bool) {
+	reviewerAgent, reviewerModel, crossProvider, _ = a.resolveReviewerWithStage(execAgent)
+	return reviewerAgent, reviewerModel, crossProvider
+}
+
+func (a *Activities) resolveReviewerWithStage(execAgent string) (reviewerAgent string, reviewerModel string, crossProvider bool, stage string) {
 	execCLI := llm.NormalizeCLIName(execAgent)
 	fallbackAgent := DefaultReviewer(execCLI)
 	if a.Config == nil || len(a.Config.Providers) == 0 {
-		return fallbackAgent, "", llm.NormalizeCLIName(fallbackAgent) != execCLI
+		return fallbackAgent, "", llm.NormalizeCLIName(fallbackAgent) != execCLI, "no_config_default_reviewer"
 	}
 
 	providers := make([]namedProvider, 0, len(a.Config.Providers))
@@ -307,7 +320,7 @@ func (a *Activities) resolveReviewer(execAgent string) (reviewerAgent string, re
 		}
 		cross := llm.NormalizeCLIName(candidate.CLI) != execCLI
 		if cross {
-			return candidate.CLI, candidate.Model, true
+			return candidate.CLI, candidate.Model, true, "exec_override_enabled_cross"
 		}
 	}
 
@@ -315,13 +328,13 @@ func (a *Activities) resolveReviewer(execAgent string) (reviewerAgent string, re
 	if candidate, ok := findProviderByTarget(providers, fallbackAgent, true); ok {
 		cross := llm.NormalizeCLIName(candidate.CLI) != execCLI
 		if cross {
-			return candidate.CLI, candidate.Model, true
+			return candidate.CLI, candidate.Model, true, "default_mapping_enabled_cross"
 		}
 	}
 
 	// 3) Any enabled cross provider.
 	if candidate, ok := firstCrossProvider(providers, execCLI, true); ok {
-		return candidate.CLI, candidate.Model, true
+		return candidate.CLI, candidate.Model, true, "any_enabled_cross"
 	}
 
 	// 4) Relax enabled requirement for explicitly configured reviewer.
@@ -334,23 +347,23 @@ func (a *Activities) resolveReviewer(execAgent string) (reviewerAgent string, re
 			continue
 		}
 		cross := llm.NormalizeCLIName(candidate.CLI) != execCLI
-		return candidate.CLI, candidate.Model, cross
+		return candidate.CLI, candidate.Model, cross, "exec_override_any"
 	}
 
 	// 5) Relax enabled requirement for default mapping.
 	if candidate, ok := findProviderByTarget(providers, fallbackAgent, false); ok {
 		cross := llm.NormalizeCLIName(candidate.CLI) != execCLI
-		return candidate.CLI, candidate.Model, cross
+		return candidate.CLI, candidate.Model, cross, "default_mapping_any"
 	}
 
 	// 6) Last resort: any configured cross provider, then executor itself.
 	if candidate, ok := firstCrossProvider(providers, execCLI, false); ok {
-		return candidate.CLI, candidate.Model, true
+		return candidate.CLI, candidate.Model, true, "any_configured_cross"
 	}
 	if candidate, ok := findProviderByTarget(providers, execCLI, false); ok {
-		return candidate.CLI, candidate.Model, false
+		return candidate.CLI, candidate.Model, false, "executor_self_fallback"
 	}
-	return fallbackAgent, "", llm.NormalizeCLIName(fallbackAgent) != execCLI
+	return fallbackAgent, "", llm.NormalizeCLIName(fallbackAgent) != execCLI, "default_reviewer_fallback"
 }
 
 func findProviderByTarget(providers []namedProvider, target string, onlyEnabled bool) (namedProvider, bool) {
@@ -359,6 +372,8 @@ func findProviderByTarget(providers []namedProvider, target string, onlyEnabled 
 		return namedProvider{}, false
 	}
 
+	// Name match is intentionally preferred over CLI match so explicit provider-key
+	// references (the map key in [providers.*]) are deterministic.
 	for _, p := range providers {
 		if !strings.EqualFold(p.Name, target) {
 			continue

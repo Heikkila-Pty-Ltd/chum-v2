@@ -143,6 +143,7 @@ func Load(path string) (*Config, error) {
 	if cfg.General.MaxConcurrent == 0 {
 		cfg.General.MaxConcurrent = 2
 	}
+	// max_review_rounds=0 means "unset" and is promoted to the default.
 	if cfg.General.MaxReviewRounds == 0 {
 		cfg.General.MaxReviewRounds = 5
 	}
@@ -232,8 +233,8 @@ func Load(path string) (*Config, error) {
 }
 
 func validate(cfg *Config) error {
-	if cfg.General.MaxReviewRounds <= 0 {
-		return fmt.Errorf("invalid general.max_review_rounds %d: must be > 0", cfg.General.MaxReviewRounds)
+	if cfg.General.MaxReviewRounds < 0 {
+		return fmt.Errorf("invalid general.max_review_rounds %d: must be >= 0 (0 means default)", cfg.General.MaxReviewRounds)
 	}
 
 	switch strings.ToLower(strings.TrimSpace(cfg.BeadsBridge.IngressPolicy)) {

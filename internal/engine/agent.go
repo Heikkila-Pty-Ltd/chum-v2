@@ -252,6 +252,8 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		})
 	}
 
+	// Backward compatibility: workflows that started before this version gate
+	// always used 2 rounds. New workflows can consume config-threaded rounds.
 	maxReviewRounds := 2
 	if reviewRoundsVersion == 1 && req.MaxReviewRounds > 0 {
 		maxReviewRounds = req.MaxReviewRounds

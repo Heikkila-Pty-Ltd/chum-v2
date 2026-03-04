@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
+	"go.temporal.io/sdk/testsuite"
 )
 
 func TestParseReviewSignal_UnwrapsClaudeEnvelope(t *testing.T) {
@@ -160,6 +161,38 @@ func TestBuildReviewPrompt_AdversarialRole(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "If confidence is not high, choose REQUEST_CHANGES.") {
 		t.Fatalf("expected strict request-changes bias, got: %q", prompt)
+	}
+}
+
+func TestRunReviewActivity_RequireCrossProviderReviewEnforced(t *testing.T) {
+	t.Parallel()
+
+	a := &Activities{
+		Config: &config.Config{
+			General: config.General{
+				RequireCrossProviderReview: true,
+			},
+			Providers: map[string]config.Provider{
+				"claude": {
+					CLI:      "claude",
+					Model:    "claude-sonnet",
+					Reviewer: "claude",
+					Enabled:  true,
+				},
+			},
+		},
+	}
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(a.RunReviewActivity)
+
+	_, err := env.ExecuteActivity(a.RunReviewActivity, t.TempDir(), 1, 1, "claude")
+	if err == nil {
+		t.Fatal("expected cross-provider enforcement error, got nil")
+	}
+	if !strings.Contains(err.Error(), "cross-provider reviewer required") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
