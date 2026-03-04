@@ -447,8 +447,8 @@ func TestPickProvider_PerfInformed(t *testing.T) {
 
 	// Record history: gemini succeeds often, claude fails often in "fast" tier.
 	for i := 0; i < 10; i++ {
-		_ = tracker.Record(ctx, "gemini", "flash", "fast", true, 5.0)
-		_ = tracker.Record(ctx, "claude", "haiku", "fast", false, 10.0)
+		_ = tracker.Record(ctx, "gemini", "flash", "fast", true, 5.0, 0, 0, 0)
+		_ = tracker.Record(ctx, "claude", "haiku", "fast", false, 10.0, 0, 0, 0)
 	}
 
 	// Verify directly via perf.Pick (avoids needing Temporal activity context).

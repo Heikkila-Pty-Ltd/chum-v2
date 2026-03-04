@@ -81,6 +81,10 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	}
 	defer cleanup()
 
+	// execResult is declared here so closeAndTrace can capture token telemetry.
+	// It's populated later by ExecuteActivity; pre-close calls see zero values.
+	var execResult ExecResult
+
 	// closeAndTrace wraps closeAndNotify and records an execution trace.
 	closeAndTrace := func(detail CloseDetail) error {
 		cerr := closeAndNotify(ctx, shortOpts, req.TaskID, detail)
@@ -88,14 +92,17 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			traceCtx := workflow.WithActivityOptions(ctx, shortOpts)
 			info := workflow.GetInfo(ctx)
 			_ = workflow.ExecuteActivity(traceCtx, a.RecordTraceActivity, TraceOutcome{
-				TaskID:    req.TaskID,
-				SessionID: info.WorkflowExecution.RunID,
-				Agent:     req.Agent,
-				Model:     req.Model,
-				Tier:      req.Tier,
-				Reason:    string(detail.Reason),
-				SubReason: detail.SubReason,
-				Duration:  workflow.Now(ctx).Sub(startTime),
+				TaskID:       req.TaskID,
+				SessionID:    info.WorkflowExecution.RunID,
+				Agent:        req.Agent,
+				Model:        req.Model,
+				Tier:         req.Tier,
+				Reason:       string(detail.Reason),
+				SubReason:    detail.SubReason,
+				Duration:     workflow.Now(ctx).Sub(startTime),
+				InputTokens:  execResult.InputTokens,
+				OutputTokens: execResult.OutputTokens,
+				CostUSD:      execResult.CostUSD,
 			}).Get(ctx, nil)
 		}
 		return cerr
@@ -163,7 +170,6 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 
 	// === EXECUTE ===
 	execCtx := workflow.WithActivityOptions(ctx, execOpts)
-	var execResult ExecResult
 	if err := workflow.ExecuteActivity(execCtx, a.ExecuteActivity, req).Get(ctx, &execResult); err != nil {
 		logger.Error("Execute failed", "error", err)
 		if cerr := closeAndTrace(CloseDetail{

@@ -28,8 +28,11 @@ type TaskRequest struct {
 
 // ExecResult is the output of the execute activity.
 type ExecResult struct {
-	ExitCode int    `json:"exit_code"`
-	Output   string `json:"output"`
+	ExitCode     int     `json:"exit_code"`
+	Output       string  `json:"output"`
+	InputTokens  int     `json:"input_tokens,omitempty"`
+	OutputTokens int     `json:"output_tokens,omitempty"`
+	CostUSD      float64 `json:"cost_usd,omitempty"`
 }
 
 // PRInfo captures pull request metadata needed by the workflow.
