@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CHUM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="chrome">
+    <header id="masthead">
+      <div class="masthead-left">
+        <h1 class="wordmark">CHUM<span class="wordmark-version">v2</span></h1>
+        <nav id="main-nav" role="navigation">
+          <a href="#/overview" data-view="overview" class="nav-link active">
+            <span class="nav-key">1</span> Overview
+          </a>
+          <a href="#/tree" data-view="tree" class="nav-link">
+            <span class="nav-key">2</span> Tree
+          </a>
+          <a href="#/dag" data-view="dag" class="nav-link">
+            <span class="nav-key">3</span> Graph
+          </a>
+          <a href="#/tasks" data-view="tasks" class="nav-link">
+            <span class="nav-key">4</span> Tasks
+          </a>
+          <a href="#/timeline" data-view="timeline" class="nav-link">
+            <span class="nav-key">5</span> Timeline
+          </a>
+          <a href="#/stats" data-view="stats" class="nav-link">
+            <span class="nav-key">6</span> Stats
+          </a>
+        </nav>
+      </div>
+      <div class="masthead-right">
+        <div id="project-selector"></div>
+        <div id="live-indicator" class="indicator-idle" title="Auto-refresh paused">
+          <span class="indicator-dot"></span>
+          <span class="indicator-label">idle</span>
+        </div>
+      </div>
+    </header>
+
+    <main id="viewport"></main>
+  </div>
+
+  <div id="detail-panel" class="panel-closed" aria-hidden="true">
+    <button id="panel-close" aria-label="Close panel">&times;</button>
+    <div id="panel-content"></div>
+  </div>
+
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@dagrejs/dagre@1.1.4/dist/dagre.min.js"></script>
+  <script src="/app.js"></script>
+  <script src="/views/overview.js"></script>
+  <script src="/views/tree.js"></script>
+  <script src="/views/dag.js"></script>
+  <script src="/views/tasks.js"></script>
+  <script src="/views/timeline.js"></script>
+  <script src="/views/stats.js"></script>
+  <script>App.init();</script>
+</body>
+</html>

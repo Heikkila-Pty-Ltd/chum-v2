@@ -5,13 +5,21 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
 )
 
 // API exposes the Jarvis integration as HTTP endpoints.
 // Mount on a local-only port — no auth needed for localhost.
 type API struct {
 	Engine *Engine
+	DAG    *dag.DAG
+	Store  *store.Store  // trace/lesson/safety store; nil disables trace endpoints
+	LLM    llm.Runner    // LLM runner for suggestions; nil disables suggest endpoint
 	Logger *slog.Logger
+	WebDir string // directory for static dashboard files; empty disables serving
 }
 
 // Handler returns an http.Handler with all Jarvis API routes.
@@ -21,6 +29,35 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/jarvis/status/{taskID}", a.handleStatus)
 	mux.HandleFunc("GET /api/jarvis/pending/{project}", a.handlePending)
 	mux.HandleFunc("GET /api/jarvis/health", a.handleHealth)
+
+	// Dashboard API endpoints (read-only).
+	if a.DAG != nil {
+		mux.HandleFunc("GET /api/dashboard/projects", a.handleDashboardProjects)
+		mux.HandleFunc("GET /api/dashboard/graph/{project}", a.handleDashboardGraph)
+		mux.HandleFunc("GET /api/dashboard/tasks/{project}", a.handleDashboardTasks)
+		mux.HandleFunc("GET /api/dashboard/task/{taskID}", a.handleDashboardTask)
+		mux.HandleFunc("GET /api/dashboard/stats/{project}", a.handleDashboardStats)
+		mux.HandleFunc("GET /api/dashboard/timeline/{project}", a.handleDashboardTimeline)
+		mux.HandleFunc("GET /api/dashboard/tree/{project}", a.handleDashboardTree)
+		mux.HandleFunc("GET /api/dashboard/overview/{project}", a.handleDashboardOverview)
+		mux.HandleFunc("GET /api/dashboard/overview-grouped/{project}", a.handleDashboardOverviewGrouped)
+		mux.HandleFunc("POST /api/dashboard/task/{taskID}/pause", a.handleDashboardTaskPause)
+		mux.HandleFunc("POST /api/dashboard/task/{taskID}/kill", a.handleDashboardTaskKill)
+		mux.HandleFunc("POST /api/dashboard/task/{taskID}/decompose", a.handleDashboardTaskDecompose)
+	}
+	if a.Store != nil {
+		mux.HandleFunc("GET /api/dashboard/traces/{taskID}", a.handleDashboardTraces)
+		mux.HandleFunc("GET /api/dashboard/lessons/{project}", a.handleDashboardLessons)
+	}
+	if a.LLM != nil {
+		mux.HandleFunc("GET /api/dashboard/suggest/{taskID}", a.handleDashboardSuggest)
+	}
+
+	// Static file serving for dashboard UI.
+	if a.WebDir != "" {
+		mux.Handle("GET /", http.FileServer(http.Dir(a.WebDir)))
+	}
+
 	return mux
 }
 
