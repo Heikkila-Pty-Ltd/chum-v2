@@ -196,6 +196,43 @@ func TestRunReviewActivity_RequireCrossProviderReviewEnforced(t *testing.T) {
 	}
 }
 
+func TestRunReviewActivity_RequireCrossProviderReviewRejectsDisabledReviewer(t *testing.T) {
+	t.Parallel()
+
+	a := &Activities{
+		Config: &config.Config{
+			General: config.General{
+				RequireCrossProviderReview: true,
+			},
+			Providers: map[string]config.Provider{
+				"claude": {
+					CLI:      "claude",
+					Model:    "claude-sonnet",
+					Reviewer: "gemini",
+					Enabled:  true,
+				},
+				"gemini": {
+					CLI:     "gemini",
+					Model:   "gemini-2.5-flash",
+					Enabled: false,
+				},
+			},
+		},
+	}
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(a.RunReviewActivity)
+
+	_, err := env.ExecuteActivity(a.RunReviewActivity, t.TempDir(), 1, 1, "claude")
+	if err == nil {
+		t.Fatal("expected strict cross-provider enforcement error, got nil")
+	}
+	if !strings.Contains(err.Error(), "no enabled cross-provider reviewer") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParseRepoSlug_SSH(t *testing.T) {
 	t.Parallel()
 
