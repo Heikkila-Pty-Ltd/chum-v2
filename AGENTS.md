@@ -12,6 +12,41 @@ bd close <id>         # Complete work
 bd sync               # Sync with git
 ```
 
+## Runtime Operations (Drain + Upgrade)
+
+Canonical CHUM runtime:
+
+- Service: `chum-v2.service` (system-level unit)
+- Temporal namespace: `chum-v2`
+- Dispatcher schedule: `chum-v2-dispatcher`
+- User-level `chum.service` is legacy and must stay disabled/masked
+
+Safe restart-to-upgrade flow:
+
+```bash
+# 1) Stop new dispatch and drain running agent/review workflows
+./chum shutdown --timeout 45m --poll 15s --reason "upgrade" --config /home/ubuntu/projects/chum/chum.toml
+
+# 2) Build/test upgrade
+go test ./cmd/chum ./internal/config ./internal/dag ./internal/engine -count=1
+go build -o chum ./cmd/chum
+
+# 3) Restart canonical service
+sudo systemctl restart chum-v2.service
+
+# 4) Resume dispatch
+temporal schedule toggle -n chum-v2 -s chum-v2-dispatcher --unpause --reason "upgrade complete"
+temporal schedule trigger -n chum-v2 -s chum-v2-dispatcher
+```
+
+Fast pause (no drain wait):
+
+```bash
+./chum shutdown --no-wait --reason "manual pause" --config /home/ubuntu/projects/chum/chum.toml
+```
+
+See also: `docs/OPERATIONS.md`.
+
 ## Landing the Plane (Session Completion)
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.

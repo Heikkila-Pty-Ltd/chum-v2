@@ -31,7 +31,8 @@ func (r SyncResult) String() string {
 
 // SyncToDAG reads issues from beads and upserts them into the DAG.
 // Only imports issues with status "open" or "ready" — completed/closed issues
-// are ignored. This is a one-way sync: beads → DAG.
+// are ignored. Existing tasks that have entered the execution pipeline
+// (status other than open/ready) are never overwritten by beads.
 func SyncToDAG(ctx context.Context, client IssueLister, d *dag.DAG, project string, logger *slog.Logger) (SyncResult, error) {
 	issues, err := client.List(ctx, 0) // all issues
 	if err != nil {
@@ -49,7 +50,14 @@ func SyncToDAG(ctx context.Context, client IssueLister, d *dag.DAG, project stri
 		// Check if task already exists in the DAG
 		existing, err := d.GetTask(ctx, issue.ID)
 		if err == nil {
-			// Task exists — update if beads version is different
+			// Guard: never overwrite tasks that have entered the execution pipeline.
+			// Only open/ready tasks should be updated from beads.
+			if existing.Status != string(types.StatusOpen) && existing.Status != string(types.StatusReady) {
+				result.Skipped++
+				continue
+			}
+
+			// Task exists and is still pre-execution — update if beads version is different
 			if existing.Title == issue.Title &&
 				existing.Description == issue.Description &&
 				existing.Acceptance == issue.AcceptanceCriteria {

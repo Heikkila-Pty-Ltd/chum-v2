@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -9,14 +10,20 @@ import (
 	"testing"
 	"time"
 
+	"go.temporal.io/api/enums/v1"
+	workflowpb "go.temporal.io/api/workflow/v1"
+	workflowservice "go.temporal.io/api/workflowservice/v1"
+
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/perf"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 type mockTaskStore struct {
-	tasks map[string][]dag.Task
+	tasks         map[string][]dag.Task
+	statusUpdates map[string]string // taskID -> new status
 }
 
 func (m *mockTaskStore) GetReadyNodes(ctx context.Context, project string) ([]dag.Task, error) {
@@ -36,6 +43,9 @@ func (m *mockTaskStore) UpdateTask(ctx context.Context, id string, fields map[st
 }
 
 func (m *mockTaskStore) UpdateTaskStatus(ctx context.Context, id, status string) error {
+	if m.statusUpdates != nil {
+		m.statusUpdates[id] = status
+	}
 	return nil
 }
 
@@ -44,7 +54,16 @@ func (m *mockTaskStore) CloseTask(ctx context.Context, id, status string) error 
 }
 
 func (m *mockTaskStore) ListTasks(ctx context.Context, project string, statuses ...string) ([]dag.Task, error) {
-	return nil, nil
+	var result []dag.Task
+	for _, t := range m.tasks[project] {
+		for _, s := range statuses {
+			if t.Status == s {
+				result = append(result, t)
+				break
+			}
+		}
+	}
+	return result, nil
 }
 
 func (m *mockTaskStore) CreateSubtasksAtomic(ctx context.Context, parentID string, tasks []dag.Task) ([]string, error) {
@@ -91,15 +110,34 @@ func (m *mockTaskStore) GetAllTargetsForStatuses(ctx context.Context, project st
 	return nil, nil
 }
 
+// mockDescriber implements WorkflowDescriber for testing zombie recovery.
+type mockDescriber struct {
+	// responses maps workflowID to (response, error) pairs.
+	responses map[string]describeResult
+}
+
+type describeResult struct {
+	resp *workflowservice.DescribeWorkflowExecutionResponse
+	err  error
+}
+
+func (m *mockDescriber) DescribeWorkflowExecution(ctx context.Context, workflowID, runID string) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
+	r, ok := m.responses[workflowID]
+	if !ok {
+		return nil, fmt.Errorf("workflow %q not found", workflowID)
+	}
+	return r.resp, r.err
+}
+
 func TestScanCandidatesActivity(t *testing.T) {
 	tests := []struct {
-		name                    string
-		config                  *config.Config
-		tasks                   map[string][]dag.Task
-		expectedCount           int
-		expectedProjects        []string
-		checkPrompts            bool
-		checkNoAcceptance       bool
+		name              string
+		config            *config.Config
+		tasks             map[string][]dag.Task
+		expectedCount     int
+		expectedProjects  []string
+		checkPrompts      bool
+		checkNoAcceptance bool
 	}{
 		{
 			name: "empty - no tasks",
@@ -451,5 +489,155 @@ func TestPickProvider_FallbackToConfig(t *testing.T) {
 	}
 	if tier != "balanced" {
 		t.Errorf("expected tier balanced, got %q", tier)
+	}
+}
+
+func TestScanZombieRunningActivity_WorkflowNotFound(t *testing.T) {
+	t.Parallel()
+
+	mockStore := &mockTaskStore{
+		tasks: map[string][]dag.Task{
+			"proj": {
+				{ID: "zombie-1", Status: string(types.StatusRunning)},
+				{ID: "zombie-2", Status: string(types.StatusRunning)},
+			},
+		},
+		statusUpdates: make(map[string]string),
+	}
+
+	// All workflows not found (dead).
+	describer := &mockDescriber{responses: map[string]describeResult{}}
+
+	da := &DispatchActivities{
+		DAG: mockStore,
+		Config: &config.Config{
+			Projects: map[string]config.Project{
+				"proj": {Enabled: true},
+			},
+		},
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Temporal: describer,
+	}
+
+	recovered, err := da.ScanZombieRunningActivity(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recovered != 2 {
+		t.Errorf("recovered = %d, want 2", recovered)
+	}
+	for _, id := range []string{"zombie-1", "zombie-2"} {
+		if mockStore.statusUpdates[id] != string(types.StatusReady) {
+			t.Errorf("task %s status = %q, want %q", id, mockStore.statusUpdates[id], types.StatusReady)
+		}
+	}
+}
+
+func TestScanZombieRunningActivity_WorkflowTerminal(t *testing.T) {
+	t.Parallel()
+
+	mockStore := &mockTaskStore{
+		tasks: map[string][]dag.Task{
+			"proj": {
+				{ID: "terminal-1", Status: string(types.StatusRunning)},
+			},
+		},
+		statusUpdates: make(map[string]string),
+	}
+
+	describer := &mockDescriber{responses: map[string]describeResult{
+		"chum-agent-terminal-1": {
+			resp: &workflowservice.DescribeWorkflowExecutionResponse{
+				WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{
+					Status: enums.WORKFLOW_EXECUTION_STATUS_FAILED,
+				},
+			},
+		},
+	}}
+
+	da := &DispatchActivities{
+		DAG: mockStore,
+		Config: &config.Config{
+			Projects: map[string]config.Project{
+				"proj": {Enabled: true},
+			},
+		},
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Temporal: describer,
+	}
+
+	recovered, err := da.ScanZombieRunningActivity(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recovered != 1 {
+		t.Errorf("recovered = %d, want 1", recovered)
+	}
+	if mockStore.statusUpdates["terminal-1"] != string(types.StatusReady) {
+		t.Errorf("task status = %q, want %q", mockStore.statusUpdates["terminal-1"], types.StatusReady)
+	}
+}
+
+func TestScanZombieRunningActivity_WorkflowStillRunning(t *testing.T) {
+	t.Parallel()
+
+	mockStore := &mockTaskStore{
+		tasks: map[string][]dag.Task{
+			"proj": {
+				{ID: "alive-1", Status: string(types.StatusRunning)},
+			},
+		},
+		statusUpdates: make(map[string]string),
+	}
+
+	describer := &mockDescriber{responses: map[string]describeResult{
+		"chum-agent-alive-1": {
+			resp: &workflowservice.DescribeWorkflowExecutionResponse{
+				WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{
+					Status: enums.WORKFLOW_EXECUTION_STATUS_RUNNING,
+				},
+			},
+		},
+	}}
+
+	da := &DispatchActivities{
+		DAG: mockStore,
+		Config: &config.Config{
+			Projects: map[string]config.Project{
+				"proj": {Enabled: true},
+			},
+		},
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Temporal: describer,
+	}
+
+	recovered, err := da.ScanZombieRunningActivity(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recovered != 0 {
+		t.Errorf("recovered = %d, want 0 (workflow still running)", recovered)
+	}
+	if _, ok := mockStore.statusUpdates["alive-1"]; ok {
+		t.Error("should not have updated status for still-running workflow")
+	}
+}
+
+func TestScanZombieRunningActivity_NilTemporal(t *testing.T) {
+	t.Parallel()
+
+	da := &DispatchActivities{
+		DAG:      &mockTaskStore{},
+		Config:   &config.Config{},
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Temporal: nil, // no Temporal client
+	}
+
+	recovered, err := da.ScanZombieRunningActivity(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recovered != 0 {
+		t.Errorf("recovered = %d, want 0 (nil Temporal)", recovered)
 	}
 }

@@ -258,3 +258,94 @@ func TestSyncResult_String(t *testing.T) {
 		t.Errorf("String() = %q, want %q", got, want)
 	}
 }
+
+func TestSyncToDAG_SkipsNonOpenExistingTask(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	// Pre-create tasks in various non-open/ready states
+	for _, tc := range []struct {
+		id     string
+		status string
+	}{
+		{"running-1", "running"},
+		{"dod-1", "dod_failed"},
+		{"decomposed-1", "decomposed"},
+		{"failed-1", "failed"},
+	} {
+		_, err := d.CreateTask(ctx, dag.Task{
+			ID: tc.id, Title: "Original", Description: "Original desc",
+			Status: tc.status, Project: "proj",
+		})
+		if err != nil {
+			t.Fatalf("CreateTask %s: %v", tc.id, err)
+		}
+	}
+
+	// Beads tries to update all of them with new content
+	client := &stubLister{issues: []beads.Issue{
+		{ID: "running-1", Title: "New Title", Description: "New desc", Status: "open"},
+		{ID: "dod-1", Title: "New Title", Description: "New desc", Status: "open"},
+		{ID: "decomposed-1", Title: "New Title", Description: "New desc", Status: "open"},
+		{ID: "failed-1", Title: "New Title", Description: "New desc", Status: "open"},
+	}}
+
+	result, err := SyncToDAG(ctx, client, d, "proj", testLogger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// All should be skipped — none should be updated
+	if result.Skipped != 4 {
+		t.Errorf("Skipped = %d, want 4", result.Skipped)
+	}
+	if result.Updated != 0 {
+		t.Errorf("Updated = %d, want 0", result.Updated)
+	}
+
+	// Verify titles unchanged
+	for _, id := range []string{"running-1", "dod-1", "decomposed-1", "failed-1"} {
+		task, err := d.GetTask(ctx, id)
+		if err != nil {
+			t.Fatalf("GetTask %s: %v", id, err)
+		}
+		if task.Title != "Original" {
+			t.Errorf("task %s Title = %q, want %q (should not have been overwritten)", id, task.Title, "Original")
+		}
+	}
+}
+
+func TestSyncToDAG_UpdatesOpenExistingTask(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	// Pre-create an open task — this SHOULD be updated
+	_, err := d.CreateTask(ctx, dag.Task{
+		ID: "open-1", Title: "Old", Description: "Old desc",
+		Status: "open", Project: "proj",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	client := &stubLister{issues: []beads.Issue{
+		{ID: "open-1", Title: "New", Description: "New desc", Status: "open"},
+	}}
+
+	result, err := SyncToDAG(ctx, client, d, "proj", testLogger)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Updated != 1 {
+		t.Errorf("Updated = %d, want 1", result.Updated)
+	}
+
+	task, err := d.GetTask(ctx, "open-1")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if task.Title != "New" {
+		t.Errorf("Title = %q, want %q", task.Title, "New")
+	}
+}

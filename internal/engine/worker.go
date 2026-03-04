@@ -60,7 +60,7 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	beadsClients := buildBeadsClients(cfg, logger)
 	chatSender := buildChatSender(cfg, logger)
 
-	registerEngineWorkflows(w, d, cfg, logger, parser, beadsClients, chatSender, traceStore, tracker)
+	registerEngineWorkflows(w, d, cfg, logger, parser, beadsClients, chatSender, traceStore, tracker, c)
 	registerPlanningWorkflows(w, d, cfg, logger, parser, beadsClients, chatSender)
 	registerHealthWorkflows(w, logger, chatSender)
 
@@ -118,7 +118,7 @@ func buildChatSender(cfg *config.Config, logger *slog.Logger) notify.ChatSender 
 func registerEngineWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Config,
 	logger *slog.Logger, parser *astpkg.Parser,
 	beadsClients map[string]beads.Store, chatSender notify.ChatSender,
-	traceStore store.TraceStore, tracker *perf.Tracker) {
+	traceStore store.TraceStore, tracker *perf.Tracker, temporalClient client.Client) {
 
 	w.RegisterWorkflow(AgentWorkflow)
 	w.RegisterWorkflow(DispatcherWorkflow)
@@ -158,10 +158,11 @@ func registerEngineWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Confi
 	w.RegisterActivity(a.RecordTraceActivity)
 
 	da := &DispatchActivities{
-		DAG:    d,
-		Config: cfg,
-		Logger: logger,
-		Perf:   tracker,
+		DAG:      d,
+		Config:   cfg,
+		Logger:   logger,
+		Perf:     tracker,
+		Temporal: temporalClient,
 	}
 	w.RegisterActivity(da)
 }

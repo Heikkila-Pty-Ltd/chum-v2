@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
@@ -19,6 +20,13 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/perf"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
+
+// WorkflowDescriber is the subset of the Temporal client needed to check
+// whether a workflow execution is still alive. Defined as an interface so
+// tests can provide a mock without a real Temporal server.
+type WorkflowDescriber interface {
+	DescribeWorkflowExecution(ctx context.Context, workflowID, runID string) (*workflowservice.DescribeWorkflowExecutionResponse, error)
+}
 
 // DispatcherWorkflow scans the DAG for ready tasks and spawns AgentWorkflow
 // children. Designed to run on a Temporal Schedule (every tick_interval).
@@ -34,6 +42,16 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 
 	var da *DispatchActivities
 	scanCtx := workflow.WithActivityOptions(ctx, scanOpts)
+
+	// === ZOMBIE RUNNING TASK RECOVERY ===
+	// Reset tasks stuck in "running" whose agent workflow is dead.
+	// Non-fatal — recovered tasks become candidates in the same tick.
+	var recovered int
+	if err := workflow.ExecuteActivity(scanCtx, da.ScanZombieRunningActivity).Get(ctx, &recovered); err != nil {
+		logger.Error("Zombie running scan failed", "error", err)
+	} else if recovered > 0 {
+		logger.Info("Recovered zombie running tasks", "count", recovered)
+	}
 
 	var candidates []DispatchCandidate
 	if err := workflow.ExecuteActivity(scanCtx, da.ScanCandidatesActivity).Get(ctx, &candidates); err != nil {
@@ -129,10 +147,11 @@ type DispatchCandidate struct {
 
 // DispatchActivities holds dependencies for dispatch-related activities.
 type DispatchActivities struct {
-	DAG    dag.TaskStore
-	Config *config.Config
-	Logger *slog.Logger
-	Perf   *perf.Tracker // performance-based provider selection (nil = config-only)
+	DAG      dag.TaskStore
+	Config   *config.Config
+	Logger   *slog.Logger
+	Perf     *perf.Tracker     // performance-based provider selection (nil = config-only)
+	Temporal WorkflowDescriber // for checking workflow liveness (nil = skip zombie scan)
 }
 
 // MarkTaskRunningActivity marks a task as "running" in the DAG.
@@ -252,6 +271,65 @@ func pullMaster(ctx context.Context, workDir string, logger *slog.Logger) {
 	} else {
 		logger.Info("Pulled latest from origin", "WorkDir", workDir)
 	}
+}
+
+// ScanZombieRunningActivity finds tasks stuck in "running" whose agent workflow
+// is no longer alive in Temporal. These zombies are reset to "ready" so the
+// dispatcher can re-dispatch them on the next tick.
+func (da *DispatchActivities) ScanZombieRunningActivity(ctx context.Context) (int, error) {
+	if da.Temporal == nil {
+		return 0, nil
+	}
+	logger := da.Logger
+	var recovered int
+
+	for projectName, project := range da.Config.Projects {
+		if !project.Enabled {
+			continue
+		}
+
+		tasks, err := da.DAG.ListTasks(ctx, projectName, string(types.StatusRunning))
+		if err != nil {
+			logger.Error("Failed to list running tasks", "project", projectName, "error", err)
+			continue
+		}
+
+		for _, t := range tasks {
+			wfID := fmt.Sprintf("chum-agent-%s", t.ID)
+			desc, err := da.Temporal.DescribeWorkflowExecution(ctx, wfID, "")
+			if err != nil {
+				// Workflow not found — it's dead.
+				logger.Info("Zombie detected (workflow not found), resetting to ready",
+					"task", t.ID, "project", projectName)
+				if err := da.DAG.UpdateTaskStatus(ctx, t.ID, string(types.StatusReady)); err != nil {
+					logger.Error("Failed to reset zombie task", "task", t.ID, "error", err)
+				} else {
+					recovered++
+				}
+				continue
+			}
+
+			st := desc.WorkflowExecutionInfo.Status
+			switch st {
+			case enums.WORKFLOW_EXECUTION_STATUS_COMPLETED,
+				enums.WORKFLOW_EXECUTION_STATUS_FAILED,
+				enums.WORKFLOW_EXECUTION_STATUS_TERMINATED,
+				enums.WORKFLOW_EXECUTION_STATUS_CANCELED,
+				enums.WORKFLOW_EXECUTION_STATUS_TIMED_OUT:
+				logger.Info("Zombie detected (workflow terminal), resetting to ready",
+					"task", t.ID, "project", projectName, "workflowStatus", st.String())
+				if err := da.DAG.UpdateTaskStatus(ctx, t.ID, string(types.StatusReady)); err != nil {
+					logger.Error("Failed to reset zombie task", "task", t.ID, "error", err)
+				} else {
+					recovered++
+				}
+			default:
+				// Workflow still running — not a zombie.
+			}
+		}
+	}
+
+	return recovered, nil
 }
 
 // ScanOrphanedReviewsActivity finds tasks in "needs_review" whose error_log

@@ -75,6 +75,7 @@ type CloseReason string
 const (
 	CloseCompleted   CloseReason = "completed"
 	CloseDoDFailed   CloseReason = "dod_failed"
+	CloseFailed      CloseReason = "failed"
 	CloseNeedsReview CloseReason = "needs_review"
 	CloseDecomposed  CloseReason = "decomposed"
 )

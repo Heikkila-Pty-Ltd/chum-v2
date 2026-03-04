@@ -232,6 +232,18 @@ func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID str
 		}); err != nil {
 			logger.Warn("Beads decomposed writeback failed", "taskID", taskID, "error", err)
 		}
+	case CloseDoDFailed:
+		if err := bc.Update(ctx, taskID, map[string]string{
+			"status": string(types.StatusDoDFailed),
+		}); err != nil {
+			logger.Warn("Beads dod_failed writeback failed", "taskID", taskID, "error", err)
+		}
+	case CloseFailed:
+		if err := bc.Update(ctx, taskID, map[string]string{
+			"status": string(types.StatusFailed),
+		}); err != nil {
+			logger.Warn("Beads failed writeback failed", "taskID", taskID, "error", err)
+		}
 	}
 	return nil
 }
