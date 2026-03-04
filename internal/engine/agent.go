@@ -191,14 +191,18 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	}
 
 	if !dodResult.Passed {
-		logger.Warn("DoD FAILED — closing task", "Failures", dodResult.Failures)
+		failureMsg := BuildClassifierInput(dodResult)
+		category, summary := ClassifyFailure(failureMsg)
+		logger.Warn("DoD FAILED", "Category", category, "Summary", summary, "Failures", dodResult.Failures)
 		if cerr := closeAndTrace(CloseDetail{
 			Reason:    CloseDoDFailed,
-			SubReason: "dod_failed",
+			SubReason: string(category),
+			Category:  string(category),
+			Summary:   summary,
 		}); cerr != nil {
-			return fmt.Errorf("DoD failed: %v (close/notify failed: %v)", dodResult.Failures, cerr)
+			return fmt.Errorf("DoD failed (%s): %v (close/notify failed: %v)", category, dodResult.Failures, cerr)
 		}
-		return fmt.Errorf("DoD failed: %v", dodResult.Failures)
+		return fmt.Errorf("DoD failed (%s): %v", category, dodResult.Failures)
 	}
 
 	// === Push + PR ===
@@ -365,9 +369,14 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 				})
 			}
 			if !dodResult.Passed {
+				failureMsg2 := BuildClassifierInput(dodResult)
+				cat2, sum2 := ClassifyFailure(failureMsg2)
+				logger.Warn("DoD FAILED after review changes", "Category", cat2, "Summary", sum2)
 				return closeAndTrace(CloseDetail{
 					Reason:    CloseDoDFailed,
-					SubReason: "dod_failed",
+					SubReason: string(cat2),
+					Category:  string(cat2),
+					Summary:   sum2,
 					PRNumber:  prInfo.Number,
 					ReviewURL: state.ReviewURL,
 				})
@@ -452,8 +461,6 @@ func truncateForTitle(prompt string, maxLen int) string {
 	}
 	return "chum: automated change"
 }
-
-
 
 func augmentPromptWithReviewFeedback(prompt string, round int, feedback string) string {
 	feedback = strings.TrimSpace(feedback)

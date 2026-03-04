@@ -83,6 +83,8 @@ const (
 type CloseDetail struct {
 	Reason    CloseReason `json:"reason"`
 	SubReason string      `json:"sub_reason"`
+	Category  string      `json:"category,omitempty"` // failure classification (e.g. "test_failure", "infra_failure")
+	Summary   string      `json:"summary,omitempty"`  // one-line failure summary
 	ReviewURL string      `json:"review_url"`
 	PRNumber  int         `json:"pr_number"`
 }

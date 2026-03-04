@@ -340,8 +340,14 @@ func rewardForReason(reason CloseReason) float64 {
 // feed UCT provider ranking.
 func isPerfRelevant(subReason string) bool {
 	switch subReason {
+	// Direct execution outcomes.
 	case "completed", "exec_failed", "dod_failed", "dod_error",
 		"decomposed", "decompose_failed":
+		return true
+	// DoD failure categories from ClassifyFailure (all reflect code quality).
+	case "test_failure", "compile_error", "lint_error", "lint_config_error",
+		"timeout", "activity_timeout", "scope_drift", "execution_error",
+		"dod_check_failed":
 		return true
 	default:
 		return false

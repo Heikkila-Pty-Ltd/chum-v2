@@ -241,7 +241,12 @@ func TestRecordTraceActivity_DecomposedIsPerfSuccess(t *testing.T) {
 func TestIsPerfRelevant(t *testing.T) {
 	t.Parallel()
 
-	relevant := []string{"completed", "exec_failed", "dod_failed", "dod_error", "decomposed", "decompose_failed"}
+	relevant := []string{
+		"completed", "exec_failed", "dod_failed", "dod_error", "decomposed", "decompose_failed",
+		// DoD classifier categories.
+		"test_failure", "compile_error", "lint_error", "lint_config_error",
+		"timeout", "activity_timeout", "scope_drift", "execution_error", "dod_check_failed",
+	}
 	for _, r := range relevant {
 		if !isPerfRelevant(r) {
 			t.Errorf("isPerfRelevant(%q) = false, want true", r)
@@ -250,7 +255,8 @@ func TestIsPerfRelevant(t *testing.T) {
 
 	irrelevant := []string{"worktree_failed", "push_failed", "pr_create_failed", "reviewer_error",
 		"reviewer_modified_code", "review_submit_failed", "merge_failed", "merge_blocked",
-		"no_reviewer_activity", "max_rounds_reached", "subtask_creation_failed"}
+		"no_reviewer_activity", "max_rounds_reached", "subtask_creation_failed",
+		"merge_conflict", "infrastructure_failure"}
 	for _, r := range irrelevant {
 		if isPerfRelevant(r) {
 			t.Errorf("isPerfRelevant(%q) = true, want false", r)
