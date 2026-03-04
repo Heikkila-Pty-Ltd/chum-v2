@@ -85,13 +85,14 @@ func TestDispatcherWorkflow_DispatchesCandidateWithExpectedRequest(t *testing.T)
 	env.OnActivity(da.RecordDispatchStartActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	env.OnActivity(da.ScanCandidatesActivity, mock.Anything).Return([]DispatchCandidate{
 		{
-			TaskID:  "task-1",
-			Project: "p",
-			Prompt:  "do it",
-			WorkDir: "/tmp/p",
-			Agent:   "claude",
-			Model:   "claude-sonnet",
-			Tier:    "fast",
+			TaskID:          "task-1",
+			Project:         "p",
+			Prompt:          "do it",
+			WorkDir:         "/tmp/p",
+			Agent:           "claude",
+			Model:           "claude-sonnet",
+			Tier:            "fast",
+			MaxReviewRounds: 6,
 		},
 	}, nil)
 	env.OnActivity(da.MarkTaskRunningActivity, mock.Anything, "task-1").Return(nil)
@@ -120,6 +121,9 @@ func TestDispatcherWorkflow_DispatchesCandidateWithExpectedRequest(t *testing.T)
 		}
 		if req.Tier != "fast" {
 			t.Fatalf("Tier = %q, want fast", req.Tier)
+		}
+		if req.MaxReviewRounds != 6 {
+			t.Fatalf("MaxReviewRounds = %d, want 6", req.MaxReviewRounds)
 		}
 	}).Return(nil)
 

@@ -24,6 +24,7 @@ func ReviewWorkflow(ctx workflow.Context, req ReviewRequest) error {
 	logger.Info("ReviewWorkflow started", "TaskID", req.TaskID, "PR", req.PRNumber)
 
 	var a *Activities
+	reviewRoundsVersion := workflow.GetVersion(ctx, "review-configurable-review-rounds", workflow.DefaultVersion, 1)
 
 	// --- Activity options ---
 	shortTimeout := req.ShortTimeout
@@ -85,7 +86,10 @@ func ReviewWorkflow(ctx workflow.Context, req ReviewRequest) error {
 	}
 
 	// === REVIEW LOOP (identical to AgentWorkflow) ===
-	const maxReviewRounds = 2
+	maxReviewRounds := 2
+	if reviewRoundsVersion == 1 && req.MaxReviewRounds > 0 {
+		maxReviewRounds = req.MaxReviewRounds
+	}
 	reviewCtx := workflow.WithActivityOptions(ctx, reviewOpts)
 
 	for round := 1; round <= maxReviewRounds; round++ {

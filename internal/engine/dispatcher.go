@@ -139,17 +139,18 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 
 // DispatchCandidate is a ready task that should be dispatched.
 type DispatchCandidate struct {
-	TaskID        string
-	Project       string
-	Prompt        string
-	WorkDir       string
-	Agent         string
-	Model         string
-	Tier          string
-	ParentID      string
-	ExecTimeout   time.Duration
-	ShortTimeout  time.Duration
-	ReviewTimeout time.Duration
+	TaskID          string
+	Project         string
+	Prompt          string
+	WorkDir         string
+	Agent           string
+	Model           string
+	Tier            string
+	ParentID        string
+	ExecTimeout     time.Duration
+	ShortTimeout    time.Duration
+	ReviewTimeout   time.Duration
+	MaxReviewRounds int
 }
 
 // DispatchActivities holds dependencies for dispatch-related activities.
@@ -302,17 +303,18 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 			}
 
 			candidates = append(candidates, DispatchCandidate{
-				TaskID:        t.ID,
-				Project:       projectName,
-				Prompt:        prompt,
-				WorkDir:       project.Workspace,
-				Agent:         agent,
-				Model:         model,
-				Tier:          tier,
-				ParentID:      t.ParentID,
-				ExecTimeout:   da.Config.General.ExecTimeout.Duration,
-				ShortTimeout:  da.Config.General.ShortTimeout.Duration,
-				ReviewTimeout: da.Config.General.ReviewTimeout.Duration,
+				TaskID:          t.ID,
+				Project:         projectName,
+				Prompt:          prompt,
+				WorkDir:         project.Workspace,
+				Agent:           agent,
+				Model:           model,
+				Tier:            tier,
+				ParentID:        t.ParentID,
+				ExecTimeout:     da.Config.General.ExecTimeout.Duration,
+				ShortTimeout:    da.Config.General.ShortTimeout.Duration,
+				ReviewTimeout:   da.Config.General.ReviewTimeout.Duration,
+				MaxReviewRounds: da.Config.General.MaxReviewRounds,
 			})
 		}
 	}
@@ -527,16 +529,17 @@ func (da *DispatchActivities) ScanOrphanedReviewsActivity(ctx context.Context) (
 			}
 
 			orphans = append(orphans, ReviewRequest{
-				TaskID:        t.ID,
-				Project:       projectName,
-				WorkDir:       project.Workspace,
-				PRNumber:      detail.PRNumber,
-				Agent:         agent,
-				Model:         model,
-				Prompt:        prompt,
-				ExecTimeout:   da.Config.General.ExecTimeout.Duration,
-				ShortTimeout:  da.Config.General.ShortTimeout.Duration,
-				ReviewTimeout: da.Config.General.ReviewTimeout.Duration,
+				TaskID:          t.ID,
+				Project:         projectName,
+				WorkDir:         project.Workspace,
+				PRNumber:        detail.PRNumber,
+				Agent:           agent,
+				Model:           model,
+				Prompt:          prompt,
+				ExecTimeout:     da.Config.General.ExecTimeout.Duration,
+				ShortTimeout:    da.Config.General.ShortTimeout.Duration,
+				ReviewTimeout:   da.Config.General.ReviewTimeout.Duration,
+				MaxReviewRounds: da.Config.General.MaxReviewRounds,
 			})
 		}
 	}

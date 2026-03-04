@@ -28,6 +28,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 
 	// Version gate: trace recording added after initial release.
 	traceVersion := workflow.GetVersion(ctx, "add-trace-recording", workflow.DefaultVersion, 1)
+	reviewRoundsVersion := workflow.GetVersion(ctx, "agent-configurable-review-rounds", workflow.DefaultVersion, 1)
 	startTime := workflow.Now(ctx)
 
 	// --- Activity options (from config via dispatcher, with defaults) ---
@@ -251,7 +252,10 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		})
 	}
 
-	const maxReviewRounds = 2
+	maxReviewRounds := 2
+	if reviewRoundsVersion == 1 && req.MaxReviewRounds > 0 {
+		maxReviewRounds = req.MaxReviewRounds
+	}
 	reviewCtx := workflow.WithActivityOptions(ctx, reviewOpts)
 
 	for round := 1; round <= maxReviewRounds; round++ {

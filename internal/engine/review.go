@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -41,7 +42,15 @@ type ghPRMergeState struct {
 func (a *Activities) RunReviewActivity(ctx context.Context, workDir string, prNumber, round int, execAgent string) (*ReviewDraft, error) {
 	logger := activity.GetLogger(ctx)
 
-	reviewerAgent, reviewerModel := a.resolveReviewer(execAgent)
+	reviewerAgent, reviewerModel, crossProvider := a.resolveReviewer(execAgent)
+	if a.Config != nil && a.Config.General.RequireCrossProviderReview && !crossProvider {
+		return nil, fmt.Errorf("cross-provider reviewer required but unavailable for executor %q", execAgent)
+	}
+	reviewerCLI := llm.NormalizeCLIName(reviewerAgent)
+	if _, err := exec.LookPath(reviewerCLI); err != nil {
+		return nil, fmt.Errorf("PREFLIGHT: reviewer CLI %q not found on PATH", reviewerCLI)
+	}
+
 	diffText, err := buildReviewDiffInput(ctx, workDir, prNumber)
 	if err != nil {
 		return nil, fmt.Errorf("build review diff input: %w", err)
@@ -59,7 +68,7 @@ func (a *Activities) RunReviewActivity(ctx context.Context, workDir string, prNu
 	signal, body, invalid := parseReviewSignal(result.Output)
 	if invalid {
 		logger.Warn("Reviewer produced invalid signal; coercing to REQUEST_CHANGES",
-			"reviewer", reviewerAgent, "round", round)
+			"reviewer", reviewerAgent, "round", round, "cross_provider", crossProvider)
 	}
 
 	return &ReviewDraft{
@@ -258,40 +267,148 @@ func DefaultReviewer(agent string) string {
 	}
 }
 
-func (a *Activities) resolveReviewer(execAgent string) (reviewerAgent string, reviewerModel string) {
-	reviewerAgent = DefaultReviewer(execAgent)
-	reviewerModel = ""
-	if a.Config == nil {
-		return reviewerAgent, reviewerModel
+type namedProvider struct {
+	Name     string
+	CLI      string
+	Model    string
+	Reviewer string
+	Enabled  bool
+}
+
+func (a *Activities) resolveReviewer(execAgent string) (reviewerAgent string, reviewerModel string, crossProvider bool) {
+	execCLI := llm.NormalizeCLIName(execAgent)
+	fallbackAgent := DefaultReviewer(execCLI)
+	if a.Config == nil || len(a.Config.Providers) == 0 {
+		return fallbackAgent, "", llm.NormalizeCLIName(fallbackAgent) != execCLI
 	}
 
-	// explicit config override on executor provider
-	for _, p := range a.Config.Providers {
-		if llm.NormalizeCLIName(p.CLI) == llm.NormalizeCLIName(execAgent) {
-			if strings.TrimSpace(p.Reviewer) != "" {
-				reviewerAgent = strings.TrimSpace(p.Reviewer)
-			}
-			break
+	providers := make([]namedProvider, 0, len(a.Config.Providers))
+	for name, p := range a.Config.Providers {
+		providers = append(providers, namedProvider{
+			Name:     name,
+			CLI:      p.CLI,
+			Model:    p.Model,
+			Reviewer: p.Reviewer,
+			Enabled:  p.Enabled,
+		})
+	}
+	sort.Slice(providers, func(i, j int) bool {
+		return providers[i].Name < providers[j].Name
+	})
+
+	// 1) Executor-specific reviewer mapping, preferring enabled cross-provider reviewers.
+	for _, p := range providers {
+		if llm.NormalizeCLIName(p.CLI) != execCLI {
+			continue
+		}
+		candidate, ok := findProviderByTarget(providers, p.Reviewer, true)
+		if !ok {
+			continue
+		}
+		cross := llm.NormalizeCLIName(candidate.CLI) != execCLI
+		if cross {
+			return candidate.CLI, candidate.Model, true
 		}
 	}
-	for _, p := range a.Config.Providers {
-		if llm.NormalizeCLIName(p.CLI) == llm.NormalizeCLIName(reviewerAgent) {
-			reviewerModel = p.Model
-			break
+
+	// 2) Default mapping among enabled providers.
+	if candidate, ok := findProviderByTarget(providers, fallbackAgent, true); ok {
+		cross := llm.NormalizeCLIName(candidate.CLI) != execCLI
+		if cross {
+			return candidate.CLI, candidate.Model, true
 		}
 	}
-	return reviewerAgent, reviewerModel
+
+	// 3) Any enabled cross provider.
+	if candidate, ok := firstCrossProvider(providers, execCLI, true); ok {
+		return candidate.CLI, candidate.Model, true
+	}
+
+	// 4) Relax enabled requirement for explicitly configured reviewer.
+	for _, p := range providers {
+		if llm.NormalizeCLIName(p.CLI) != execCLI {
+			continue
+		}
+		candidate, ok := findProviderByTarget(providers, p.Reviewer, false)
+		if !ok {
+			continue
+		}
+		cross := llm.NormalizeCLIName(candidate.CLI) != execCLI
+		return candidate.CLI, candidate.Model, cross
+	}
+
+	// 5) Relax enabled requirement for default mapping.
+	if candidate, ok := findProviderByTarget(providers, fallbackAgent, false); ok {
+		cross := llm.NormalizeCLIName(candidate.CLI) != execCLI
+		return candidate.CLI, candidate.Model, cross
+	}
+
+	// 6) Last resort: any configured cross provider, then executor itself.
+	if candidate, ok := firstCrossProvider(providers, execCLI, false); ok {
+		return candidate.CLI, candidate.Model, true
+	}
+	if candidate, ok := findProviderByTarget(providers, execCLI, false); ok {
+		return candidate.CLI, candidate.Model, false
+	}
+	return fallbackAgent, "", llm.NormalizeCLIName(fallbackAgent) != execCLI
+}
+
+func findProviderByTarget(providers []namedProvider, target string, onlyEnabled bool) (namedProvider, bool) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return namedProvider{}, false
+	}
+
+	for _, p := range providers {
+		if !strings.EqualFold(p.Name, target) {
+			continue
+		}
+		if onlyEnabled && !p.Enabled {
+			continue
+		}
+		return p, true
+	}
+
+	targetCLI := llm.NormalizeCLIName(target)
+	for _, p := range providers {
+		if llm.NormalizeCLIName(p.CLI) != targetCLI {
+			continue
+		}
+		if onlyEnabled && !p.Enabled {
+			continue
+		}
+		return p, true
+	}
+
+	return namedProvider{}, false
+}
+
+func firstCrossProvider(providers []namedProvider, execCLI string, onlyEnabled bool) (namedProvider, bool) {
+	for _, p := range providers {
+		if onlyEnabled && !p.Enabled {
+			continue
+		}
+		if llm.NormalizeCLIName(p.CLI) == execCLI {
+			continue
+		}
+		return p, true
+	}
+	return namedProvider{}, false
 }
 
 func buildReviewPrompt(prNumber, round int, diff string) string {
-	return fmt.Sprintf(`You are reviewing pull request #%d.
+	return fmt.Sprintf(`You are the adversarial reviewer for pull request #%d.
+Assume defects exist until proven otherwise.
+Prioritize correctness, regressions, security risks, data-loss paths, edge cases, and missing tests.
+If confidence is not high, choose REQUEST_CHANGES.
 
 Output contract (strict):
 Line 1 must be exactly one of:
 APPROVE
 REQUEST_CHANGES
 
-All following lines must be concise review rationale and concrete issues if requesting changes.
+All following lines must be concise review rationale.
+When requesting changes, list concrete findings with severity and, when possible, file/line pointers.
 Do not include markdown code fences.
 
 Review round: %d
