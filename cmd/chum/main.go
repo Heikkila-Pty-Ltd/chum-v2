@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -453,8 +454,16 @@ func bridgeMode(cfg *config.Config) string {
 }
 
 func defaultProject(cfg *config.Config) string {
-	for name, project := range cfg.Projects {
-		if project.Enabled {
+	if cfg == nil || len(cfg.Projects) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(cfg.Projects))
+	for name := range cfg.Projects {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if cfg.Projects[name].Enabled {
 			return name
 		}
 	}
