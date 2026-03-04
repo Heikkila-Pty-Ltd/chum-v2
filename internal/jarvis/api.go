@@ -47,6 +47,8 @@ func (a *API) Handler() http.Handler {
 		mux.HandleFunc("POST /api/dashboard/task/{taskID}/kill", a.handleDashboardTaskKill)
 		mux.HandleFunc("POST /api/dashboard/task/{taskID}/retry", a.handleDashboardTaskRetry)
 		mux.HandleFunc("POST /api/dashboard/task/{taskID}/decompose", a.handleDashboardTaskDecompose)
+		mux.HandleFunc("POST /api/system/pause", a.handleSystemPause)
+		mux.HandleFunc("POST /api/system/resume", a.handleSystemResume)
 	}
 	if a.Store != nil {
 		mux.HandleFunc("GET /api/dashboard/traces/{taskID}", a.handleDashboardTraces)

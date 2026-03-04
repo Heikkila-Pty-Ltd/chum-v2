@@ -25,6 +25,7 @@ const (
 	StatusRunning         Status = "running"
 	StatusCompleted       Status = "completed"
 	StatusFailed          Status = "failed"
+	StatusNeedsReview     Status = "needs_review"
 	StatusDecomposed      Status = "decomposed"
 	StatusDoDFailed       Status = "dod_failed"
 	StatusNeedsRefinement Status = "needs_refinement"

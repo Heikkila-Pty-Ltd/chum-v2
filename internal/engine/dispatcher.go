@@ -197,6 +197,15 @@ func (da *DispatchActivities) RecordDispatchStartActivity(ctx context.Context, t
 
 // ScanCandidatesActivity discovers ready tasks across all enabled projects.
 func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]DispatchCandidate, error) {
+	paused, err := da.globalPauseEnabled(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("check global pause: %w", err)
+	}
+	if paused {
+		da.Logger.Info("Global pause active, skipping candidate scan")
+		return []DispatchCandidate{}, nil
+	}
+
 	var candidates []DispatchCandidate
 
 	for projectName, project := range da.Config.Projects {
@@ -395,11 +404,15 @@ func pullMaster(ctx context.Context, workDir string, logger *slog.Logger) {
 }
 
 // ScanZombieRunningActivity finds tasks stuck in "running" whose agent workflow
-// is no longer alive in Temporal. These zombies are reset to "ready" so the
-// dispatcher can re-dispatch them on the next tick.
+// is no longer alive in Temporal. In normal mode they are reset to "ready";
+// while globally paused they are moved to "needs_review" to avoid re-dispatch.
 func (da *DispatchActivities) ScanZombieRunningActivity(ctx context.Context) (int, error) {
 	if da.Temporal == nil {
 		return 0, nil
+	}
+	paused, err := da.globalPauseEnabled(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("check global pause: %w", err)
 	}
 	logger := da.Logger
 	var recovered int
@@ -420,11 +433,7 @@ func (da *DispatchActivities) ScanZombieRunningActivity(ctx context.Context) (in
 			desc, err := da.Temporal.DescribeWorkflowExecution(ctx, wfID, "")
 			if err != nil {
 				// Workflow not found — it's dead.
-				logger.Info("Zombie detected (workflow not found), resetting to ready",
-					"task", t.ID, "project", projectName)
-				if err := da.DAG.UpdateTaskStatus(ctx, t.ID, string(types.StatusReady)); err != nil {
-					logger.Error("Failed to reset zombie task", "task", t.ID, "error", err)
-				} else {
+				if da.handleZombieRecovery(ctx, t.ID, projectName, "workflow not found", paused) {
 					recovered++
 				}
 				continue
@@ -437,11 +446,7 @@ func (da *DispatchActivities) ScanZombieRunningActivity(ctx context.Context) (in
 				enums.WORKFLOW_EXECUTION_STATUS_TERMINATED,
 				enums.WORKFLOW_EXECUTION_STATUS_CANCELED,
 				enums.WORKFLOW_EXECUTION_STATUS_TIMED_OUT:
-				logger.Info("Zombie detected (workflow terminal), resetting to ready",
-					"task", t.ID, "project", projectName, "workflowStatus", st.String())
-				if err := da.DAG.UpdateTaskStatus(ctx, t.ID, string(types.StatusReady)); err != nil {
-					logger.Error("Failed to reset zombie task", "task", t.ID, "error", err)
-				} else {
+				if da.handleZombieRecovery(ctx, t.ID, projectName, "workflow "+strings.ToLower(st.String()), paused) {
 					recovered++
 				}
 			default:
@@ -451,6 +456,33 @@ func (da *DispatchActivities) ScanZombieRunningActivity(ctx context.Context) (in
 	}
 
 	return recovered, nil
+}
+
+func (da *DispatchActivities) globalPauseEnabled(ctx context.Context) (bool, error) {
+	paused, isSet, err := da.DAG.IsGlobalPauseSet(ctx)
+	if err != nil {
+		return false, err
+	}
+	if isSet {
+		return paused, nil // DB value overrides config
+	}
+	return da.Config.General.Paused, nil // no DB row: fall back to config
+}
+
+func (da *DispatchActivities) handleZombieRecovery(ctx context.Context, taskID, projectName, reason string, paused bool) bool {
+	target := types.StatusReady
+	logMsg := "Zombie detected, resetting to ready"
+	if paused {
+		target = types.StatusNeedsReview
+		logMsg = "Zombie detected while globally paused, moving to needs_review"
+	}
+
+	da.Logger.Info(logMsg, "task", taskID, "project", projectName, "reason", reason)
+	if err := da.DAG.UpdateTaskStatus(ctx, taskID, string(target)); err != nil {
+		da.Logger.Error("Failed to recover zombie task", "task", taskID, "error", err)
+		return false
+	}
+	return true
 }
 
 // ScanOrphanedReviewsActivity finds tasks in "needs_review" whose error_log

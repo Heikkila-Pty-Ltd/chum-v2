@@ -39,13 +39,25 @@ type ScheduleSpec struct {
 	Args      []interface{}
 	TaskQueue string
 	RunID     string // workflow ID for each run
+	Paused    bool   // Legacy fallback: keep paused instead of unpausing on startup
+	PauseDB   GlobalPauseReader
+}
+
+// DispatcherScheduleID is the canonical Temporal schedule ID for dispatch ticks.
+const DispatcherScheduleID = "chum-v2-dispatcher"
+
+// GlobalPauseReader reports whether the system is globally paused.
+// IsGlobalPauseSet returns the DB value and whether a row exists;
+// callers fall back to config when isSet is false.
+type GlobalPauseReader interface {
+	IsGlobalPauseSet(ctx context.Context) (paused bool, isSet bool, err error)
 }
 
 // RegisterSchedule creates a Temporal schedule idempotently.
 // If the schedule already exists, it logs and returns nil.
 func RegisterSchedule(ctx context.Context, c client.Client, spec ScheduleSpec, logger *slog.Logger) error {
 	schedClient := c.ScheduleClient()
-	_, err := schedClient.Create(ctx, client.ScheduleOptions{
+	handle, err := schedClient.Create(ctx, client.ScheduleOptions{
 		ID: spec.ID,
 		Spec: client.ScheduleSpec{
 			Intervals: []client.ScheduleIntervalSpec{
@@ -69,6 +81,23 @@ func RegisterSchedule(ctx context.Context, c client.Client, spec ScheduleSpec, l
 			return ensureScheduleActive(ctx, schedClient, spec, logger)
 		}
 		return fmt.Errorf("create schedule %s: %w", spec.ID, err)
+	}
+
+	paused, err := scheduleShouldPause(ctx, spec)
+	if err != nil {
+		return fmt.Errorf("resolve pause state for schedule %s: %w", spec.ID, err)
+	}
+	if paused {
+		if handle == nil {
+			handle = schedClient.GetHandle(ctx, spec.ID)
+		}
+		if err := handle.Pause(ctx, client.SchedulePauseOptions{
+			Note: "global pause enabled on startup",
+		}); err != nil {
+			return fmt.Errorf("pause schedule %s: %w", spec.ID, err)
+		}
+		logger.Info("Schedule registered and left paused", "id", spec.ID, "interval", spec.Interval)
+		return nil
 	}
 
 	logger.Info("Schedule registered", "id", spec.ID, "interval", spec.Interval)
@@ -108,22 +137,39 @@ func ensureScheduleActive(ctx context.Context, schedClient client.ScheduleClient
 		logger.Info("Schedule updated", "id", spec.ID, "interval", spec.Interval)
 	}
 
-	// Unpause — harmless if already active, critical if paused.
-	if err := handle.Unpause(ctx, client.ScheduleUnpauseOptions{
-		Note: "unpaused on chum serve startup",
-	}); err != nil {
-		logger.Warn("Failed to unpause schedule", "id", spec.ID, "error", err)
-		activationErrs = append(activationErrs, fmt.Errorf("unpause schedule %s: %w", spec.ID, err))
+	paused, err := scheduleShouldPause(ctx, spec)
+	if err != nil {
+		// Fail-closed: if we can't determine pause state, don't unpause/trigger.
+		return fmt.Errorf("resolve pause state for schedule %s: %w", spec.ID, err)
 	}
-
-	// Trigger an immediate run so ready tasks don't wait for the first tick.
-	if err := handle.Trigger(ctx, client.ScheduleTriggerOptions{
-		Overlap: enumspb.SCHEDULE_OVERLAP_POLICY_SKIP,
-	}); err != nil {
-		logger.Warn("Failed to trigger immediate schedule run", "id", spec.ID, "error", err)
-		activationErrs = append(activationErrs, fmt.Errorf("trigger schedule %s: %w", spec.ID, err))
+	if paused {
+		// Global pause: keep the schedule paused, do not trigger.
+		if err := handle.Pause(ctx, client.SchedulePauseOptions{
+			Note: "global pause enabled on startup",
+		}); err != nil {
+			logger.Warn("Failed to pause schedule", "id", spec.ID, "error", err)
+			activationErrs = append(activationErrs, fmt.Errorf("pause schedule %s: %w", spec.ID, err))
+		} else {
+			logger.Info("Schedule kept paused due to global pause", "id", spec.ID)
+		}
 	} else {
-		logger.Info("Triggered immediate schedule run", "id", spec.ID)
+		// Unpause — harmless if already active, critical if paused.
+		if err := handle.Unpause(ctx, client.ScheduleUnpauseOptions{
+			Note: "unpaused on chum serve startup",
+		}); err != nil {
+			logger.Warn("Failed to unpause schedule", "id", spec.ID, "error", err)
+			activationErrs = append(activationErrs, fmt.Errorf("unpause schedule %s: %w", spec.ID, err))
+		}
+
+		// Trigger an immediate run so ready tasks don't wait for the first tick.
+		if err := handle.Trigger(ctx, client.ScheduleTriggerOptions{
+			Overlap: enumspb.SCHEDULE_OVERLAP_POLICY_SKIP,
+		}); err != nil {
+			logger.Warn("Failed to trigger immediate schedule run", "id", spec.ID, "error", err)
+			activationErrs = append(activationErrs, fmt.Errorf("trigger schedule %s: %w", spec.ID, err))
+		} else {
+			logger.Info("Triggered immediate schedule run", "id", spec.ID)
+		}
 	}
 
 	if len(activationErrs) > 0 {
@@ -131,6 +177,19 @@ func ensureScheduleActive(ctx context.Context, schedClient client.ScheduleClient
 	}
 
 	return nil
+}
+
+func scheduleShouldPause(ctx context.Context, spec ScheduleSpec) (bool, error) {
+	if spec.PauseDB != nil {
+		paused, isSet, err := spec.PauseDB.IsGlobalPauseSet(ctx)
+		if err != nil {
+			return false, err
+		}
+		if isSet {
+			return paused, nil // DB value overrides config
+		}
+	}
+	return spec.Paused, nil
 }
 
 // slogAdapter wraps slog.Logger to satisfy Temporal's log.Logger interface.

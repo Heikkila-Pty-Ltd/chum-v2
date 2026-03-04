@@ -278,6 +278,25 @@ func (d *DAG) GetTask(ctx context.Context, id string) (Task, error) {
 	return scanTask(row)
 }
 
+// CountTasksByStatus returns the total number of tasks with any of the given
+// statuses across all projects. Used by the shutdown drain loop to ensure no
+// in-flight work is missed regardless of config changes.
+func (d *DAG) CountTasksByStatus(ctx context.Context, statuses ...string) (int, error) {
+	if len(statuses) == 0 {
+		return 0, nil
+	}
+	query := "SELECT COUNT(*) FROM tasks WHERE status IN (" + sqlPlaceholders(len(statuses)) + ")"
+	args := make([]any, len(statuses))
+	for i, s := range statuses {
+		args[i] = s
+	}
+	var count int
+	if err := d.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count tasks by status: %w", err)
+	}
+	return count, nil
+}
+
 // ListTasks returns tasks for a project, optionally filtering by statuses.
 func (d *DAG) ListTasks(ctx context.Context, project string, statuses ...string) ([]Task, error) {
 	query := "SELECT " + taskColumns + " FROM tasks WHERE project = ?"

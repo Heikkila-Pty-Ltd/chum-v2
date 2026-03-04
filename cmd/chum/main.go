@@ -24,6 +24,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 )
@@ -91,7 +92,7 @@ func main() {
 			if cfg.BeadsBridge.Enabled {
 				policy = cfg.BeadsBridge.IngressPolicy
 			}
-			api := &jarvis.API{Engine: eng, Logger: logger, IngressPolicy: policy}
+			api := &jarvis.API{Engine: eng, DAG: d, Logger: logger, IngressPolicy: policy}
 
 			addr := fmt.Sprintf("127.0.0.1:%d", port)
 			ln, err := net.Listen("tcp", addr)
@@ -201,6 +202,166 @@ func main() {
 				fmt.Printf("  [%s] %-12s %s\n", t.Status, t.ID, t.Title)
 			}
 		}
+
+	case "shutdown":
+		reason := "chum shutdown requested"
+		timeout := 45 * time.Minute
+		poll := 15 * time.Second
+		noWait := false
+		scheduleID := engine.DispatcherScheduleID
+
+		for i := 2; i < len(os.Args); i++ {
+			switch os.Args[i] {
+			case "--reason":
+				reason = requireFlagValue(os.Args, i)
+				i++
+			case "--timeout":
+				raw := requireFlagValue(os.Args, i)
+				i++
+				parsed, err := time.ParseDuration(raw)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error: invalid --timeout %q: %v\n", raw, err)
+					os.Exit(1)
+				}
+				timeout = parsed
+			case "--poll":
+				raw := requireFlagValue(os.Args, i)
+				i++
+				parsed, err := time.ParseDuration(raw)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error: invalid --poll %q: %v\n", raw, err)
+					os.Exit(1)
+				}
+				poll = parsed
+			case "--no-wait":
+				noWait = true
+			case "--schedule-id":
+				scheduleID = requireFlagValue(os.Args, i)
+				i++
+			}
+		}
+
+		// Validate timing flags before mutating any state.
+		if !noWait {
+			if timeout <= 0 {
+				fmt.Fprintln(os.Stderr, "Error: --timeout must be > 0 when waiting for drain")
+				os.Exit(1)
+			}
+			if poll <= 0 {
+				fmt.Fprintln(os.Stderr, "Error: --poll must be > 0")
+				os.Exit(1)
+			}
+		}
+
+		c, err := engine.DialTemporal(cfg, logger)
+		if err != nil {
+			logger.Error("Failed to connect to Temporal", "error", err)
+			os.Exit(1)
+		}
+		defer c.Close()
+
+		if err := d.SetGlobalPaused(context.Background(), true); err != nil {
+			logger.Error("Failed to set global pause state", "error", err)
+			os.Exit(1)
+		}
+
+		handle := c.ScheduleClient().GetHandle(context.Background(), scheduleID)
+		if err := handle.Pause(context.Background(), client.SchedulePauseOptions{
+			Note: reason,
+		}); err != nil {
+			logger.Error("Failed to pause dispatcher schedule", "schedule", scheduleID, "error", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Global pause enabled. Dispatcher schedule %q paused.\n", scheduleID)
+		if noWait {
+			fmt.Println("Skipping drain wait (--no-wait).")
+			return
+		}
+
+		fmt.Printf("Waiting for running workflows to drain (timeout=%s, poll=%s)\n", timeout, poll)
+		deadline := time.Now().Add(timeout)
+		da := &engine.DispatchActivities{
+			DAG:      d,
+			Config:   cfg,
+			Logger:   logger,
+			Temporal: c,
+		}
+
+		for {
+			recovered, err := da.ScanZombieRunningActivity(context.Background())
+			if err != nil {
+				logger.Warn("Zombie scan during shutdown failed", "error", err)
+			} else if recovered > 0 {
+				fmt.Printf("Recovered %d zombie running task(s) while draining.\n", recovered)
+			}
+
+			running, err := countRunningTasks(context.Background(), d)
+			if err != nil {
+				logger.Error("Failed to count running tasks", "error", err)
+				os.Exit(1)
+			}
+			if running == 0 {
+				fmt.Println("Drain complete: no running tasks remain.")
+				return
+			}
+
+			if time.Now().After(deadline) {
+				fmt.Fprintf(os.Stderr, "Drain timed out after %s with %d running task(s) remaining.\n", timeout, running)
+				os.Exit(1)
+			}
+
+			fmt.Printf("Running tasks remaining: %d\n", running)
+			time.Sleep(poll)
+		}
+
+	case "resume":
+		reason := "chum resume requested"
+		scheduleID := engine.DispatcherScheduleID
+
+		for i := 2; i < len(os.Args); i++ {
+			switch os.Args[i] {
+			case "--reason":
+				reason = requireFlagValue(os.Args, i)
+				i++
+			case "--schedule-id":
+				scheduleID = requireFlagValue(os.Args, i)
+				i++
+			}
+		}
+
+		c, err := engine.DialTemporal(cfg, logger)
+		if err != nil {
+			logger.Error("Failed to connect to Temporal", "error", err)
+			os.Exit(1)
+		}
+		defer c.Close()
+
+		handle := c.ScheduleClient().GetHandle(context.Background(), scheduleID)
+		if err := handle.Unpause(context.Background(), client.ScheduleUnpauseOptions{
+			Note: reason,
+		}); err != nil {
+			logger.Error("Failed to unpause dispatcher schedule", "schedule", scheduleID, "error", err)
+			os.Exit(1)
+		}
+
+		if err := d.SetGlobalPaused(context.Background(), false); err != nil {
+			_ = handle.Pause(context.Background(), client.SchedulePauseOptions{
+				Note: "re-paused after resume state write failure",
+			})
+			logger.Error("Failed to clear global pause state", "error", err)
+			os.Exit(1)
+		}
+
+		if err := handle.Trigger(context.Background(), client.ScheduleTriggerOptions{
+			Overlap: enumspb.SCHEDULE_OVERLAP_POLICY_SKIP,
+		}); err != nil {
+			logger.Warn("Failed to trigger immediate dispatch after resume", "error", err)
+			fmt.Printf("Global pause cleared and schedule %q unpaused (trigger failed; waiting for next tick).\n", scheduleID)
+			return
+		}
+
+		fmt.Printf("Global pause cleared. Dispatcher schedule %q unpaused and triggered.\n", scheduleID)
 
 	case "init":
 		fmt.Printf("CHUM v2 — creating Temporal namespace %q\n", cfg.General.TemporalNamespace)
@@ -426,7 +587,7 @@ func main() {
 		}
 
 	default:
-		fmt.Fprintf(os.Stderr, "Usage: chum [serve|sync|tasks|task create|submit|reconcile|plan|init] [--config path]\n")
+		fmt.Fprintf(os.Stderr, "Usage: chum [serve|sync|tasks|task create|submit|reconcile|plan|init|shutdown|resume] [--config path]\n")
 		os.Exit(1)
 	}
 }
@@ -491,4 +652,8 @@ func parseDriftAllowlist(raw string) map[beadsbridge.DriftClass]bool {
 		allow[beadsbridge.DriftClass(v)] = true
 	}
 	return allow
+}
+
+func countRunningTasks(ctx context.Context, d *dag.DAG) (int, error) {
+	return d.CountTasksByStatus(ctx, string(types.StatusRunning))
 }

@@ -13,6 +13,9 @@ type TaskStore interface {
 	ListTasks(ctx context.Context, project string, statuses ...string) ([]Task, error)
 	GetReadyNodes(ctx context.Context, project string) ([]Task, error)
 	CreateSubtasksAtomic(ctx context.Context, parentID string, tasks []Task) ([]string, error)
+	SetGlobalPaused(ctx context.Context, paused bool) error
+	IsGlobalPaused(ctx context.Context) (bool, error)
+	IsGlobalPauseSet(ctx context.Context) (paused bool, isSet bool, err error)
 
 	// Graph edge operations.
 	AddEdge(ctx context.Context, from, to string) error

@@ -104,6 +104,8 @@ type General struct {
 	JarvisPort int `toml:"jarvis_port"` // HTTP API port for Jarvis integration (0 = disabled)
 
 	TracesDBPath string `toml:"traces_db_path"` // SQLite path for execution traces + perf (default: chum-traces.db)
+
+	Paused bool `toml:"paused"` // Legacy startup pause fallback. Runtime pause/resume is persisted in DB via global_pause.
 }
 
 // Project configures a single managed project.
