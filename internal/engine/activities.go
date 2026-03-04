@@ -16,6 +16,7 @@ import (
 
 	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beadsbridge"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
@@ -216,6 +217,27 @@ func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID str
 		logger.Warn("Beads writeback skipped: cannot resolve task project", "taskID", taskID, "error", err)
 		return nil
 	}
+
+	// S6-S8: When bridge mode is enabled, writebacks are projected via durable outbox.
+	if a.Config != nil && a.Config.BeadsBridge.Enabled && !a.Config.BeadsBridge.DryRun {
+		if bridgeDAG, ok := a.DAG.(*dag.DAG); ok {
+			if mapping, mapErr := bridgeDAG.GetBeadsMappingByTask(ctx, task.Project, taskID); mapErr == nil {
+				if detail.Reason != CloseDecomposed {
+					if err := beadsbridge.EnqueueTaskTerminal(ctx, bridgeDAG, task.Project, mapping.IssueID, taskID,
+						string(detail.Reason), detail.SubReason, map[string]any{
+							"category":   detail.Category,
+							"summary":    detail.Summary,
+							"review_url": detail.ReviewURL,
+							"pr_number":  detail.PRNumber,
+						}); err != nil {
+						logger.Warn("Bridge outbox enqueue failed", "taskID", taskID, "issueID", mapping.IssueID, "error", err)
+					}
+				}
+				return nil
+			}
+		}
+	}
+
 	bc, ok := a.BeadsClients[task.Project]
 	if !ok {
 		return nil
@@ -389,11 +411,11 @@ func (a *Activities) RecordTraceActivity(ctx context.Context, outcome TraceOutco
 			logger.Error("Failed to start execution trace", "error", err)
 		} else {
 			if err := a.Traces.AppendTraceEvent(traceID, store.TraceEvent{
-				Stage:       outcome.Reason,
-				Step:        outcome.SubReason,
-				Tool:        outcome.Agent,
-				DurationMs:  outcome.Duration.Milliseconds(),
-				Success:     success,
+				Stage:        outcome.Reason,
+				Step:         outcome.SubReason,
+				Tool:         outcome.Agent,
+				DurationMs:   outcome.Duration.Milliseconds(),
+				Success:      success,
 				ErrorContext: outcome.SubReason,
 			}); err != nil {
 				logger.Error("Failed to append trace event", "error", err)

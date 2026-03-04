@@ -16,6 +16,13 @@ dolt_host = "127.0.0.1"
 dolt_port = 3307
 jarvis_port = 9780
 
+[beads_bridge]
+enabled = true
+dry_run = false
+canary_label = "chum-canary"
+reconcile_interval = "15m"
+ingress_policy = "beads_first"
+
 [projects.chum]
 enabled = true
 workspace = "/home/ubuntu/projects/chum-factory"

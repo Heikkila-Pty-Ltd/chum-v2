@@ -17,6 +17,7 @@ func TestDispatcherWorkflow_NoCandidates(t *testing.T) {
 	env := s.NewTestWorkflowEnvironment()
 
 	var da *DispatchActivities
+	env.OnActivity(da.RecordDispatchStartActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	env.OnActivity(da.ScanCandidatesActivity, mock.Anything).Return([]DispatchCandidate{}, nil)
 
 	dispatched := 0
@@ -44,6 +45,7 @@ func TestDispatcherWorkflow_MarkTaskRunningFailureSkipsDispatch(t *testing.T) {
 	env := s.NewTestWorkflowEnvironment()
 
 	var da *DispatchActivities
+	env.OnActivity(da.RecordDispatchStartActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	env.OnActivity(da.ScanCandidatesActivity, mock.Anything).Return([]DispatchCandidate{
 		{
 			TaskID:  "task-1",
@@ -80,6 +82,7 @@ func TestDispatcherWorkflow_DispatchesCandidateWithExpectedRequest(t *testing.T)
 	env := s.NewTestWorkflowEnvironment()
 
 	var da *DispatchActivities
+	env.OnActivity(da.RecordDispatchStartActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	env.OnActivity(da.ScanCandidatesActivity, mock.Anything).Return([]DispatchCandidate{
 		{
 			TaskID:  "task-1",
@@ -140,6 +143,7 @@ func TestDispatcherWorkflow_MultipleCandidates(t *testing.T) {
 	env := s.NewTestWorkflowEnvironment()
 
 	var da *DispatchActivities
+	env.OnActivity(da.RecordDispatchStartActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	candidates := []DispatchCandidate{
 		{
 			TaskID:        "task-1",
@@ -285,6 +289,7 @@ func TestDispatcherWorkflow_ScanFailure(t *testing.T) {
 	env := s.NewTestWorkflowEnvironment()
 
 	var da *DispatchActivities
+	env.OnActivity(da.RecordDispatchStartActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	env.OnActivity(da.ScanCandidatesActivity, mock.Anything).Return(nil, errors.New("database connection failed"))
 
 	dispatched := 0

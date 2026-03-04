@@ -71,6 +71,61 @@ const decisionAlternativesTableSchema = `CREATE TABLE IF NOT EXISTS decision_alt
 const indexDecisionsTaskID = `CREATE INDEX IF NOT EXISTS idx_decisions_task_id ON decisions(task_id);`
 const indexAlternativesDecisionID = `CREATE INDEX IF NOT EXISTS idx_alternatives_decision_id ON decision_alternatives(decision_id);`
 
+const beadsSyncMapTableSchema = `CREATE TABLE IF NOT EXISTS beads_sync_map (
+	project TEXT NOT NULL,
+	issue_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	last_fingerprint TEXT NOT NULL DEFAULT '',
+	admitted_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	updated_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	PRIMARY KEY (project, issue_id),
+	UNIQUE (task_id),
+	FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);`
+
+const beadsSyncOutboxTableSchema = `CREATE TABLE IF NOT EXISTS beads_sync_outbox (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	project TEXT NOT NULL,
+	issue_id TEXT NOT NULL,
+	task_id TEXT NOT NULL DEFAULT '',
+	event_type TEXT NOT NULL,
+	payload TEXT NOT NULL DEFAULT '{}',
+	idempotency_key TEXT NOT NULL,
+	state TEXT NOT NULL DEFAULT 'pending',
+	attempts INTEGER NOT NULL DEFAULT 0,
+	max_attempts INTEGER NOT NULL DEFAULT 5,
+	next_attempt_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	last_error TEXT NOT NULL DEFAULT '',
+	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	updated_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	UNIQUE (project, idempotency_key)
+);`
+
+const beadsSyncCursorTableSchema = `CREATE TABLE IF NOT EXISTS beads_sync_cursor (
+	project TEXT PRIMARY KEY,
+	cursor_value TEXT NOT NULL DEFAULT '',
+	last_scan_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);`
+
+const beadsSyncAuditTableSchema = `CREATE TABLE IF NOT EXISTS beads_sync_audit (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	project TEXT NOT NULL,
+	issue_id TEXT NOT NULL DEFAULT '',
+	task_id TEXT NOT NULL DEFAULT '',
+	event_kind TEXT NOT NULL,
+	decision TEXT NOT NULL DEFAULT '',
+	reason TEXT NOT NULL DEFAULT '',
+	fingerprint TEXT NOT NULL DEFAULT '',
+	details TEXT NOT NULL DEFAULT '{}',
+	created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);`
+
+const indexBeadsSyncMapTask = `CREATE INDEX IF NOT EXISTS idx_beads_sync_map_task ON beads_sync_map(task_id);`
+const indexBeadsSyncOutboxStateNext = `CREATE INDEX IF NOT EXISTS idx_beads_sync_outbox_state_next ON beads_sync_outbox(state, next_attempt_at, id);`
+const indexBeadsSyncAuditProjectCreated = `CREATE INDEX IF NOT EXISTS idx_beads_sync_audit_project_created ON beads_sync_audit(project, created_at DESC);`
+const indexBeadsSyncAuditIssue = `CREATE INDEX IF NOT EXISTS idx_beads_sync_audit_issue ON beads_sync_audit(project, issue_id, created_at DESC);`
+
 const taskColumns = `id, title, description, status, priority, type, assignee, labels,
 	estimate_minutes, parent_id, acceptance, project, error_log, metadata,
 	actual_duration_sec, iterations_used, created_at, updated_at`
@@ -78,7 +133,23 @@ const taskColumns = `id, title, description, status, priority, type, assignee, l
 // EnsureSchema creates the tasks, task_edges, and task_targets tables
 // if they don't exist, and runs any necessary migrations.
 func (d *DAG) EnsureSchema(ctx context.Context) error {
-	for _, ddl := range []string{taskTableSchema, edgeTableSchema, taskTargetsSchema, decisionsTableSchema, decisionAlternativesTableSchema, indexDecisionsTaskID, indexAlternativesDecisionID} {
+	for _, ddl := range []string{
+		taskTableSchema,
+		edgeTableSchema,
+		taskTargetsSchema,
+		decisionsTableSchema,
+		decisionAlternativesTableSchema,
+		indexDecisionsTaskID,
+		indexAlternativesDecisionID,
+		beadsSyncMapTableSchema,
+		beadsSyncOutboxTableSchema,
+		beadsSyncCursorTableSchema,
+		beadsSyncAuditTableSchema,
+		indexBeadsSyncMapTask,
+		indexBeadsSyncOutboxStateNext,
+		indexBeadsSyncAuditProjectCreated,
+		indexBeadsSyncAuditIssue,
+	} {
 		if _, err := d.db.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("ensure schema: %w", err)
 		}

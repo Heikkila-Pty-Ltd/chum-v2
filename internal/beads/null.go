@@ -43,3 +43,7 @@ func (n *NullStore) Update(_ context.Context, _ string, _ map[string]string) err
 func (n *NullStore) Children(_ context.Context, _ string) ([]Issue, error) {
 	return nil, nil
 }
+
+func (n *NullStore) AddDependency(_ context.Context, _, _ string) error {
+	return nil
+}

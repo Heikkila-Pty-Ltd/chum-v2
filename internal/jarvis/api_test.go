@@ -37,6 +37,27 @@ func TestAPISubmit(t *testing.T) {
 	}
 }
 
+func TestAPISubmit_BlockedByIngressPolicy(t *testing.T) {
+	d := testDAG(t)
+	e := NewEngine(d, nil, "test-queue", map[string]string{"chum": "/tmp/chum"}, testLogger())
+	api := &API{Engine: e, Logger: testLogger(), IngressPolicy: "beads_first"}
+
+	body, _ := json.Marshal(WorkRequest{
+		Title:       "API test task",
+		Description: "Test via API",
+		Project:     "chum",
+		Source:      "api-test",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/jarvis/submit", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body = %s", w.Code, w.Body.String())
+	}
+}
+
 func TestAPISubmitBadProject(t *testing.T) {
 	d := testDAG(t)
 	e := NewEngine(d, nil, "test-queue", map[string]string{"chum": "/tmp/chum"}, testLogger())

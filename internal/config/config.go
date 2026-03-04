@@ -42,12 +42,13 @@ type RateLimit struct {
 
 // Config is the top-level CHUM configuration.
 type Config struct {
-	General   General             `toml:"general"`
-	Planning  Planning            `toml:"planning"`
-	Projects  map[string]Project  `toml:"projects"`
-	Providers map[string]Provider `toml:"providers"`
-	Tiers     Tiers               `toml:"tiers"`
-	RateLimit RateLimit           `toml:"rate_limit"`
+	General     General             `toml:"general"`
+	Planning    Planning            `toml:"planning"`
+	BeadsBridge BeadsBridge         `toml:"beads_bridge"`
+	Projects    map[string]Project  `toml:"projects"`
+	Providers   map[string]Provider `toml:"providers"`
+	Tiers       Tiers               `toml:"tiers"`
+	RateLimit   RateLimit           `toml:"rate_limit"`
 }
 
 // Tiers maps tier names to ordered lists of provider keys.
@@ -68,6 +69,15 @@ type Planning struct {
 	AllowedSenders    []string `toml:"allowed_senders"` // Matrix user IDs allowed to issue /plan commands (empty = allow all)
 }
 
+// BeadsBridge configures Beads-first bridge behavior.
+type BeadsBridge struct {
+	Enabled           bool     `toml:"enabled"`
+	DryRun            bool     `toml:"dry_run"`
+	CanaryLabel       string   `toml:"canary_label"`
+	ReconcileInterval Duration `toml:"reconcile_interval"`
+	IngressPolicy     string   `toml:"ingress_policy"` // legacy | beads_first | beads_only
+}
+
 // General holds scheduler-level settings.
 type General struct {
 	TickInterval      Duration `toml:"tick_interval"`
@@ -81,8 +91,8 @@ type General struct {
 	MatrixAccessToken string   `toml:"matrix_access_token"`
 	MatrixHomeserver  string   `toml:"matrix_homeserver"`
 
-	ExecTimeout  Duration `toml:"exec_timeout"`   // LLM execution timeout (default: 45m)
-	ShortTimeout Duration `toml:"short_timeout"`  // short ops like push/PR (default: 2m)
+	ExecTimeout   Duration `toml:"exec_timeout"`   // LLM execution timeout (default: 45m)
+	ShortTimeout  Duration `toml:"short_timeout"`  // short ops like push/PR (default: 2m)
 	ReviewTimeout Duration `toml:"review_timeout"` // review activity timeout (default: 10m)
 
 	DoltHealthCheckEnabled  bool     `toml:"dolt_health_check_enabled"`
@@ -183,6 +193,16 @@ func Load(path string) (*Config, error) {
 	if cfg.Planning.PollInterval.Duration == 0 {
 		cfg.Planning.PollInterval.Duration = 10 * time.Second
 	}
+	// Beads bridge defaults
+	if strings.TrimSpace(cfg.BeadsBridge.CanaryLabel) == "" {
+		cfg.BeadsBridge.CanaryLabel = "chum-canary"
+	}
+	if cfg.BeadsBridge.ReconcileInterval.Duration == 0 {
+		cfg.BeadsBridge.ReconcileInterval.Duration = 15 * time.Minute
+	}
+	if strings.TrimSpace(cfg.BeadsBridge.IngressPolicy) == "" {
+		cfg.BeadsBridge.IngressPolicy = "beads_first"
+	}
 	// Rate limiting defaults
 	if cfg.RateLimit.DefaultRate == 0 {
 		cfg.RateLimit.DefaultRate = 10
@@ -197,8 +217,37 @@ func Load(path string) (*Config, error) {
 	if len(cfg.Tiers.Fast) == 0 && len(cfg.Tiers.Balanced) == 0 && len(cfg.Tiers.Premium) == 0 {
 		cfg.Tiers = buildTiersFromProviders(cfg.Providers)
 	}
+	if err := validate(&cfg); err != nil {
+		return nil, err
+	}
 
 	return &cfg, nil
+}
+
+func validate(cfg *Config) error {
+	switch strings.ToLower(strings.TrimSpace(cfg.BeadsBridge.IngressPolicy)) {
+	case "legacy", "beads_first", "beads-only", "beads_only":
+		// Normalize aliases to stable internal values.
+		if strings.EqualFold(cfg.BeadsBridge.IngressPolicy, "beads-only") {
+			cfg.BeadsBridge.IngressPolicy = "beads_only"
+		} else {
+			cfg.BeadsBridge.IngressPolicy = strings.ToLower(strings.TrimSpace(cfg.BeadsBridge.IngressPolicy))
+		}
+	default:
+		return fmt.Errorf("invalid beads_bridge.ingress_policy %q (allowed: legacy, beads_first, beads_only)", cfg.BeadsBridge.IngressPolicy)
+	}
+
+	cfg.BeadsBridge.CanaryLabel = strings.TrimSpace(cfg.BeadsBridge.CanaryLabel)
+	if cfg.BeadsBridge.CanaryLabel == "" {
+		return fmt.Errorf("invalid beads_bridge.canary_label: must be non-empty")
+	}
+	if strings.ContainsAny(cfg.BeadsBridge.CanaryLabel, " \t\r\n") {
+		return fmt.Errorf("invalid beads_bridge.canary_label %q: must not contain whitespace", cfg.BeadsBridge.CanaryLabel)
+	}
+	if cfg.BeadsBridge.ReconcileInterval.Duration <= 0 {
+		return fmt.Errorf("invalid beads_bridge.reconcile_interval %q: must be > 0", cfg.BeadsBridge.ReconcileInterval.Duration)
+	}
+	return nil
 }
 
 // buildTiersFromProviders auto-populates Tiers from Provider.Tier fields

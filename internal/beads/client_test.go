@@ -23,6 +23,9 @@ func TestNewReadOnlyClient_BlocksWrites(t *testing.T) {
 	if err := c.Update(ctx, "test-123", map[string]string{"status": "done"}); err == nil {
 		t.Error("Update should fail on read-only client")
 	}
+	if err := c.AddDependency(ctx, "test-123", "test-456"); err == nil {
+		t.Error("AddDependency should fail on read-only client")
+	}
 }
 
 func TestUpdate_UnsupportedField(t *testing.T) {

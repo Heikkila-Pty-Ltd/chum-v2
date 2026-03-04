@@ -11,6 +11,7 @@ type Store interface {
 	Create(ctx context.Context, params CreateParams) (string, error)
 	Update(ctx context.Context, issueID string, fields map[string]string) error
 	Children(ctx context.Context, parentID string) ([]Issue, error)
+	AddDependency(ctx context.Context, issueID, dependsOnID string) error
 }
 
 // Verify Client implements Store at compile time.

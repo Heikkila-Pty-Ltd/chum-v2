@@ -64,4 +64,8 @@ func TestNullStoreOperations(t *testing.T) {
 	if len(children) != 0 {
 		t.Errorf("expected empty children, got %d", len(children))
 	}
+
+	if err := ns.AddDependency(ctx, "issue-1", "issue-2"); err != nil {
+		t.Fatalf("AddDependency error: %v", err)
+	}
 }
