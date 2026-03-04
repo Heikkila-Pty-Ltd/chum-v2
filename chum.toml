@@ -21,7 +21,7 @@ enabled = true
 dry_run = false
 canary_label = "chum-canary"
 reconcile_interval = "15m"
-ingress_policy = "beads_first"
+ingress_policy = "beads_only"
 
 [projects.chum]
 enabled = true

@@ -49,3 +49,56 @@ func TestDefaultProject_EmptyOrNil(t *testing.T) {
 		t.Fatalf("defaultProject(empty) = %q, want empty", got)
 	}
 }
+
+func TestDirectTaskIngressBlocked(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cfg  *config.Config
+		want bool
+	}{
+		{
+			name: "nil config",
+			cfg:  nil,
+			want: false,
+		},
+		{
+			name: "bridge disabled",
+			cfg: &config.Config{
+				BeadsBridge: config.BeadsBridge{Enabled: false, IngressPolicy: "beads_only"},
+			},
+			want: false,
+		},
+		{
+			name: "legacy policy",
+			cfg: &config.Config{
+				BeadsBridge: config.BeadsBridge{Enabled: true, IngressPolicy: "legacy"},
+			},
+			want: false,
+		},
+		{
+			name: "beads only policy",
+			cfg: &config.Config{
+				BeadsBridge: config.BeadsBridge{Enabled: true, IngressPolicy: "beads_only"},
+			},
+			want: true,
+		},
+		{
+			name: "beads first policy",
+			cfg: &config.Config{
+				BeadsBridge: config.BeadsBridge{Enabled: true, IngressPolicy: "beads_first"},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := directTaskIngressBlocked(tt.cfg)
+			if got != tt.want {
+				t.Fatalf("directTaskIngressBlocked() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}

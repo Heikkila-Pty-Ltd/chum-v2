@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
@@ -67,7 +66,7 @@ func (a *API) Handler() http.Handler {
 
 func (a *API) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	if ingressBlocked(a.IngressPolicy, r) {
-		a.jsonError(w, "direct submit blocked by beads bridge ingress policy; route through `chum submit` or system caller", http.StatusForbidden)
+		a.jsonError(w, "direct submit blocked by beads bridge ingress policy; route through `chum submit`", http.StatusForbidden)
 		return
 	}
 
@@ -145,9 +144,11 @@ func (a *API) jsonError(w http.ResponseWriter, msg string, code int) {
 }
 
 func ingressBlocked(policy string, r *http.Request) bool {
-	p := strings.ToLower(strings.TrimSpace(policy))
-	if p == "" || p == "legacy" {
+	_ = r // reserved for future request-scoped policy exceptions
+	switch policy {
+	case "", "legacy":
 		return false
+	default:
+		return true
 	}
-	return !strings.EqualFold(strings.TrimSpace(r.Header.Get("X-CHUM-System-Caller")), "true")
 }
