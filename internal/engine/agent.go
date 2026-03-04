@@ -81,9 +81,10 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	}
 	defer cleanup()
 
-	// execResult is declared here so closeAndTrace can capture token telemetry.
-	// It's populated later by ExecuteActivity; pre-close calls see zero values.
-	var execResult ExecResult
+	// Token/cost accumulators — summed across all execution attempts
+	// (initial exec + re-executions after review changes_requested).
+	var totalInputTokens, totalOutputTokens int
+	var totalCostUSD float64
 
 	// closeAndTrace wraps closeAndNotify and records an execution trace.
 	closeAndTrace := func(detail CloseDetail) error {
@@ -100,9 +101,9 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 				Reason:       string(detail.Reason),
 				SubReason:    detail.SubReason,
 				Duration:     workflow.Now(ctx).Sub(startTime),
-				InputTokens:  execResult.InputTokens,
-				OutputTokens: execResult.OutputTokens,
-				CostUSD:      execResult.CostUSD,
+				InputTokens:  totalInputTokens,
+				OutputTokens: totalOutputTokens,
+				CostUSD:      totalCostUSD,
 			}).Get(ctx, nil)
 		}
 		return cerr
@@ -170,6 +171,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 
 	// === EXECUTE ===
 	execCtx := workflow.WithActivityOptions(ctx, execOpts)
+	var execResult ExecResult
 	if err := workflow.ExecuteActivity(execCtx, a.ExecuteActivity, req).Get(ctx, &execResult); err != nil {
 		logger.Error("Execute failed", "error", err)
 		if cerr := closeAndTrace(CloseDetail{
@@ -180,6 +182,9 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		}
 		return fmt.Errorf("execute failed: %w", err)
 	}
+	totalInputTokens += execResult.InputTokens
+	totalOutputTokens += execResult.OutputTokens
+	totalCostUSD += execResult.CostUSD
 	logger.Info("Execute complete", "ExitCode", execResult.ExitCode)
 
 	// === DOD CHECK ===
@@ -356,7 +361,8 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			}
 			req.Prompt = augmentPromptWithReviewFeedback(req.Prompt, round, feedback)
 
-			if err := workflow.ExecuteActivity(execCtx, a.ExecuteActivity, req).Get(ctx, &execResult); err != nil {
+			var reExecResult ExecResult
+			if err := workflow.ExecuteActivity(execCtx, a.ExecuteActivity, req).Get(ctx, &reExecResult); err != nil {
 				logger.Error("Re-execute failed after review changes", "error", err)
 				return closeAndTrace(CloseDetail{
 					Reason:    CloseNeedsReview,
@@ -365,6 +371,9 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 					ReviewURL: state.ReviewURL,
 				})
 			}
+			totalInputTokens += reExecResult.InputTokens
+			totalOutputTokens += reExecResult.OutputTokens
+			totalCostUSD += reExecResult.CostUSD
 			if err := workflow.ExecuteActivity(dodCtx, a.DoDCheckActivity, req.WorkDir, req.Project).Get(ctx, &dodResult); err != nil {
 				logger.Error("DoD error after review changes", "error", err)
 				return closeAndTrace(CloseDetail{

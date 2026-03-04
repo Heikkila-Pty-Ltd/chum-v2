@@ -1,6 +1,10 @@
 package perf
 
-import "database/sql"
+import (
+	"database/sql"
+	"fmt"
+	"strings"
+)
 
 const schema = `
 CREATE TABLE IF NOT EXISTS perf_runs (
@@ -19,8 +23,8 @@ CREATE INDEX IF NOT EXISTS idx_perf_runs_provider ON perf_runs(provider_key);
 `
 
 // v2 adds token and cost columns. ALTER TABLE ADD COLUMN is idempotent in
-// practice: if the column already exists, SQLite returns an error that we
-// silently swallow.
+// practice: if the column already exists, SQLite returns "duplicate column"
+// which we ignore. Any other error (lock, I/O) is surfaced.
 var v2Columns = []string{
 	"ALTER TABLE perf_runs ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0",
 	"ALTER TABLE perf_runs ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0",
@@ -32,9 +36,14 @@ func Migrate(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return err
 	}
-	// v2: add token/cost columns (ignore "duplicate column" errors).
+	// v2: add token/cost columns (ignore "duplicate column" errors only).
 	for _, alter := range v2Columns {
-		_, _ = db.Exec(alter)
+		if _, err := db.Exec(alter); err != nil {
+			if strings.Contains(err.Error(), "duplicate column") {
+				continue
+			}
+			return fmt.Errorf("perf migration: %w", err)
+		}
 	}
 	return nil
 }
