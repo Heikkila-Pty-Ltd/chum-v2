@@ -649,10 +649,7 @@ func parseDriftAllowlist(raw string) map[beadsbridge.DriftClass]bool {
 
 func countRunningTasks(ctx context.Context, d *dag.DAG, cfg *config.Config) (int, error) {
 	total := 0
-	for projectName, project := range cfg.Projects {
-		if !project.Enabled {
-			continue
-		}
+	for projectName := range cfg.Projects {
 		tasks, err := d.ListTasks(ctx, projectName, string(types.StatusRunning))
 		if err != nil {
 			return 0, fmt.Errorf("list running tasks for %s: %w", projectName, err)
