@@ -139,7 +139,8 @@ func ensureScheduleActive(ctx context.Context, schedClient client.ScheduleClient
 
 	paused, err := scheduleShouldPause(ctx, spec)
 	if err != nil {
-		activationErrs = append(activationErrs, fmt.Errorf("resolve pause state for schedule %s: %w", spec.ID, err))
+		// Fail-closed: if we can't determine pause state, don't unpause/trigger.
+		return fmt.Errorf("resolve pause state for schedule %s: %w", spec.ID, err)
 	}
 	if paused {
 		// Global pause: keep the schedule paused, do not trigger.
