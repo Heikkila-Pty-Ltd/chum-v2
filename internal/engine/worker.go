@@ -47,10 +47,10 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 
 	w := worker.New(c, cfg.General.TaskQueue, worker.Options{})
 
-	// Open trace store and perf tracker.
+	// Open trace store and perf tracker (best-effort — worker runs without tracing).
 	traceStore, tracker, err := openTraceStore(cfg, logger)
 	if err != nil {
-		return fmt.Errorf("open trace store: %w", err)
+		logger.Warn("Trace store unavailable, continuing without tracing", "error", err)
 	}
 	if traceStore != nil {
 		defer traceStore.Close()

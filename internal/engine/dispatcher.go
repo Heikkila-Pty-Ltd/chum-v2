@@ -194,18 +194,29 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 }
 
 // pickProvider tries perf-informed UCT selection first, then falls back to config.
+// Perf picks are validated against enabled providers — stale/disabled providers are ignored.
 func (da *DispatchActivities) pickProvider(ctx context.Context, tier string) (cli, model, resolvedTier string) {
 	if da.Perf != nil {
 		logger := activity.GetLogger(ctx)
 		p, err := da.Perf.Pick(ctx, tier)
 		if err != nil {
 			logger.Warn("Perf provider selection failed, using config", "tier", tier, "error", err)
-		} else if p != nil {
+		} else if p != nil && da.isProviderEnabled(p.Agent) {
 			logger.Info("Perf-informed provider selected", "agent", p.Agent, "model", p.Model, "tier", p.Tier)
 			return p.Agent, p.Model, p.Tier
 		}
 	}
 	return PickProvider(da.Config, tier)
+}
+
+// isProviderEnabled checks if an agent CLI is enabled in the current config.
+func (da *DispatchActivities) isProviderEnabled(agent string) bool {
+	for _, p := range da.Config.Providers {
+		if p.Enabled && p.CLI == agent {
+			return true
+		}
+	}
+	return false
 }
 
 // pullMaster fetches and fast-forwards master so agents start from the latest code.
