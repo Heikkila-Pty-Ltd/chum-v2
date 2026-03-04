@@ -241,6 +241,18 @@ func main() {
 			}
 		}
 
+		// Validate timing flags before mutating any state.
+		if !noWait {
+			if timeout <= 0 {
+				fmt.Fprintln(os.Stderr, "Error: --timeout must be > 0 when waiting for drain")
+				os.Exit(1)
+			}
+			if poll <= 0 {
+				fmt.Fprintln(os.Stderr, "Error: --poll must be > 0")
+				os.Exit(1)
+			}
+		}
+
 		c, err := engine.DialTemporal(cfg, logger)
 		if err != nil {
 			logger.Error("Failed to connect to Temporal", "error", err)
@@ -265,15 +277,6 @@ func main() {
 		if noWait {
 			fmt.Println("Skipping drain wait (--no-wait).")
 			return
-		}
-
-		if timeout <= 0 {
-			fmt.Fprintln(os.Stderr, "Error: --timeout must be > 0 when waiting for drain")
-			os.Exit(1)
-		}
-		if poll <= 0 {
-			fmt.Fprintln(os.Stderr, "Error: --poll must be > 0")
-			os.Exit(1)
 		}
 
 		fmt.Printf("Waiting for running workflows to drain (timeout=%s, poll=%s)\n", timeout, poll)

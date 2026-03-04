@@ -38,13 +38,22 @@ func (a *API) handleSystemPause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Snapshot prior DB state so we can restore on rollback.
+	prevPaused, prevSet, err := a.DAG.IsGlobalPauseSet(r.Context())
+	if err != nil {
+		a.jsonError(w, fmt.Sprintf("read pause state: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	if err := a.DAG.SetGlobalPaused(r.Context(), true); err != nil {
 		a.jsonError(w, fmt.Sprintf("set global pause: %v", err), http.StatusInternalServerError)
 		return
 	}
 	if err := a.pauseDispatcherSchedule(r.Context(), reason); err != nil {
-		// Roll back DB state since schedule pause failed.
-		_ = a.DAG.SetGlobalPaused(r.Context(), false)
+		// Restore prior DB state since schedule pause failed.
+		if prevSet {
+			_ = a.DAG.SetGlobalPaused(r.Context(), prevPaused)
+		}
 		a.jsonError(w, fmt.Sprintf("schedule pause failed (DB state rolled back): %v", err), http.StatusInternalServerError)
 		return
 	}
