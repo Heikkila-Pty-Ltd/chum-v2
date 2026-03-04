@@ -35,8 +35,7 @@ go build -o chum ./cmd/chum
 sudo systemctl restart chum-v2.service
 
 # 4) Resume dispatch
-temporal schedule toggle -n chum-v2 -s chum-v2-dispatcher --unpause --reason "upgrade complete"
-temporal schedule trigger -n chum-v2 -s chum-v2-dispatcher
+./chum resume --reason "upgrade complete" --config /home/ubuntu/projects/chum/chum.toml
 ```
 
 Fast pause (no drain wait):

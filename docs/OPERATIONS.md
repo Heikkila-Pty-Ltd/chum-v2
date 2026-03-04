@@ -28,8 +28,7 @@ sudo systemctl restart chum-v2.service
 systemctl is-active chum-v2.service
 
 # 4) Resume dispatch
-temporal schedule toggle -n chum-v2 -s chum-v2-dispatcher --unpause --reason "upgrade complete"
-temporal schedule trigger -n chum-v2 -s chum-v2-dispatcher
+./chum resume --reason "upgrade complete" --config /home/ubuntu/projects/chum/chum.toml
 ```
 
 ## Pause Without Waiting
@@ -63,6 +62,14 @@ temporal schedule describe -n chum-v2 -s chum-v2-dispatcher | sed -n '1,80p'
 Defaults:
 
 - `--reason`: `"chum shutdown requested"`
-- `--timeout`: `30m`
-- `--poll`: `10s`
+- `--timeout`: `45m`
+- `--poll`: `15s`
 - `--schedule-id`: `chum-v2-dispatcher`
+
+## New CLI: `chum resume`
+
+```bash
+./chum resume [--reason TEXT] [--schedule-id ID]
+```
+
+This clears DB-backed global pause, unpauses the dispatcher schedule, and triggers an immediate dispatch tick.
