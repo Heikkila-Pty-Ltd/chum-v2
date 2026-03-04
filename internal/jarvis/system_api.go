@@ -31,12 +31,21 @@ func (a *API) handleSystemPause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Verify Temporal is reachable before persisting DB state to avoid
+	// writing a hidden pause when the schedule call will inevitably fail.
+	if _, err := a.dispatcherScheduleHandle(r.Context()); err != nil {
+		a.jsonError(w, fmt.Sprintf("temporal unavailable: %v", err), http.StatusServiceUnavailable)
+		return
+	}
+
 	if err := a.DAG.SetGlobalPaused(r.Context(), true); err != nil {
 		a.jsonError(w, fmt.Sprintf("set global pause: %v", err), http.StatusInternalServerError)
 		return
 	}
 	if err := a.pauseDispatcherSchedule(r.Context(), reason); err != nil {
-		a.jsonError(w, fmt.Sprintf("global pause enabled but schedule pause failed: %v", err), http.StatusInternalServerError)
+		// Roll back DB state since schedule pause failed.
+		_ = a.DAG.SetGlobalPaused(r.Context(), false)
+		a.jsonError(w, fmt.Sprintf("schedule pause failed (DB state rolled back): %v", err), http.StatusInternalServerError)
 		return
 	}
 

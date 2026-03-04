@@ -396,8 +396,8 @@ func TestSystemPause(t *testing.T) {
 	schedClient := temporalmocks.NewScheduleClient(t)
 	handle := temporalmocks.NewScheduleHandle(t)
 
-	tc.On("ScheduleClient").Return(schedClient).Once()
-	schedClient.On("GetHandle", mock.Anything, engine.DispatcherScheduleID).Return(handle).Once()
+	tc.On("ScheduleClient").Return(schedClient)
+	schedClient.On("GetHandle", mock.Anything, engine.DispatcherScheduleID).Return(handle)
 	handle.On("Pause", mock.Anything, client.SchedulePauseOptions{
 		Note: "paused via API",
 	}).Return(nil).Once()

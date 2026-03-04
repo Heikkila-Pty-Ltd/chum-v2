@@ -293,7 +293,7 @@ func main() {
 				fmt.Printf("Recovered %d zombie running task(s) while draining.\n", recovered)
 			}
 
-			running, err := countRunningTasks(context.Background(), d, cfg)
+			running, err := countRunningTasks(context.Background(), d)
 			if err != nil {
 				logger.Error("Failed to count running tasks", "error", err)
 				os.Exit(1)
@@ -647,14 +647,6 @@ func parseDriftAllowlist(raw string) map[beadsbridge.DriftClass]bool {
 	return allow
 }
 
-func countRunningTasks(ctx context.Context, d *dag.DAG, cfg *config.Config) (int, error) {
-	total := 0
-	for projectName := range cfg.Projects {
-		tasks, err := d.ListTasks(ctx, projectName, string(types.StatusRunning))
-		if err != nil {
-			return 0, fmt.Errorf("list running tasks for %s: %w", projectName, err)
-		}
-		total += len(tasks)
-	}
-	return total, nil
+func countRunningTasks(ctx context.Context, d *dag.DAG) (int, error) {
+	return d.CountTasksByStatus(ctx, string(types.StatusRunning))
 }
