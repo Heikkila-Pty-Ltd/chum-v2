@@ -201,7 +201,7 @@ func (da *DispatchActivities) pickProvider(ctx context.Context, tier string) (cl
 		p, err := da.Perf.Pick(ctx, tier)
 		if err != nil {
 			logger.Warn("Perf provider selection failed, using config", "tier", tier, "error", err)
-		} else if p != nil && da.isProviderEnabled(p.Agent) {
+		} else if p != nil && da.isProviderConfigured(p.Agent, p.Model) {
 			logger.Info("Perf-informed provider selected", "agent", p.Agent, "model", p.Model, "tier", p.Tier)
 			return p.Agent, p.Model, p.Tier
 		}
@@ -209,10 +209,16 @@ func (da *DispatchActivities) pickProvider(ctx context.Context, tier string) (cl
 	return PickProvider(da.Config, tier)
 }
 
-// isProviderEnabled checks if an agent CLI is enabled in the current config.
-func (da *DispatchActivities) isProviderEnabled(agent string) bool {
+// isProviderConfigured checks if an (agent, model) pair is enabled in the current config.
+// This prevents perf from selecting stale models after config rotation.
+func (da *DispatchActivities) isProviderConfigured(agent, model string) bool {
 	for _, p := range da.Config.Providers {
-		if p.Enabled && p.CLI == agent {
+		if !p.Enabled || p.CLI != agent {
+			continue
+		}
+		// If perf recorded no model (legacy data), accept any enabled CLI match.
+		// Otherwise require exact model match.
+		if model == "" || p.Model == model {
 			return true
 		}
 	}
