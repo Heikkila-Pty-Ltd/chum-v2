@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -64,13 +65,71 @@ func RegisterSchedule(ctx context.Context, c client.Client, spec ScheduleSpec, l
 		if strings.Contains(errMsg, "already exists") ||
 			strings.Contains(errMsg, "already registered") ||
 			strings.Contains(errMsg, "AlreadyExists") {
-			logger.Info("Schedule already exists", "id", spec.ID, "interval", spec.Interval)
-			return nil
+			logger.Info("Schedule already exists, updating", "id", spec.ID, "interval", spec.Interval)
+			return ensureScheduleActive(ctx, schedClient, spec, logger)
 		}
 		return fmt.Errorf("create schedule %s: %w", spec.ID, err)
 	}
 
 	logger.Info("Schedule registered", "id", spec.ID, "interval", spec.Interval)
+	return nil
+}
+
+// ensureScheduleActive updates an existing schedule's configuration and
+// unpauses it if necessary. Called when RegisterSchedule detects the
+// schedule already exists — this is the ch-16434 fix: without this,
+// paused or stale schedules would silently block dispatching.
+func ensureScheduleActive(ctx context.Context, schedClient client.ScheduleClient, spec ScheduleSpec, logger *slog.Logger) error {
+	handle := schedClient.GetHandle(ctx, spec.ID)
+	var activationErrs []error
+
+	// Update the schedule with the current configuration (handles tick_interval changes).
+	if err := handle.Update(ctx, client.ScheduleUpdateOptions{
+		DoUpdate: func(input client.ScheduleUpdateInput) (*client.ScheduleUpdate, error) {
+			input.Description.Schedule.Action = &client.ScheduleWorkflowAction{
+				Workflow:  spec.Workflow,
+				Args:      spec.Args,
+				TaskQueue: spec.TaskQueue,
+				ID:        spec.RunID,
+			}
+			input.Description.Schedule.Spec = &client.ScheduleSpec{
+				Intervals: []client.ScheduleIntervalSpec{
+					{Every: spec.Interval},
+				},
+			}
+			return &client.ScheduleUpdate{
+				Schedule: &input.Description.Schedule,
+			}, nil
+		},
+	}); err != nil {
+		logger.Warn("Failed to update schedule, continuing", "id", spec.ID, "error", err)
+		activationErrs = append(activationErrs, fmt.Errorf("update schedule %s: %w", spec.ID, err))
+	} else {
+		logger.Info("Schedule updated", "id", spec.ID, "interval", spec.Interval)
+	}
+
+	// Unpause — harmless if already active, critical if paused.
+	if err := handle.Unpause(ctx, client.ScheduleUnpauseOptions{
+		Note: "unpaused on chum serve startup",
+	}); err != nil {
+		logger.Warn("Failed to unpause schedule", "id", spec.ID, "error", err)
+		activationErrs = append(activationErrs, fmt.Errorf("unpause schedule %s: %w", spec.ID, err))
+	}
+
+	// Trigger an immediate run so ready tasks don't wait for the first tick.
+	if err := handle.Trigger(ctx, client.ScheduleTriggerOptions{
+		Overlap: enumspb.SCHEDULE_OVERLAP_POLICY_SKIP,
+	}); err != nil {
+		logger.Warn("Failed to trigger immediate schedule run", "id", spec.ID, "error", err)
+		activationErrs = append(activationErrs, fmt.Errorf("trigger schedule %s: %w", spec.ID, err))
+	} else {
+		logger.Info("Triggered immediate schedule run", "id", spec.ID)
+	}
+
+	if len(activationErrs) > 0 {
+		return fmt.Errorf("ensure schedule %s active: %w", spec.ID, errors.Join(activationErrs...))
+	}
+
 	return nil
 }
 
