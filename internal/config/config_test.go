@@ -106,8 +106,8 @@ enabled = false
 	if cfg.BeadsBridge.ReconcileInterval.Duration != 15*time.Minute {
 		t.Errorf("expected default reconcile interval 15m, got %v", cfg.BeadsBridge.ReconcileInterval.Duration)
 	}
-	if cfg.BeadsBridge.IngressPolicy != "beads_first" {
-		t.Errorf("expected default ingress policy beads_first, got %q", cfg.BeadsBridge.IngressPolicy)
+	if cfg.BeadsBridge.IngressPolicy != "beads_only" {
+		t.Errorf("expected default ingress policy beads_only, got %q", cfg.BeadsBridge.IngressPolicy)
 	}
 }
 

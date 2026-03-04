@@ -26,8 +26,8 @@ When `enabled=false`, CHUM behavior remains legacy and bridge logic is inert.
 ## Ingress policy
 
 - `legacy`: direct task creation is allowed
-- `beads_first`: Beads is canonical ingress for humans; direct ingress must be system-scoped
-- `beads_only`: direct non-system ingress is blocked
+- `beads_first`: Beads is canonical ingress; direct DAG ingress is blocked
+- `beads_only`: strict mode; direct DAG ingress is blocked
 
 ## Execution projection
 
@@ -42,4 +42,4 @@ Bridge persistence tracks deterministic admission/delivery state:
 
 - Routine status progression must not depend on `.morsels/*.md` file mutation.
 - Terminal and start state projection is driven by bridge outbox delivery.
-- Legacy direct-ingress paths are blocked when policy is `beads_first`/`beads_only`.
+- Legacy direct-ingress paths are blocked when policy is `beads_first` or `beads_only`.
