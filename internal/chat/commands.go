@@ -110,18 +110,22 @@ func ParseCommand(raw string) (Command, bool, error) {
 	case "prompt":
 		cmd := Command{Kind: CommandPrompt}
 		if len(args) > 0 {
-			if sid, ok := parseSessionToken(args[0]); ok {
-				cmd.SessionID = sid
+			sessionID, ok := parseSessionToken(args[0])
+			if !ok {
+				return Command{}, true, fmt.Errorf("invalid session token %q", args[0])
 			}
+			cmd.SessionID = sessionID
 		}
 		return cmd, true, nil
 
 	case "status":
 		cmd := Command{Kind: CommandStatus}
 		if len(args) > 0 {
-			if sid, ok := parseSessionToken(args[0]); ok {
-				cmd.SessionID = sid
+			sessionID, ok := parseSessionToken(args[0])
+			if !ok {
+				return Command{}, true, fmt.Errorf("invalid session token %q", args[0])
 			}
+			cmd.SessionID = sessionID
 		}
 		return cmd, true, nil
 
@@ -173,27 +177,33 @@ func ParseCommand(raw string) (Command, bool, error) {
 	case "go":
 		cmd := Command{Kind: CommandGo}
 		if len(args) > 0 {
-			if sid, ok := parseSessionToken(args[0]); ok {
-				cmd.SessionID = sid
+			sessionID, ok := parseSessionToken(args[0])
+			if !ok {
+				return Command{}, true, fmt.Errorf("invalid session token %q", args[0])
 			}
+			cmd.SessionID = sessionID
 		}
 		return cmd, true, nil
 
 	case "approve":
 		cmd := Command{Kind: CommandApprove}
 		if len(args) > 0 {
-			if sid, ok := parseSessionToken(args[0]); ok {
-				cmd.SessionID = sid
+			sessionID, ok := parseSessionToken(args[0])
+			if !ok {
+				return Command{}, true, fmt.Errorf("invalid session token %q", args[0])
 			}
+			cmd.SessionID = sessionID
 		}
 		return cmd, true, nil
 
 	case "realign", "reject", "no":
 		cmd := Command{Kind: CommandRealign}
 		if len(args) > 0 {
-			if sid, ok := parseSessionToken(args[0]); ok {
-				cmd.SessionID = sid
+			sessionID, ok := parseSessionToken(args[0])
+			if !ok {
+				return Command{}, true, fmt.Errorf("invalid session token %q", args[0])
 			}
+			cmd.SessionID = sessionID
 		}
 		return cmd, true, nil
 
