@@ -201,7 +201,7 @@ func Load(path string) (*Config, error) {
 		cfg.BeadsBridge.ReconcileInterval.Duration = 15 * time.Minute
 	}
 	if strings.TrimSpace(cfg.BeadsBridge.IngressPolicy) == "" {
-		cfg.BeadsBridge.IngressPolicy = "beads_first"
+		cfg.BeadsBridge.IngressPolicy = "beads_only"
 	}
 	// Rate limiting defaults
 	if cfg.RateLimit.DefaultRate == 0 {

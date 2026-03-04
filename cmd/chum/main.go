@@ -218,7 +218,6 @@ func main() {
 		}
 		var project, title, description, status, acceptance string
 		var estimate int
-		systemCaller := false
 		for i := 3; i < len(os.Args); i++ {
 			switch os.Args[i] {
 			case "--project":
@@ -240,11 +239,9 @@ func main() {
 				v := requireFlagValue(os.Args, i)
 				i++
 				fmt.Sscanf(v, "%d", &estimate)
-			case "--system":
-				systemCaller = true
 			}
 		}
-		if cfg.BeadsBridge.Enabled && cfg.BeadsBridge.IngressPolicy != "legacy" && !systemCaller {
+		if directTaskIngressBlocked(cfg) {
 			fmt.Fprintf(os.Stderr, "Error: direct task ingress is blocked by beads bridge policy (%s). Use `chum submit <work.md>`.\n", cfg.BeadsBridge.IngressPolicy)
 			os.Exit(1)
 		}
@@ -468,6 +465,13 @@ func defaultProject(cfg *config.Config) string {
 		}
 	}
 	return ""
+}
+
+func directTaskIngressBlocked(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	return cfg.BeadsBridge.Enabled && strings.ToLower(strings.TrimSpace(cfg.BeadsBridge.IngressPolicy)) != "legacy"
 }
 
 func parseDriftAllowlist(raw string) map[beadsbridge.DriftClass]bool {
