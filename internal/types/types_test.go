@@ -30,9 +30,9 @@ func TestTruncate(t *testing.T) {
 func TestStatusConstants(t *testing.T) {
 	t.Parallel()
 	statuses := []string{
-		StatusOpen, StatusReady, StatusRunning, StatusCompleted,
-		StatusFailed, StatusDecomposed, StatusDoDFailed,
-		StatusNeedsRefinement, StatusStale,
+		string(StatusOpen), string(StatusReady), string(StatusRunning), string(StatusCompleted),
+		string(StatusFailed), string(StatusDecomposed), string(StatusDoDFailed),
+		string(StatusNeedsRefinement), string(StatusStale),
 	}
 	seen := make(map[string]bool)
 	for _, s := range statuses {

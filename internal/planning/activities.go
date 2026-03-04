@@ -393,7 +393,7 @@ func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, re
 			Acceptance:      step.Acceptance,
 			EstimateMinutes: step.Estimate,
 			Project:         req.Project,
-			Status:          types.StatusReady,
+			Status:          string(types.StatusReady),
 		})
 	}
 

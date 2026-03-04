@@ -228,7 +228,7 @@ func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID str
 		}
 	case CloseDecomposed:
 		if err := bc.Update(ctx, taskID, map[string]string{
-			"status": types.StatusDecomposed,
+			"status": string(types.StatusDecomposed),
 		}); err != nil {
 			logger.Warn("Beads decomposed writeback failed", "taskID", taskID, "error", err)
 		}

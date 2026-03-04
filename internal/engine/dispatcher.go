@@ -138,7 +138,7 @@ type DispatchActivities struct {
 // MarkTaskRunningActivity marks a task as "running" in the DAG.
 // Called before spawning the child workflow to prevent double-dispatch.
 func (da *DispatchActivities) MarkTaskRunningActivity(ctx context.Context, taskID string) error {
-	return da.DAG.UpdateTaskStatus(ctx, taskID, types.StatusRunning)
+	return da.DAG.UpdateTaskStatus(ctx, taskID, string(types.StatusRunning))
 }
 
 // ScanCandidatesActivity discovers ready tasks across all enabled projects.
