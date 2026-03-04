@@ -25,6 +25,7 @@ type mockTaskStore struct {
 	tasks          map[string][]dag.Task
 	statusUpdates  map[string]string // taskID -> new status
 	globalPaused   bool
+	globalPauseSet bool // true = DB row exists (SetGlobalPaused was called)
 	globalPauseErr error
 }
 
@@ -110,11 +111,16 @@ func (m *mockTaskStore) GetTaskTargets(ctx context.Context, taskID string) ([]da
 
 func (m *mockTaskStore) SetGlobalPaused(ctx context.Context, paused bool) error {
 	m.globalPaused = paused
+	m.globalPauseSet = true
 	return nil
 }
 
 func (m *mockTaskStore) IsGlobalPaused(ctx context.Context) (bool, error) {
 	return m.globalPaused, m.globalPauseErr
+}
+
+func (m *mockTaskStore) IsGlobalPauseSet(ctx context.Context) (bool, bool, error) {
+	return m.globalPaused, m.globalPauseSet, m.globalPauseErr
 }
 
 func (m *mockTaskStore) GetAllTargetsForStatuses(ctx context.Context, project string, statuses ...string) (map[string][]dag.TaskTarget, error) {
@@ -449,7 +455,8 @@ func TestScanCandidatesActivity_GlobalPauseSkipsCandidates(t *testing.T) {
 				{ID: "task-1", Description: "should be skipped"},
 			},
 		},
-		globalPaused: true,
+		globalPaused:   true,
+		globalPauseSet: true,
 	}
 	da := &DispatchActivities{
 		DAG: mockStore,
@@ -632,8 +639,9 @@ func TestScanZombieRunningActivity_GlobalPauseMovesToNeedsReview(t *testing.T) {
 				{ID: "zombie-paused", Status: string(types.StatusRunning)},
 			},
 		},
-		statusUpdates: make(map[string]string),
-		globalPaused:  true,
+		statusUpdates:  make(map[string]string),
+		globalPaused:   true,
+		globalPauseSet: true,
 	}
 	describer := &mockDescriber{responses: map[string]describeResult{}}
 

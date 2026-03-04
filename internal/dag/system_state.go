@@ -30,23 +30,32 @@ func (d *DAG) SetGlobalPaused(ctx context.Context, paused bool) error {
 }
 
 // IsGlobalPaused reports whether system-wide dispatch is paused.
+// Returns false when no DB row exists (use IsGlobalPauseSet to
+// distinguish "unset" from "explicitly unpaused").
 func (d *DAG) IsGlobalPaused(ctx context.Context) (bool, error) {
+	paused, _, err := d.IsGlobalPauseSet(ctx)
+	return paused, err
+}
+
+// IsGlobalPauseSet returns the DB pause state and whether the key
+// exists. When isSet is false, callers should fall back to config.
+func (d *DAG) IsGlobalPauseSet(ctx context.Context) (paused bool, isSet bool, err error) {
 	var raw string
-	err := d.db.QueryRowContext(ctx,
+	err = d.db.QueryRowContext(ctx,
 		"SELECT value FROM system_state WHERE key = ?",
 		globalPauseStateKey,
 	).Scan(&raw)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return false, nil
+			return false, false, nil
 		}
-		return false, fmt.Errorf("read global pause state: %w", err)
+		return false, false, fmt.Errorf("read global pause state: %w", err)
 	}
 
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "1", "true", "yes", "on":
-		return true, nil
+		return true, true, nil
 	default:
-		return false, nil
+		return false, true, nil
 	}
 }

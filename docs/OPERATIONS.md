@@ -73,3 +73,5 @@ Defaults:
 ```
 
 This clears DB-backed global pause, unpauses the dispatcher schedule, and triggers an immediate dispatch tick.
+
+Note: DB pause state overrides `general.paused` in `chum.toml`. After `chum resume` writes `global_pause=0` to the DB, the worker honors that even if `chum.toml` still has `paused = true`. To re-pause, use `chum shutdown` or `POST /api/system/pause`.

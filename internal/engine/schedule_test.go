@@ -263,6 +263,6 @@ type staticPauseReader struct {
 	err    error
 }
 
-func (s staticPauseReader) IsGlobalPaused(context.Context) (bool, error) {
-	return s.paused, s.err
+func (s staticPauseReader) IsGlobalPauseSet(context.Context) (bool, bool, error) {
+	return s.paused, true, s.err
 }
