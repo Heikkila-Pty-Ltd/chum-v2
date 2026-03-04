@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"go.temporal.io/api/enums/v1"
@@ -15,6 +16,8 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beadsbridge"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/perf"
@@ -92,6 +95,10 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 			logger.Error("Failed to start agent workflow", "TaskID", c.TaskID, "error", err)
 			continue
 		}
+		startCtx := workflow.WithActivityOptions(ctx, scanOpts)
+		if err := workflow.ExecuteActivity(startCtx, da.RecordDispatchStartActivity, c.TaskID, childExecution.ID).Get(ctx, nil); err != nil {
+			logger.Warn("Failed to enqueue start projection event", "TaskID", c.TaskID, "error", err)
+		}
 		logger.Info("Dispatched agent", "TaskID", c.TaskID, "Agent", c.Agent, "Tier", c.Tier, "ChildWorkflowID", childExecution.ID)
 	}
 
@@ -147,17 +154,45 @@ type DispatchCandidate struct {
 
 // DispatchActivities holds dependencies for dispatch-related activities.
 type DispatchActivities struct {
-	DAG      dag.TaskStore
-	Config   *config.Config
-	Logger   *slog.Logger
-	Perf     *perf.Tracker     // performance-based provider selection (nil = config-only)
+	DAG          dag.TaskStore
+	Config       *config.Config
+	Logger       *slog.Logger
+	Perf         *perf.Tracker // performance-based provider selection (nil = config-only)
+	BeadsClients map[string]beads.Store
+
 	Temporal WorkflowDescriber // for checking workflow liveness (nil = skip zombie scan)
+
+	reconcileMu   sync.Mutex
+	lastReconcile map[string]time.Time
 }
 
 // MarkTaskRunningActivity marks a task as "running" in the DAG.
 // Called before spawning the child workflow to prevent double-dispatch.
 func (da *DispatchActivities) MarkTaskRunningActivity(ctx context.Context, taskID string) error {
 	return da.DAG.UpdateTaskStatus(ctx, taskID, string(types.StatusRunning))
+}
+
+// RecordDispatchStartActivity emits an idempotent start projection event.
+func (da *DispatchActivities) RecordDispatchStartActivity(ctx context.Context, taskID, workflowID string) error {
+	if da.Config == nil || !da.Config.BeadsBridge.Enabled || da.Config.BeadsBridge.DryRun {
+		return nil
+	}
+	bridgeDAG, ok := da.DAG.(*dag.DAG)
+	if !ok {
+		return nil
+	}
+	task, err := da.DAG.GetTask(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("load task for start projection: %w", err)
+	}
+	mapping, err := bridgeDAG.GetBeadsMappingByTask(ctx, task.Project, taskID)
+	if err != nil {
+		if dag.IsNoRows(err) {
+			return nil
+		}
+		return fmt.Errorf("resolve beads mapping for task %s: %w", taskID, err)
+	}
+	return beadsbridge.EnqueueTaskStarted(ctx, bridgeDAG, task.Project, mapping.IssueID, taskID, workflowID)
 }
 
 // ScanCandidatesActivity discovers ready tasks across all enabled projects.
@@ -167,6 +202,70 @@ func (da *DispatchActivities) ScanCandidatesActivity(ctx context.Context) ([]Dis
 	for projectName, project := range da.Config.Projects {
 		if !project.Enabled {
 			continue
+		}
+		if da.Config.BeadsBridge.Enabled {
+			bridgeDAG, ok := da.DAG.(*dag.DAG)
+			if !ok {
+				da.Logger.Warn("Beads bridge enabled but DAG store does not support bridge primitives")
+			} else {
+				bc := da.BeadsClients[projectName]
+				if bc == nil {
+					da.Logger.Warn("Beads bridge enabled but project has no beads client", "project", projectName)
+				} else {
+					scanner := &beadsbridge.Scanner{
+						DAG:    bridgeDAG,
+						Config: da.Config.BeadsBridge,
+						Logger: da.Logger,
+					}
+					scanRes, err := scanner.ScanProject(ctx, projectName, bc)
+					if err != nil {
+						return nil, fmt.Errorf("beads bridge scan for %s: %w", projectName, err)
+					}
+					da.Logger.Info("Beads bridge scan complete",
+						"project", projectName,
+						"candidates", scanRes.Candidates,
+						"gate_passed", scanRes.GatePassed,
+						"admitted", scanRes.Admitted,
+						"updated", scanRes.Updated,
+						"deduped", scanRes.Deduped,
+						"edges_projected", scanRes.EdgesProjected,
+						"edges_pending", scanRes.EdgesPending,
+						"dry_run", scanRes.DryRun,
+					)
+
+					if !da.Config.BeadsBridge.DryRun {
+						outbox := &beadsbridge.OutboxWorker{
+							DAG:    bridgeDAG,
+							Logger: da.Logger,
+						}
+						processed, outErr := outbox.ProcessProject(ctx, projectName, bc, 25)
+						if outErr != nil {
+							return nil, fmt.Errorf("beads bridge outbox for %s: %w", projectName, outErr)
+						}
+						if processed > 0 {
+							da.Logger.Info("Beads bridge outbox delivery cycle complete",
+								"project", projectName,
+								"processed", processed,
+							)
+						}
+					}
+
+					if da.shouldRunReconcile(projectName) {
+						report, recErr := beadsbridge.ReconcileProject(ctx, bridgeDAG, bc, projectName, false, nil)
+						if recErr != nil {
+							return nil, fmt.Errorf("beads bridge reconcile for %s: %w", projectName, recErr)
+						}
+						da.markReconcileRun(projectName)
+						if len(report.Items) > 0 {
+							da.Logger.Info("Beads bridge reconcile drift report",
+								"project", projectName,
+								"count", len(report.Items),
+								"dry_run", report.DryRun,
+							)
+						}
+					}
+				}
+			}
 		}
 
 		// Pull latest master so agents start from current code
@@ -226,6 +325,28 @@ func (da *DispatchActivities) pickProvider(ctx context.Context, tier string) (cl
 		}
 	}
 	return PickProvider(da.Config, tier)
+}
+
+func (da *DispatchActivities) shouldRunReconcile(project string) bool {
+	if da.Config == nil || da.Config.BeadsBridge.ReconcileInterval.Duration <= 0 {
+		return false
+	}
+	da.reconcileMu.Lock()
+	defer da.reconcileMu.Unlock()
+	if da.lastReconcile == nil {
+		da.lastReconcile = make(map[string]time.Time)
+	}
+	last := da.lastReconcile[project]
+	return last.IsZero() || time.Since(last) >= da.Config.BeadsBridge.ReconcileInterval.Duration
+}
+
+func (da *DispatchActivities) markReconcileRun(project string) {
+	da.reconcileMu.Lock()
+	defer da.reconcileMu.Unlock()
+	if da.lastReconcile == nil {
+		da.lastReconcile = make(map[string]time.Time)
+	}
+	da.lastReconcile[project] = time.Now()
 }
 
 // isProviderConfigured checks if an (agent, model) pair is enabled in the current config.

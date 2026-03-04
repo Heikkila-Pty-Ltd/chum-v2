@@ -133,12 +133,16 @@ func (c *Client) Close(ctx context.Context, issueID, reason string) error {
 
 // CreateParams holds parameters for creating a new beads issue.
 type CreateParams struct {
-	Title       string
-	Description string
-	IssueType   string
-	Priority    int // -1 means unset (use CLI default); 0+ passed as -p flag
-	Labels      []string
-	ParentID    string
+	Title            string
+	Description      string
+	IssueType        string
+	Priority         int // -1 means unset (use CLI default); 0+ passed as -p flag
+	Labels           []string
+	ParentID         string
+	Acceptance       string
+	Design           string
+	EstimatedMinutes int
+	Dependencies     []string // beads issue IDs this issue depends on
 }
 
 // Create creates a new issue in beads and returns its ID.
@@ -162,6 +166,28 @@ func (c *Client) Create(ctx context.Context, params CreateParams) (string, error
 	if len(params.Labels) > 0 {
 		args = append(args, "--labels", strings.Join(params.Labels, ","))
 	}
+	if params.Acceptance != "" {
+		args = append(args, "--acceptance", params.Acceptance)
+	}
+	if params.Design != "" {
+		args = append(args, "--design", params.Design)
+	}
+	if params.EstimatedMinutes > 0 {
+		args = append(args, "--estimate", strconv.Itoa(params.EstimatedMinutes))
+	}
+	if len(params.Dependencies) > 0 {
+		deps := make([]string, 0, len(params.Dependencies))
+		for _, dep := range params.Dependencies {
+			dep = strings.TrimSpace(dep)
+			if dep == "" {
+				continue
+			}
+			deps = append(deps, dep)
+		}
+		if len(deps) > 0 {
+			args = append(args, "--deps", strings.Join(deps, ","))
+		}
+	}
 	out, err := c.run(ctx, args...)
 	if err != nil {
 		return "", err
@@ -175,7 +201,7 @@ func (c *Client) Create(ctx context.Context, params CreateParams) (string, error
 }
 
 // Update updates fields on an issue in beads.
-// Supported keys: "status", "title", "description", "acceptance", "priority", "estimate".
+// Supported keys: "status", "title", "description", "acceptance", "design", "priority", "estimate", "set_labels".
 func (c *Client) Update(ctx context.Context, issueID string, fields map[string]string) error {
 	if c.readOnly {
 		return errors.New("beads client is read-only")
@@ -191,10 +217,14 @@ func (c *Client) Update(ctx context.Context, issueID string, fields map[string]s
 			args = append(args, "-d", v)
 		case "acceptance":
 			args = append(args, "--acceptance", v)
+		case "design":
+			args = append(args, "--design", v)
 		case "priority":
 			args = append(args, "--priority", v)
 		case "estimate":
 			args = append(args, "--estimate", v)
+		case "set_labels":
+			args = append(args, "--set-labels", v)
 		default:
 			return fmt.Errorf("unsupported beads update field: %s", k)
 		}
@@ -213,6 +243,20 @@ func (c *Client) Children(ctx context.Context, parentID string) ([]Issue, error)
 		return nil, err
 	}
 	return decodeIssueList(out)
+}
+
+// AddDependency creates a dependency where issueID depends on dependsOnID.
+func (c *Client) AddDependency(ctx context.Context, issueID, dependsOnID string) error {
+	if c.readOnly {
+		return errors.New("beads client is read-only")
+	}
+	if strings.TrimSpace(issueID) == "" || strings.TrimSpace(dependsOnID) == "" {
+		return errors.New("issueID and dependsOnID are required")
+	}
+	if _, err := c.run(ctx, "dep", "add", issueID, dependsOnID); err != nil {
+		return fmt.Errorf("add dependency %s -> %s: %w", issueID, dependsOnID, err)
+	}
+	return nil
 }
 
 func (c *Client) run(ctx context.Context, args ...string) ([]byte, error) {
@@ -277,7 +321,6 @@ func decodeIssueList(out []byte) ([]Issue, error) {
 func extractJSON(out []byte) []byte {
 	return jsonutil.ExtractJSON(out)
 }
-
 
 func compact(out []byte) string {
 	s := strings.TrimSpace(string(out))

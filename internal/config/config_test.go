@@ -83,6 +83,79 @@ enabled = true
 	}
 }
 
+func TestLoadBeadsBridgeDefaults(t *testing.T) {
+	t.Parallel()
+	content := `
+[general]
+[beads_bridge]
+enabled = false
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chum.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.BeadsBridge.CanaryLabel != "chum-canary" {
+		t.Errorf("expected default canary label chum-canary, got %q", cfg.BeadsBridge.CanaryLabel)
+	}
+	if cfg.BeadsBridge.ReconcileInterval.Duration != 15*time.Minute {
+		t.Errorf("expected default reconcile interval 15m, got %v", cfg.BeadsBridge.ReconcileInterval.Duration)
+	}
+	if cfg.BeadsBridge.IngressPolicy != "beads_first" {
+		t.Errorf("expected default ingress policy beads_first, got %q", cfg.BeadsBridge.IngressPolicy)
+	}
+}
+
+func TestLoadBeadsBridgeValidation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "invalid ingress policy",
+			content: `
+[general]
+[beads_bridge]
+ingress_policy = "bad-value"
+`,
+		},
+		{
+			name: "invalid canary label whitespace",
+			content: `
+[general]
+[beads_bridge]
+canary_label = "bad label"
+`,
+		},
+		{
+			name: "invalid reconcile interval",
+			content: `
+[general]
+[beads_bridge]
+reconcile_interval = "-1s"
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "chum.toml")
+			if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
 func TestLoadCustomValues(t *testing.T) {
 	t.Parallel()
 	content := `

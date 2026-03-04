@@ -158,11 +158,12 @@ func registerEngineWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Confi
 	w.RegisterActivity(a.RecordTraceActivity)
 
 	da := &DispatchActivities{
-		DAG:      d,
-		Config:   cfg,
-		Logger:   logger,
-		Perf:     tracker,
-		Temporal: temporalClient,
+		DAG:          d,
+		Config:       cfg,
+		Logger:       logger,
+		Perf:         tracker,
+		BeadsClients: beadsClients,
+		Temporal:     temporalClient,
 	}
 	w.RegisterActivity(da)
 }

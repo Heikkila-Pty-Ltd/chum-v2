@@ -8,11 +8,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/admit"
 	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beadsbridge"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beadsync"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
@@ -43,6 +45,14 @@ func main() {
 		logger.Error("Failed to load config", "error", err)
 		os.Exit(1)
 	}
+	logger.Info("Beads bridge mode",
+		"enabled", cfg.BeadsBridge.Enabled,
+		"mode", bridgeMode(cfg),
+		"dry_run", cfg.BeadsBridge.DryRun,
+		"ingress_policy", cfg.BeadsBridge.IngressPolicy,
+		"canary_label", cfg.BeadsBridge.CanaryLabel,
+		"reconcile_interval", cfg.BeadsBridge.ReconcileInterval.Duration,
+	)
 
 	d, err := dag.Open(cfg.General.DBPath)
 	if err != nil {
@@ -76,7 +86,11 @@ func main() {
 			}
 
 			eng := jarvis.NewEngine(d, c, cfg.General.TaskQueue, workDirs, logger)
-			api := &jarvis.API{Engine: eng, Logger: logger}
+			policy := "legacy"
+			if cfg.BeadsBridge.Enabled {
+				policy = cfg.BeadsBridge.IngressPolicy
+			}
+			api := &jarvis.API{Engine: eng, Logger: logger, IngressPolicy: policy}
 
 			addr := fmt.Sprintf("127.0.0.1:%d", port)
 			ln, err := net.Listen("tcp", addr)
@@ -106,6 +120,42 @@ func main() {
 
 		for projectName, project := range cfg.Projects {
 			if !project.Enabled {
+				continue
+			}
+
+			if cfg.BeadsBridge.Enabled {
+				client, err := beads.NewClient(project.Workspace)
+				if err != nil {
+					logger.Error("Beads client failed", "project", projectName, "error", err)
+					continue
+				}
+				scanner := &beadsbridge.Scanner{
+					DAG:    d,
+					Config: cfg.BeadsBridge,
+					Logger: logger,
+				}
+				scanResult, err := scanner.ScanProject(context.Background(), projectName, client)
+				if err != nil {
+					logger.Error("Bridge scan failed", "project", projectName, "error", err)
+					continue
+				}
+				fmt.Printf("  %s bridge-scan: candidates=%d admitted=%d updated=%d deduped=%d edges=%d dry_run=%t\n",
+					projectName, scanResult.Candidates, scanResult.Admitted, scanResult.Updated, scanResult.Deduped, scanResult.EdgesProjected, scanResult.DryRun)
+				if !cfg.BeadsBridge.DryRun {
+					worker := &beadsbridge.OutboxWorker{DAG: d, Logger: logger}
+					processed, outErr := worker.ProcessProject(context.Background(), projectName, client, 100)
+					if outErr != nil {
+						logger.Error("Bridge outbox failed", "project", projectName, "error", outErr)
+					} else if processed > 0 {
+						fmt.Printf("  %s bridge-outbox: processed=%d\n", projectName, processed)
+					}
+				}
+				report, recErr := beadsbridge.ReconcileProject(context.Background(), d, client, projectName, false, nil)
+				if recErr != nil {
+					logger.Error("Bridge reconcile failed", "project", projectName, "error", recErr)
+				} else {
+					fmt.Printf("  %s bridge-reconcile: drift=%d dry_run=%t\n", projectName, len(report.Items), report.DryRun)
+				}
 				continue
 			}
 
@@ -167,6 +217,7 @@ func main() {
 		}
 		var project, title, description, status, acceptance string
 		var estimate int
+		systemCaller := false
 		for i := 3; i < len(os.Args); i++ {
 			switch os.Args[i] {
 			case "--project":
@@ -188,7 +239,13 @@ func main() {
 				v := requireFlagValue(os.Args, i)
 				i++
 				fmt.Sscanf(v, "%d", &estimate)
+			case "--system":
+				systemCaller = true
 			}
+		}
+		if cfg.BeadsBridge.Enabled && cfg.BeadsBridge.IngressPolicy != "legacy" && !systemCaller {
+			fmt.Fprintf(os.Stderr, "Error: direct task ingress is blocked by beads bridge policy (%s). Use `chum submit <work.md>`.\n", cfg.BeadsBridge.IngressPolicy)
+			os.Exit(1)
 		}
 		if title == "" || project == "" {
 			fmt.Fprintf(os.Stderr, "Error: --project and --title are required\n")
@@ -211,6 +268,88 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("Created task %s [%s] %s\n", id, status, title)
+
+	case "submit":
+		if len(os.Args) < 3 {
+			fmt.Fprintf(os.Stderr, "Usage: chum submit <work.md> [--project NAME]\n")
+			os.Exit(1)
+		}
+		workFile := os.Args[2]
+		project := ""
+		for i := 3; i < len(os.Args); i++ {
+			switch os.Args[i] {
+			case "--project":
+				project = requireFlagValue(os.Args, i)
+				i++
+			}
+		}
+		if project == "" {
+			project = defaultProject(cfg)
+		}
+		projCfg, ok := cfg.Projects[project]
+		if !ok || !projCfg.Enabled {
+			fmt.Fprintf(os.Stderr, "Error: project %q not found or not enabled\n", project)
+			os.Exit(1)
+		}
+		bc, err := beads.NewClient(projCfg.Workspace)
+		if err != nil {
+			logger.Error("Failed to create beads client", "project", project, "error", err)
+			os.Exit(1)
+		}
+		result, err := beadsbridge.SubmitFromFile(context.Background(), bc, workFile)
+		if err != nil {
+			logger.Error("Submit failed", "error", err)
+			os.Exit(1)
+		}
+		switch {
+		case result.Created:
+			fmt.Printf("Submitted %s -> created issue %s (%s)\n", result.FilePath, result.IssueID, result.Title)
+		case result.Updated:
+			fmt.Printf("Submitted %s -> updated issue %s (%s)\n", result.FilePath, result.IssueID, result.Title)
+		default:
+			fmt.Printf("Submitted %s -> issue %s (%s)\n", result.FilePath, result.IssueID, result.Title)
+		}
+
+	case "reconcile":
+		project := ""
+		apply := false
+		allowRaw := ""
+		for i := 2; i < len(os.Args); i++ {
+			switch os.Args[i] {
+			case "--project":
+				project = requireFlagValue(os.Args, i)
+				i++
+			case "--apply":
+				apply = true
+			case "--allow":
+				allowRaw = requireFlagValue(os.Args, i)
+				i++
+			}
+		}
+		if project == "" {
+			project = defaultProject(cfg)
+		}
+		projCfg, ok := cfg.Projects[project]
+		if !ok || !projCfg.Enabled {
+			fmt.Fprintf(os.Stderr, "Error: project %q not found or not enabled\n", project)
+			os.Exit(1)
+		}
+		bc, err := beads.NewClient(projCfg.Workspace)
+		if err != nil {
+			logger.Error("Failed to create beads client", "project", project, "error", err)
+			os.Exit(1)
+		}
+		allow := parseDriftAllowlist(allowRaw)
+		report, err := beadsbridge.ReconcileProject(context.Background(), d, bc, project, apply, allow)
+		if err != nil {
+			logger.Error("Reconcile failed", "project", project, "error", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Reconcile report project=%s dry_run=%t items=%d\n", report.Project, report.DryRun, len(report.Items))
+		for _, item := range report.Items {
+			fmt.Printf("  - class=%s issue=%s task=%s action=%s details=%s\n",
+				item.Class, item.IssueID, item.TaskID, item.ProposedAction, item.Details)
+		}
 
 	case "plan":
 		// CLI fallback for planning ceremony (when Matrix is not available)
@@ -289,7 +428,7 @@ func main() {
 		}
 
 	default:
-		fmt.Fprintf(os.Stderr, "Usage: chum [serve|sync|tasks|task create|plan|init] [--config path]\n")
+		fmt.Fprintf(os.Stderr, "Usage: chum [serve|sync|tasks|task create|submit|reconcile|plan|init] [--config path]\n")
 		os.Exit(1)
 	}
 }
@@ -301,4 +440,42 @@ func requireFlagValue(args []string, i int) string {
 		os.Exit(1)
 	}
 	return args[i+1]
+}
+
+func bridgeMode(cfg *config.Config) string {
+	if !cfg.BeadsBridge.Enabled {
+		return "disabled"
+	}
+	if cfg.BeadsBridge.DryRun {
+		return "dry_run"
+	}
+	return "active"
+}
+
+func defaultProject(cfg *config.Config) string {
+	for name, project := range cfg.Projects {
+		if project.Enabled {
+			return name
+		}
+	}
+	return ""
+}
+
+func parseDriftAllowlist(raw string) map[beadsbridge.DriftClass]bool {
+	allow := map[beadsbridge.DriftClass]bool{
+		beadsbridge.DriftStatusMismatch:     true,
+		beadsbridge.DriftDependencyMismatch: true,
+	}
+	if strings.TrimSpace(raw) == "" {
+		return allow
+	}
+	allow = map[beadsbridge.DriftClass]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		v := strings.TrimSpace(part)
+		if v == "" {
+			continue
+		}
+		allow[beadsbridge.DriftClass(v)] = true
+	}
+	return allow
 }

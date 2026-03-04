@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
@@ -16,10 +17,12 @@ import (
 type API struct {
 	Engine *Engine
 	DAG    *dag.DAG
-	Store  *store.Store  // trace/lesson/safety store; nil disables trace endpoints
-	LLM    llm.Runner    // LLM runner for suggestions; nil disables suggest endpoint
+	Store  *store.Store // trace/lesson/safety store; nil disables trace endpoints
+	LLM    llm.Runner   // LLM runner for suggestions; nil disables suggest endpoint
 	Logger *slog.Logger
 	WebDir string // directory for static dashboard files; empty disables serving
+
+	IngressPolicy string // legacy | beads_first | beads_only
 }
 
 // Handler returns an http.Handler with all Jarvis API routes.
@@ -63,6 +66,11 @@ func (a *API) Handler() http.Handler {
 }
 
 func (a *API) handleSubmit(w http.ResponseWriter, r *http.Request) {
+	if ingressBlocked(a.IngressPolicy, r) {
+		a.jsonError(w, "direct submit blocked by beads bridge ingress policy; route through `chum submit` or system caller", http.StatusForbidden)
+		return
+	}
+
 	var req WorkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		a.jsonError(w, "invalid request body", http.StatusBadRequest)
@@ -134,4 +142,12 @@ func (a *API) jsonError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("%s", msg)})
+}
+
+func ingressBlocked(policy string, r *http.Request) bool {
+	p := strings.ToLower(strings.TrimSpace(policy))
+	if p == "" || p == "legacy" {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(r.Header.Get("X-CHUM-System-Caller")), "true")
 }
