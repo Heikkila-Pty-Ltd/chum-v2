@@ -72,7 +72,7 @@ func StartWorker(cfg *config.Config, d *dag.DAG, logger *slog.Logger) error {
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 	defer shutdownCancel()
 
-	go registerSchedules(shutdownCtx, c, cfg, logger)
+	go registerSchedules(shutdownCtx, c, cfg, d, logger)
 	startBridge(shutdownCtx, c, cfg, logger)
 
 	logger.Info("Starting CHUM v2 worker",
@@ -210,7 +210,7 @@ func registerHealthWorkflows(w worker.Worker, logger *slog.Logger, chatSender no
 }
 
 // registerSchedules registers Temporal schedules after a startup delay.
-func registerSchedules(ctx context.Context, c client.Client, cfg *config.Config, logger *slog.Logger) {
+func registerSchedules(ctx context.Context, c client.Client, cfg *config.Config, d *dag.DAG, logger *slog.Logger) {
 	select {
 	case <-ctx.Done():
 		return
@@ -220,12 +220,14 @@ func registerSchedules(ctx context.Context, c client.Client, cfg *config.Config,
 	// Canonical defaults are applied in config.Load(); no runtime fallback needed.
 	tickInterval := cfg.General.TickInterval.Duration
 	if err := RegisterSchedule(ctx, c, ScheduleSpec{
-		ID:        "chum-v2-dispatcher",
+		ID:        DispatcherScheduleID,
 		Interval:  tickInterval,
 		Workflow:  DispatcherWorkflow,
 		Args:      []interface{}{struct{}{}},
 		TaskQueue: cfg.General.TaskQueue,
 		RunID:     "chum-v2-dispatcher-run",
+		Paused:    cfg.General.Paused,
+		PauseDB:   d,
 	}, logger); err != nil {
 		logger.Error("Failed to register dispatcher schedule", "error", err)
 	}

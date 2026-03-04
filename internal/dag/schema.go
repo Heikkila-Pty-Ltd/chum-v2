@@ -68,6 +68,12 @@ const decisionAlternativesTableSchema = `CREATE TABLE IF NOT EXISTS decision_alt
 	FOREIGN KEY (decision_id) REFERENCES decisions(id) ON DELETE CASCADE
 );`
 
+const systemStateTableSchema = `CREATE TABLE IF NOT EXISTS system_state (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL DEFAULT '',
+	updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);`
+
 const indexDecisionsTaskID = `CREATE INDEX IF NOT EXISTS idx_decisions_task_id ON decisions(task_id);`
 const indexAlternativesDecisionID = `CREATE INDEX IF NOT EXISTS idx_alternatives_decision_id ON decision_alternatives(decision_id);`
 
@@ -139,6 +145,7 @@ func (d *DAG) EnsureSchema(ctx context.Context) error {
 		taskTargetsSchema,
 		decisionsTableSchema,
 		decisionAlternativesTableSchema,
+		systemStateTableSchema,
 		indexDecisionsTaskID,
 		indexAlternativesDecisionID,
 		beadsSyncMapTableSchema,

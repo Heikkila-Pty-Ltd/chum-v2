@@ -3,12 +3,17 @@ package jarvis
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/engine"
+	"github.com/stretchr/testify/mock"
+	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/sdk/client"
+	temporalmocks "go.temporal.io/sdk/mocks"
 )
 
 func testDashboardAPI(t *testing.T) (*API, *dag.DAG) {
@@ -157,11 +162,11 @@ func TestDashboardTaskDetail(t *testing.T) {
 	}
 
 	var result struct {
-		Task         dag.Task     `json:"task"`
-		Dependencies []string     `json:"dependencies"`
-		Dependents   []string     `json:"dependents"`
-		Targets      []any        `json:"targets"`
-		Decisions    []any        `json:"decisions"`
+		Task         dag.Task `json:"task"`
+		Dependencies []string `json:"dependencies"`
+		Dependents   []string `json:"dependents"`
+		Targets      []any    `json:"targets"`
+		Decisions    []any    `json:"decisions"`
 	}
 	json.NewDecoder(w.Body).Decode(&result)
 	if result.Task.ID != id {
@@ -382,6 +387,77 @@ func TestDashboardTaskPauseNotRunning(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestSystemPause(t *testing.T) {
+	d := testDAG(t)
+	tc := temporalmocks.NewClient(t)
+	schedClient := temporalmocks.NewScheduleClient(t)
+	handle := temporalmocks.NewScheduleHandle(t)
+
+	tc.On("ScheduleClient").Return(schedClient).Once()
+	schedClient.On("GetHandle", mock.Anything, engine.DispatcherScheduleID).Return(handle).Once()
+	handle.On("Pause", mock.Anything, client.SchedulePauseOptions{
+		Note: "paused via API",
+	}).Return(nil).Once()
+
+	e := NewEngine(d, tc, "test-queue", map[string]string{"chum": "/tmp/chum"}, testLogger())
+	api := &API{Engine: e, DAG: d, Logger: testLogger()}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/system/pause", nil)
+	w := httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	paused, err := d.IsGlobalPaused(context.Background())
+	if err != nil {
+		t.Fatalf("IsGlobalPaused: %v", err)
+	}
+	if !paused {
+		t.Fatal("expected global pause enabled")
+	}
+}
+
+func TestSystemResume(t *testing.T) {
+	d := testDAG(t)
+	if err := d.SetGlobalPaused(context.Background(), true); err != nil {
+		t.Fatalf("SetGlobalPaused(true): %v", err)
+	}
+
+	tc := temporalmocks.NewClient(t)
+	schedClient := temporalmocks.NewScheduleClient(t)
+	handle := temporalmocks.NewScheduleHandle(t)
+
+	tc.On("ScheduleClient").Return(schedClient).Times(2)
+	schedClient.On("GetHandle", mock.Anything, engine.DispatcherScheduleID).Return(handle).Times(2)
+	handle.On("Unpause", mock.Anything, client.ScheduleUnpauseOptions{
+		Note: "resumed via API",
+	}).Return(nil).Once()
+	handle.On("Trigger", mock.Anything, client.ScheduleTriggerOptions{
+		Overlap: enumspb.SCHEDULE_OVERLAP_POLICY_SKIP,
+	}).Return(nil).Once()
+
+	e := NewEngine(d, tc, "test-queue", map[string]string{"chum": "/tmp/chum"}, testLogger())
+	api := &API{Engine: e, DAG: d, Logger: testLogger()}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/system/resume", nil)
+	w := httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	paused, err := d.IsGlobalPaused(context.Background())
+	if err != nil {
+		t.Fatalf("IsGlobalPaused: %v", err)
+	}
+	if paused {
+		t.Fatal("expected global pause disabled")
 	}
 }
 

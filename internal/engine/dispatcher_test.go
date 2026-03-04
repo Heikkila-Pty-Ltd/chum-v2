@@ -22,8 +22,10 @@ import (
 )
 
 type mockTaskStore struct {
-	tasks         map[string][]dag.Task
-	statusUpdates map[string]string // taskID -> new status
+	tasks          map[string][]dag.Task
+	statusUpdates  map[string]string // taskID -> new status
+	globalPaused   bool
+	globalPauseErr error
 }
 
 func (m *mockTaskStore) GetReadyNodes(ctx context.Context, project string) ([]dag.Task, error) {
@@ -104,6 +106,15 @@ func (m *mockTaskStore) SetTaskTargets(ctx context.Context, taskID string, targe
 
 func (m *mockTaskStore) GetTaskTargets(ctx context.Context, taskID string) ([]dag.TaskTarget, error) {
 	return nil, nil
+}
+
+func (m *mockTaskStore) SetGlobalPaused(ctx context.Context, paused bool) error {
+	m.globalPaused = paused
+	return nil
+}
+
+func (m *mockTaskStore) IsGlobalPaused(ctx context.Context) (bool, error) {
+	return m.globalPaused, m.globalPauseErr
 }
 
 func (m *mockTaskStore) GetAllTargetsForStatuses(ctx context.Context, project string, statuses ...string) (map[string][]dag.TaskTarget, error) {
@@ -429,6 +440,40 @@ func TestScanCandidatesActivity(t *testing.T) {
 	}
 }
 
+func TestScanCandidatesActivity_GlobalPauseSkipsCandidates(t *testing.T) {
+	t.Parallel()
+
+	mockStore := &mockTaskStore{
+		tasks: map[string][]dag.Task{
+			"proj": {
+				{ID: "task-1", Description: "should be skipped"},
+			},
+		},
+		globalPaused: true,
+	}
+	da := &DispatchActivities{
+		DAG: mockStore,
+		Config: &config.Config{
+			Projects: map[string]config.Project{
+				"proj": {Enabled: true, Workspace: "/tmp/proj"},
+			},
+			Providers: map[string]config.Provider{
+				"claude": {CLI: "claude", Model: "sonnet", Enabled: true, Tier: "balanced"},
+			},
+			Tiers: config.Tiers{Balanced: []string{"claude"}},
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	candidates, err := da.ScanCandidatesActivity(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("expected 0 candidates while paused, got %d", len(candidates))
+	}
+}
+
 func TestPickProvider_PerfInformed(t *testing.T) {
 	t.Parallel()
 
@@ -575,6 +620,43 @@ func TestScanZombieRunningActivity_WorkflowTerminal(t *testing.T) {
 	}
 	if mockStore.statusUpdates["terminal-1"] != string(types.StatusReady) {
 		t.Errorf("task status = %q, want %q", mockStore.statusUpdates["terminal-1"], types.StatusReady)
+	}
+}
+
+func TestScanZombieRunningActivity_GlobalPauseMovesToNeedsReview(t *testing.T) {
+	t.Parallel()
+
+	mockStore := &mockTaskStore{
+		tasks: map[string][]dag.Task{
+			"proj": {
+				{ID: "zombie-paused", Status: string(types.StatusRunning)},
+			},
+		},
+		statusUpdates: make(map[string]string),
+		globalPaused:  true,
+	}
+	describer := &mockDescriber{responses: map[string]describeResult{}}
+
+	da := &DispatchActivities{
+		DAG: mockStore,
+		Config: &config.Config{
+			Projects: map[string]config.Project{
+				"proj": {Enabled: true},
+			},
+		},
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Temporal: describer,
+	}
+
+	recovered, err := da.ScanZombieRunningActivity(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recovered != 1 {
+		t.Fatalf("recovered = %d, want 1", recovered)
+	}
+	if got := mockStore.statusUpdates["zombie-paused"]; got != string(types.StatusNeedsReview) {
+		t.Fatalf("task status = %q, want %q", got, types.StatusNeedsReview)
 	}
 }
 

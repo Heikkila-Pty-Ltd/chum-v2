@@ -49,6 +49,31 @@ func TestRegisterScheduleCreatesSchedule(t *testing.T) {
 	}
 }
 
+func TestRegisterScheduleCreatesPausedWhenGlobalPauseSet(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	logger := testScheduleLogger()
+	spec := testScheduleSpec()
+	spec.PauseDB = staticPauseReader{paused: true}
+
+	c := temporalmocks.NewClient(t)
+	schedClient := temporalmocks.NewScheduleClient(t)
+	handle := temporalmocks.NewScheduleHandle(t)
+
+	c.On("ScheduleClient").Return(schedClient).Once()
+	schedClient.On("Create", mock.Anything, mock.Anything).Return((client.ScheduleHandle)(nil), nil).Once()
+	schedClient.On("GetHandle", mock.Anything, spec.ID).Return(handle).Once()
+	handle.On("Pause", mock.Anything, client.SchedulePauseOptions{
+		Note: "global pause enabled on startup",
+	}).Return(nil).Once()
+
+	err := RegisterSchedule(ctx, c, spec, logger)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
 func TestRegisterScheduleAlreadyExistsReactivationSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -77,6 +102,68 @@ func TestRegisterScheduleAlreadyExistsReactivationSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
+}
+
+func TestRegisterScheduleAlreadyExistsPausedKeepsPaused(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	logger := testScheduleLogger()
+	spec := testScheduleSpec()
+	spec.Paused = true
+
+	c := temporalmocks.NewClient(t)
+	schedClient := temporalmocks.NewScheduleClient(t)
+	handle := temporalmocks.NewScheduleHandle(t)
+
+	c.On("ScheduleClient").Return(schedClient).Once()
+	schedClient.On("Create", mock.Anything, mock.Anything).
+		Return((client.ScheduleHandle)(nil), errors.New("AlreadyExists: schedule already exists")).
+		Once()
+	schedClient.On("GetHandle", mock.Anything, spec.ID).Return(handle).Once()
+	handle.On("Update", mock.Anything, mock.MatchedBy(matchScheduleUpdateOptions(spec))).Return(nil).Once()
+	handle.On("Pause", mock.Anything, client.SchedulePauseOptions{
+		Note: "global pause enabled on startup",
+	}).Return(nil).Once()
+
+	err := RegisterSchedule(ctx, c, spec, logger)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// Verify Unpause and Trigger were NOT called
+	handle.AssertNotCalled(t, "Unpause", mock.Anything, mock.Anything)
+	handle.AssertNotCalled(t, "Trigger", mock.Anything, mock.Anything)
+}
+
+func TestRegisterScheduleAlreadyExistsPausedByDBKeepsPaused(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	logger := testScheduleLogger()
+	spec := testScheduleSpec()
+	spec.PauseDB = staticPauseReader{paused: true}
+
+	c := temporalmocks.NewClient(t)
+	schedClient := temporalmocks.NewScheduleClient(t)
+	handle := temporalmocks.NewScheduleHandle(t)
+
+	c.On("ScheduleClient").Return(schedClient).Once()
+	schedClient.On("Create", mock.Anything, mock.Anything).
+		Return((client.ScheduleHandle)(nil), errors.New("AlreadyExists: schedule already exists")).
+		Once()
+	schedClient.On("GetHandle", mock.Anything, spec.ID).Return(handle).Once()
+	handle.On("Update", mock.Anything, mock.MatchedBy(matchScheduleUpdateOptions(spec))).Return(nil).Once()
+	handle.On("Pause", mock.Anything, client.SchedulePauseOptions{
+		Note: "global pause enabled on startup",
+	}).Return(nil).Once()
+
+	err := RegisterSchedule(ctx, c, spec, logger)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	handle.AssertNotCalled(t, "Unpause", mock.Anything, mock.Anything)
+	handle.AssertNotCalled(t, "Trigger", mock.Anything, mock.Anything)
 }
 
 func TestRegisterScheduleAlreadyExistsReactivationErrorsReturned(t *testing.T) {
@@ -169,4 +256,13 @@ func testScheduleSpec() ScheduleSpec {
 
 func testScheduleLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+type staticPauseReader struct {
+	paused bool
+	err    error
+}
+
+func (s staticPauseReader) IsGlobalPaused(context.Context) (bool, error) {
+	return s.paused, s.err
 }

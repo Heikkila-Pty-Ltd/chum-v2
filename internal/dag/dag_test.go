@@ -425,8 +425,8 @@ func TestCreateSubtasksAtomic_RewiresEdges(t *testing.T) {
 	_, _ = d.CreateTask(ctx, Task{ID: "prereq", Project: "p", Status: "completed"})
 	_, _ = d.CreateTask(ctx, Task{ID: "parent", Project: "p", Status: "running"})
 	_, _ = d.CreateTask(ctx, Task{ID: "downstream", Project: "p", Status: "ready"})
-	_ = d.AddEdge(ctx, "parent", "prereq")       // parent depends on prereq
-	_ = d.AddEdge(ctx, "downstream", "parent")   // downstream depends on parent
+	_ = d.AddEdge(ctx, "parent", "prereq")     // parent depends on prereq
+	_ = d.AddEdge(ctx, "downstream", "parent") // downstream depends on parent
 
 	// Decompose parent into 2 subtasks
 	ids, err := d.CreateSubtasksAtomic(ctx, "parent", []Task{
@@ -856,6 +856,47 @@ func TestUpdateTask_Metadata(t *testing.T) {
 	}
 	if got.Metadata == nil || got.Metadata["updated"] != "true" {
 		t.Fatalf("Metadata after update = %v", got.Metadata)
+	}
+}
+
+func TestGlobalPauseState_DefaultFalse(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+
+	paused, err := d.IsGlobalPaused(context.Background())
+	if err != nil {
+		t.Fatalf("IsGlobalPaused: %v", err)
+	}
+	if paused {
+		t.Fatal("expected default global pause=false")
+	}
+}
+
+func TestGlobalPauseState_SetAndRead(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	if err := d.SetGlobalPaused(ctx, true); err != nil {
+		t.Fatalf("SetGlobalPaused(true): %v", err)
+	}
+	paused, err := d.IsGlobalPaused(ctx)
+	if err != nil {
+		t.Fatalf("IsGlobalPaused after set true: %v", err)
+	}
+	if !paused {
+		t.Fatal("expected paused=true")
+	}
+
+	if err := d.SetGlobalPaused(ctx, false); err != nil {
+		t.Fatalf("SetGlobalPaused(false): %v", err)
+	}
+	paused, err = d.IsGlobalPaused(ctx)
+	if err != nil {
+		t.Fatalf("IsGlobalPaused after set false: %v", err)
+	}
+	if paused {
+		t.Fatal("expected paused=false")
 	}
 }
 
