@@ -43,6 +43,7 @@ func (a *API) Handler() http.Handler {
 		mux.HandleFunc("GET /api/dashboard/overview-grouped/{project}", a.handleDashboardOverviewGrouped)
 		mux.HandleFunc("POST /api/dashboard/task/{taskID}/pause", a.handleDashboardTaskPause)
 		mux.HandleFunc("POST /api/dashboard/task/{taskID}/kill", a.handleDashboardTaskKill)
+		mux.HandleFunc("POST /api/dashboard/task/{taskID}/retry", a.handleDashboardTaskRetry)
 		mux.HandleFunc("POST /api/dashboard/task/{taskID}/decompose", a.handleDashboardTaskDecompose)
 	}
 	if a.Store != nil {

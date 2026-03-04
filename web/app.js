@@ -31,7 +31,7 @@ const App = (() => {
     stats: (p)           => API.get(`/api/dashboard/stats/${p}`),
     timeline: (p)        => API.get(`/api/dashboard/timeline/${p}`),
     overviewGrouped: (p) => API.get(`/api/dashboard/overview-grouped/${p}`),
-    retry: (taskId, project) => API.post(`/api/jarvis/submit?dispatch=true`, { task_id: taskId, project }),
+    retry: (taskId) => API.post(`/api/dashboard/task/${taskId}/retry`),
   };
 
   // --- Status Colors (read from CSS custom properties) ---

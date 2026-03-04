@@ -333,9 +333,15 @@
     d.fy = null;
   }
 
+  function graphFingerprint(data) {
+    const nodes = data.nodes.map(n => n.id + ':' + n.status + ':' + n.title).sort().join('|');
+    const edges = data.edges.map(e => e.from + '>' + e.to).sort().join('|');
+    return nodes + '||' + edges;
+  }
+
   function refresh(project) {
     App.API.graph(project).then(data => {
-      if (cachedData && JSON.stringify(data.nodes.map(n => n.status)) !== JSON.stringify(cachedData.nodes.map(n => n.status))) {
+      if (!cachedData || graphFingerprint(data) !== graphFingerprint(cachedData)) {
         cachedData = data;
         const tooltip = document.querySelector('.dag-tooltip');
         drawGraph(data, tooltip);

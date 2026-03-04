@@ -706,6 +706,7 @@ func (a *API) handleDashboardTaskPause(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDashboardTaskKill terminates a running or ready task.
+// For running tasks, signals the Temporal workflow to cancel before updating DB.
 func (a *API) handleDashboardTaskKill(w http.ResponseWriter, r *http.Request) {
 	taskID := r.PathValue("taskID")
 	task, err := a.DAG.GetTask(r.Context(), taskID)
@@ -724,6 +725,11 @@ func (a *API) handleDashboardTaskKill(w http.ResponseWriter, r *http.Request) {
 	if body.Reason == "" {
 		body.Reason = "killed via dashboard"
 	}
+	// Signal the Temporal workflow to cancel if the task is running.
+	if task.Status == "running" && a.Engine != nil && a.Engine.temporal != nil {
+		wfID := fmt.Sprintf("chum-agent-%s", taskID)
+		_ = a.Engine.temporal.SignalWorkflow(r.Context(), wfID, "", "plan-cancel", body.Reason)
+	}
 	if err := a.DAG.UpdateTask(r.Context(), taskID, map[string]any{
 		"status":    "failed",
 		"error_log": body.Reason,
@@ -732,6 +738,32 @@ func (a *API) handleDashboardTaskKill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.jsonOK(w, map[string]string{"task_id": taskID, "status": "failed"})
+}
+
+// handleDashboardTaskRetry resets a failed task back to ready and triggers dispatch.
+func (a *API) handleDashboardTaskRetry(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskID")
+	task, err := a.DAG.GetTask(r.Context(), taskID)
+	if err != nil {
+		a.jsonError(w, "task not found", http.StatusNotFound)
+		return
+	}
+	terminal := map[string]bool{"failed": true, "dod_failed": true, "rejected": true, "needs_refinement": true}
+	if !terminal[task.Status] {
+		a.jsonError(w, "task is not in a retryable state", http.StatusBadRequest)
+		return
+	}
+	if err := a.DAG.UpdateTask(r.Context(), taskID, map[string]any{
+		"status":    "ready",
+		"error_log": "",
+	}); err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if a.Engine != nil {
+		_ = a.Engine.TriggerDispatch(r.Context())
+	}
+	a.jsonOK(w, map[string]string{"task_id": taskID, "status": "ready"})
 }
 
 // handleDashboardTaskDecompose marks a task for decomposition.

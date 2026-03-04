@@ -392,7 +392,7 @@
         const taskId = btn.dataset.retry;
         btn.textContent = '\u2026';
         btn.disabled = true;
-        App.API.retry(taskId, project).then(() => {
+        App.API.retry(taskId).then(() => {
           btn.textContent = 'sent';
           setTimeout(() => refresh(project), 1500);
         }).catch(err => {
