@@ -36,6 +36,8 @@ type Stats struct {
 	Successes   int
 	SuccessRate float64
 	AvgDuration float64 // seconds
+	AvgCost     float64 // USD
+	TotalTokens int     // input + output
 }
 
 // Tracker queries execution traces to build performance stats and select providers.
@@ -55,7 +57,7 @@ func New(db *sql.DB, exploration float64) *Tracker {
 
 // Record stores the outcome of a task execution. Called by engine after
 // each AgentWorkflow completes.
-func (t *Tracker) Record(ctx context.Context, agent, model, tier string, success bool, durationS float64) error {
+func (t *Tracker) Record(ctx context.Context, agent, model, tier string, success bool, durationS float64, inputTokens, outputTokens int, costUSD float64) error {
 	key := agent
 	if model != "" {
 		key = agent + "/" + model
@@ -65,9 +67,9 @@ func (t *Tracker) Record(ctx context.Context, agent, model, tier string, success
 		successInt = 1
 	}
 	_, err := t.db.ExecContext(ctx, `
-		INSERT INTO perf_runs (provider_key, agent, model, tier, success, duration_s)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		key, agent, model, tier, successInt, durationS)
+		INSERT INTO perf_runs (provider_key, agent, model, tier, success, duration_s, input_tokens, output_tokens, cost_usd)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		key, agent, model, tier, successInt, durationS, inputTokens, outputTokens, costUSD)
 	return err
 }
 
@@ -79,7 +81,9 @@ func (t *Tracker) StatsForTier(ctx context.Context, tier string) ([]Stats, error
 			COUNT(*) as total_runs,
 			SUM(success) as successes,
 			CAST(SUM(success) AS REAL) / COUNT(*) as success_rate,
-			AVG(duration_s) as avg_duration
+			AVG(duration_s) as avg_duration,
+			AVG(cost_usd) as avg_cost,
+			SUM(input_tokens + output_tokens) as total_tokens
 		FROM perf_runs
 		WHERE tier = ?
 		GROUP BY provider_key
@@ -95,7 +99,8 @@ func (t *Tracker) StatsForTier(ctx context.Context, tier string) ([]Stats, error
 	for rows.Next() {
 		var s Stats
 		if err := rows.Scan(&s.Provider.Agent, &s.Provider.Model, &s.Provider.Tier,
-			&s.TotalRuns, &s.Successes, &s.SuccessRate, &s.AvgDuration); err != nil {
+			&s.TotalRuns, &s.Successes, &s.SuccessRate, &s.AvgDuration,
+			&s.AvgCost, &s.TotalTokens); err != nil {
 			return nil, err
 		}
 		stats = append(stats, s)

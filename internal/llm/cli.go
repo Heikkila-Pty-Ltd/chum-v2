@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
@@ -42,8 +43,12 @@ func IsRateLimited(output string) bool {
 
 // CLIResult holds the output of a CLI invocation.
 type CLIResult struct {
-	ExitCode int
-	Output   string
+	ExitCode     int
+	Output       string
+	InputTokens  int     // extracted from CLI output (best-effort)
+	OutputTokens int     // extracted from CLI output (best-effort)
+	CostUSD      float64 // extracted from CLI output (best-effort)
+	LatencyMs    int64   // wall-clock execution time
 }
 
 // RunCLI executes an LLM CLI in PLAN mode (--print, stdout capture only).
@@ -82,8 +87,21 @@ func RunWithPrompt(cmd *exec.Cmd, prompt, agent string) (*CLIResult, error) {
 	defer stdinFile.Close()
 	cmd.Stdin = stdinFile
 
+	start := time.Now()
 	out, err := cmd.CombinedOutput()
-	result := &CLIResult{Output: string(out)}
+	latency := time.Since(start)
+
+	result := &CLIResult{
+		Output:    string(out),
+		LatencyMs: latency.Milliseconds(),
+	}
+
+	// Extract token usage from output (best-effort, never errors).
+	usage := ParseCLIUsage(result.Output, agent)
+	result.InputTokens = usage.InputTokens
+	result.OutputTokens = usage.OutputTokens
+	result.CostUSD = usage.CostUSD
+
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			result.ExitCode = exitErr.ExitCode()

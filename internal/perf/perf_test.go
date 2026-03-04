@@ -27,16 +27,16 @@ func TestRecordAndStats(t *testing.T) {
 	ctx := context.Background()
 
 	// Record some runs
-	if err := tr.Record(ctx, "claude", "sonnet-4", "balanced", true, 12.5); err != nil {
+	if err := tr.Record(ctx, "claude", "sonnet-4", "balanced", true, 12.5, 1000, 200, 0.05); err != nil {
 		t.Fatal(err)
 	}
-	if err := tr.Record(ctx, "claude", "sonnet-4", "balanced", true, 10.0); err != nil {
+	if err := tr.Record(ctx, "claude", "sonnet-4", "balanced", true, 10.0, 800, 150, 0.04); err != nil {
 		t.Fatal(err)
 	}
-	if err := tr.Record(ctx, "claude", "sonnet-4", "balanced", false, 30.0); err != nil {
+	if err := tr.Record(ctx, "claude", "sonnet-4", "balanced", false, 30.0, 2000, 500, 0.10); err != nil {
 		t.Fatal(err)
 	}
-	if err := tr.Record(ctx, "codex", "", "balanced", true, 8.0); err != nil {
+	if err := tr.Record(ctx, "codex", "", "balanced", true, 8.0, 500, 100, 0.02); err != nil {
 		t.Fatal(err)
 	}
 
@@ -86,10 +86,10 @@ func TestPickExploration(t *testing.T) {
 
 	// Claude has many runs with moderate success
 	for i := 0; i < 20; i++ {
-		_ = tr.Record(ctx, "claude", "sonnet-4", "balanced", i%3 != 0, 10.0)
+		_ = tr.Record(ctx, "claude", "sonnet-4", "balanced", i%3 != 0, 10.0, 0, 0, 0)
 	}
 	// Codex has very few runs — UCT should explore it
-	_ = tr.Record(ctx, "codex", "", "balanced", true, 8.0)
+	_ = tr.Record(ctx, "codex", "", "balanced", true, 8.0, 0, 0, 0)
 
 	p, err := tr.Pick(ctx, "balanced")
 	if err != nil {
@@ -109,8 +109,8 @@ func TestPickTierIsolation(t *testing.T) {
 	tr := New(db, 1.414)
 	ctx := context.Background()
 
-	_ = tr.Record(ctx, "claude", "sonnet-4", "premium", true, 15.0)
-	_ = tr.Record(ctx, "codex", "", "fast", true, 5.0)
+	_ = tr.Record(ctx, "claude", "sonnet-4", "premium", true, 15.0, 0, 0, 0)
+	_ = tr.Record(ctx, "codex", "", "fast", true, 5.0, 0, 0, 0)
 
 	p, err := tr.Pick(ctx, "fast")
 	if err != nil {
@@ -162,5 +162,34 @@ func TestDefaultExploration(t *testing.T) {
 	tr = New(db, -5) // negative should also default
 	if tr.exploration != 1.414 {
 		t.Errorf("expected default exploration 1.414, got %f", tr.exploration)
+	}
+}
+
+func TestRecordWithTokensAndCost(t *testing.T) {
+	db := testDB(t)
+	tr := New(db, 1.414)
+	ctx := context.Background()
+
+	if err := tr.Record(ctx, "claude", "sonnet-4", "balanced", true, 10.0, 1200, 300, 0.06); err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Record(ctx, "claude", "sonnet-4", "balanced", true, 12.0, 800, 200, 0.04); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := tr.StatsForTier(ctx, "balanced")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("expected 1 provider, got %d", len(stats))
+	}
+	s := stats[0]
+	if s.TotalTokens != 2500 { // (1200+300) + (800+200)
+		t.Errorf("TotalTokens = %d, want 2500", s.TotalTokens)
+	}
+	// AvgCost should be (0.06 + 0.04) / 2 = 0.05
+	if s.AvgCost < 0.049 || s.AvgCost > 0.051 {
+		t.Errorf("AvgCost = %f, want ~0.05", s.AvgCost)
 	}
 }

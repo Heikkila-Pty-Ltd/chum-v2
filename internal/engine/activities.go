@@ -129,8 +129,11 @@ Implement this task by modifying the necessary files. Do not explain, just code.
 	}
 
 	return &ExecResult{
-		ExitCode: result.ExitCode,
-		Output:   result.Output,
+		ExitCode:     result.ExitCode,
+		Output:       result.Output,
+		InputTokens:  result.InputTokens,
+		OutputTokens: result.OutputTokens,
+		CostUSD:      result.CostUSD,
 	}, nil
 }
 
@@ -347,14 +350,17 @@ func fallbackFileList(ctx context.Context, workDir string) string {
 
 // TraceOutcome captures the result of an AgentWorkflow for trace recording.
 type TraceOutcome struct {
-	TaskID    string
-	SessionID string // Temporal workflow run ID
-	Agent     string
-	Model     string
-	Tier      string
-	Reason    string // CloseCompleted, CloseDoDFailed, etc.
-	SubReason string
-	Duration  time.Duration
+	TaskID       string
+	SessionID    string // Temporal workflow run ID
+	Agent        string
+	Model        string
+	Tier         string
+	Reason       string // CloseCompleted, CloseDoDFailed, etc.
+	SubReason    string
+	Duration     time.Duration
+	InputTokens  int
+	OutputTokens int
+	CostUSD      float64
 }
 
 // rewardForReason maps close reasons to terminal reward values.
@@ -438,7 +444,7 @@ func (a *Activities) RecordTraceActivity(ctx context.Context, outcome TraceOutco
 	// Decomposed is neutral — the provider correctly identified work needed splitting.
 	if a.Perf != nil && isPerfRelevant(outcome.SubReason) {
 		perfSuccess := success || outcome.Reason == string(CloseDecomposed)
-		if err := a.Perf.Record(ctx, outcome.Agent, outcome.Model, outcome.Tier, perfSuccess, outcome.Duration.Seconds()); err != nil {
+		if err := a.Perf.Record(ctx, outcome.Agent, outcome.Model, outcome.Tier, perfSuccess, outcome.Duration.Seconds(), outcome.InputTokens, outcome.OutputTokens, outcome.CostUSD); err != nil {
 			logger.Error("Failed to record perf run", "error", err)
 		}
 	}
