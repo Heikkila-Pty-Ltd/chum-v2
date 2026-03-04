@@ -40,6 +40,7 @@
 
     const container = document.getElementById('task-filters');
     if (!container) return;
+    container.innerHTML = '';
 
     // "All" button
     const allBtn = document.createElement('button');

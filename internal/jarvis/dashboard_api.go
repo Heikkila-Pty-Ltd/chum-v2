@@ -206,8 +206,7 @@ func (a *API) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 
 	byStatus := make(map[string]int)
 	var total, totalEst, totalActual int
-	var avgIter float64
-	var statusCount int
+	var totalIter float64
 
 	for rows.Next() {
 		var status string
@@ -221,11 +220,11 @@ func (a *API) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 		total += cnt
 		totalEst += est
 		totalActual += actual
-		avgIter += ai
-		statusCount++
+		totalIter += ai * float64(cnt)
 	}
-	if statusCount > 0 {
-		avgIter /= float64(statusCount)
+	avgIter := 0.0
+	if total > 0 {
+		avgIter = totalIter / float64(total)
 	}
 
 	a.jsonOK(w, map[string]any{
@@ -771,15 +770,17 @@ func (a *API) handleDashboardTraces(w http.ResponseWriter, r *http.Request) {
 		Events []*store.GraphTraceEvent `json:"events"`
 	}
 
+	// Fetch events once — they're keyed by taskID, not per-trace.
+	allEvents, _ := a.Store.GetSessionTraceEvents(r.Context(), taskID)
+	if allEvents == nil {
+		allEvents = []*store.GraphTraceEvent{}
+	}
+
 	var results []traceWithEvents
 	for _, t := range traces {
-		events, _ := a.Store.GetSessionTraceEvents(r.Context(), taskID)
-		if events == nil {
-			events = []*store.GraphTraceEvent{}
-		}
 		results = append(results, traceWithEvents{
 			ExecutionTrace: t,
-			Events:         events,
+			Events:         allEvents,
 		})
 	}
 	if results == nil {
