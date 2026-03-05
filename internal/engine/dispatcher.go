@@ -355,14 +355,22 @@ func (da *DispatchActivities) scanProjectReadyTasks(ctx context.Context, project
 	if err != nil {
 		return nil, fmt.Errorf("get ready nodes for %s: %w", projectName, err)
 	}
+	if len(tasks) == 0 {
+		return nil, nil
+	}
+
+	// If a parent is ready but already has children, it has already been
+	// decomposed at least once. Re-running it causes duplicate decomposition
+	// attempts and churn.
+	tasks = da.suppressRedundantParentDispatch(ctx, projectName, tasks)
+	if len(tasks) == 0 {
+		return nil, nil
+	}
 
 	// Cap per project
 	max := da.Config.General.MaxConcurrent
 	if len(tasks) > max {
 		tasks = tasks[:max]
-	}
-	if len(tasks) == 0 {
-		return nil, nil
 	}
 
 	sampleIDs := make([]string, 0, len(tasks))
@@ -378,6 +386,46 @@ func (da *DispatchActivities) scanProjectReadyTasks(ctx context.Context, project
 		"sample", strings.Join(sampleIDs, ","),
 	)
 	return tasks, nil
+}
+
+// suppressRedundantParentDispatch removes ready parent tasks that already have
+// child tasks and marks them decomposed to prevent repeated decomposition loops.
+func (da *DispatchActivities) suppressRedundantParentDispatch(ctx context.Context, projectName string, ready []dag.Task) []dag.Task {
+	allTasks, err := da.DAG.ListTasks(ctx, projectName)
+	if err != nil {
+		da.Logger.Warn("Unable to inspect project tasks for parent-child suppression",
+			"project", projectName, "error", err)
+		return ready
+	}
+
+	childrenByParent := make(map[string]int)
+	for _, t := range allTasks {
+		parentID := strings.TrimSpace(t.ParentID)
+		if parentID == "" {
+			continue
+		}
+		childrenByParent[parentID]++
+	}
+	if len(childrenByParent) == 0 {
+		return ready
+	}
+
+	filtered := make([]dag.Task, 0, len(ready))
+	for _, t := range ready {
+		// Only auto-suppress top-level tasks. Subtasks are valid execution units.
+		if strings.TrimSpace(t.ParentID) == "" && childrenByParent[t.ID] > 0 {
+			if err := da.DAG.UpdateTaskStatus(ctx, t.ID, string(types.StatusDecomposed)); err != nil {
+				da.Logger.Warn("Failed to auto-mark ready parent decomposed",
+					"project", projectName, "task", t.ID, "children", childrenByParent[t.ID], "error", err)
+			} else {
+				da.Logger.Info("Auto-marked ready parent decomposed (children already exist)",
+					"project", projectName, "task", t.ID, "children", childrenByParent[t.ID])
+			}
+			continue
+		}
+		filtered = append(filtered, t)
+	}
+	return filtered
 }
 
 func (da *DispatchActivities) buildProjectCandidates(ctx context.Context, projectName string, project config.Project, tasks []dag.Task) []DispatchCandidate {

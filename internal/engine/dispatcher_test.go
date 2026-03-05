@@ -25,6 +25,7 @@ import (
 
 type mockTaskStore struct {
 	tasks          map[string][]dag.Task
+	readyNodes     map[string][]dag.Task
 	statusUpdates  map[string]string // taskID -> new status
 	taskUpdates    map[string]map[string]any
 	globalPaused   bool
@@ -33,6 +34,9 @@ type mockTaskStore struct {
 }
 
 func (m *mockTaskStore) GetReadyNodes(ctx context.Context, project string) ([]dag.Task, error) {
+	if m.readyNodes != nil {
+		return m.readyNodes[project], nil
+	}
 	return m.tasks[project], nil
 }
 
@@ -82,6 +86,9 @@ func (m *mockTaskStore) CloseTask(ctx context.Context, id, status string) error 
 }
 
 func (m *mockTaskStore) ListTasks(ctx context.Context, project string, statuses ...string) ([]dag.Task, error) {
+	if len(statuses) == 0 {
+		return m.tasks[project], nil
+	}
 	var result []dag.Task
 	for _, t := range m.tasks[project] {
 		for _, s := range statuses {
@@ -587,6 +594,52 @@ func TestScanCandidatesActivity_PropagatesMaxReviewRounds(t *testing.T) {
 	}
 	if candidates[0].MaxReviewRounds != 7 {
 		t.Fatalf("MaxReviewRounds = %d, want 7", candidates[0].MaxReviewRounds)
+	}
+}
+
+func TestScanCandidatesActivity_ReadyParentWithChildrenIsAutoDecomposed(t *testing.T) {
+	t.Parallel()
+
+	mockStore := &mockTaskStore{
+		readyNodes: map[string][]dag.Task{
+			"proj": {
+				{ID: "parent-1", Description: "already decomposed parent"},
+			},
+		},
+		tasks: map[string][]dag.Task{
+			"proj": {
+				{ID: "parent-1", Status: string(types.StatusReady)},
+				{ID: "child-1", ParentID: "parent-1", Status: string(types.StatusReady)},
+			},
+		},
+		statusUpdates: make(map[string]string),
+	}
+	da := &DispatchActivities{
+		DAG: mockStore,
+		Config: &config.Config{
+			General: config.General{
+				MaxConcurrent: 5,
+			},
+			Projects: map[string]config.Project{
+				"proj": {Enabled: true, Workspace: "/tmp/proj"},
+			},
+			Providers: map[string]config.Provider{
+				"gemini": {CLI: "gemini", Model: "flash", Enabled: true, Tier: "balanced"},
+			},
+			Tiers: config.Tiers{Balanced: []string{"gemini"}},
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	candidates, err := da.ScanCandidatesActivity(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("expected parent to be suppressed, got %d candidates", len(candidates))
+	}
+	if got := mockStore.statusUpdates["parent-1"]; got != string(types.StatusDecomposed) {
+		t.Fatalf("parent status update = %q, want %q", got, types.StatusDecomposed)
 	}
 }
 
