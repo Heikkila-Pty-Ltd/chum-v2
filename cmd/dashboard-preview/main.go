@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/jarvis"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
@@ -21,9 +22,14 @@ func main() {
 	dbPath := "chum.db"
 	port := "9780"
 	webDir := "web"
+	configPath := "chum.toml"
 
 	for i, arg := range os.Args {
 		switch arg {
+		case "--config":
+			if i+1 < len(os.Args) {
+				configPath = os.Args[i+1]
+			}
 		case "--db":
 			if i+1 < len(os.Args) {
 				dbPath = os.Args[i+1]
@@ -40,6 +46,22 @@ func main() {
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	workDirs := map[string]string{"chum": "."}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		logger.Warn("Failed to load config for project list; using fallback", "config", configPath, "error", err)
+	} else {
+		discovered := make(map[string]string)
+		for name, project := range cfg.Projects {
+			if project.Enabled {
+				discovered[name] = project.Workspace
+			}
+		}
+		if len(discovered) > 0 {
+			workDirs = discovered
+		}
+	}
 
 	d, err := dag.Open(dbPath)
 	if err != nil {
@@ -56,7 +78,6 @@ func main() {
 	}
 	defer s.Close()
 
-	workDirs := map[string]string{"chum": "."}
 	eng := jarvis.NewEngine(d, nil, "", workDirs, logger)
 	runner := llm.CLIRunner{}
 	api := &jarvis.API{Engine: eng, DAG: d, Store: s, LLM: runner, Logger: logger, WebDir: webDir}

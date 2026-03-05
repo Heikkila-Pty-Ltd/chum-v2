@@ -11,6 +11,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
@@ -172,8 +173,8 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 
 	// === EXECUTE ===
 	execCtx := workflow.WithActivityOptions(ctx, execOpts)
-	var execResult ExecResult
-	if err := workflow.ExecuteActivity(execCtx, a.ExecuteActivity, req).Get(ctx, &execResult); err != nil {
+	reqAfterExec, execResult, err := executeWithProviderFallback(execCtx, req)
+	if err != nil {
 		logger.Error("Execute failed", "error", err)
 		if cerr := closeAndTrace(CloseDetail{
 			Reason:    CloseNeedsReview,
@@ -183,6 +184,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		}
 		return fmt.Errorf("execute failed: %w", err)
 	}
+	req = reqAfterExec
 	totalInputTokens += execResult.InputTokens
 	totalOutputTokens += execResult.OutputTokens
 	totalCostUSD += execResult.CostUSD
@@ -367,8 +369,8 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			}
 			req.Prompt = augmentPromptWithReviewFeedback(req.Prompt, round, feedback)
 
-			var reExecResult ExecResult
-			if err := workflow.ExecuteActivity(execCtx, a.ExecuteActivity, req).Get(ctx, &reExecResult); err != nil {
+			reqAfterReExec, reExecResult, err := executeWithProviderFallback(execCtx, req)
+			if err != nil {
 				logger.Error("Re-execute failed after review changes", "error", err)
 				return closeAndTrace(CloseDetail{
 					Reason:    CloseNeedsReview,
@@ -377,6 +379,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 					ReviewURL: state.ReviewURL,
 				})
 			}
+			req = reqAfterReExec
 			totalInputTokens += reExecResult.InputTokens
 			totalOutputTokens += reExecResult.OutputTokens
 			totalCostUSD += reExecResult.CostUSD
@@ -506,4 +509,74 @@ func closeAndNotify(ctx workflow.Context, opts workflow.ActivityOptions, taskID 
 		return fmt.Errorf("notify failed: %w", notifyErr)
 	}
 	return nil
+}
+
+func executeWithProviderFallback(ctx workflow.Context, req TaskRequest) (TaskRequest, ExecResult, error) {
+	logger := workflow.GetLogger(ctx)
+	var a *Activities
+
+	var primary ExecResult
+	if err := workflow.ExecuteActivity(ctx, a.ExecuteActivity, req).Get(ctx, &primary); err == nil {
+		return req, primary, nil
+	} else if !shouldFallbackExecutionError(err) {
+		return req, ExecResult{}, err
+	} else {
+		fallbackReq, ok := withFallbackProvider(req)
+		if !ok {
+			return req, ExecResult{}, err
+		}
+
+		logger.Warn("Primary execute failed; retrying fallback provider",
+			"task_id", req.TaskID,
+			"from_agent", req.Agent,
+			"to_agent", fallbackReq.Agent,
+			"error", err.Error(),
+		)
+		var fallback ExecResult
+		if fallbackErr := workflow.ExecuteActivity(ctx, a.ExecuteActivity, fallbackReq).Get(ctx, &fallback); fallbackErr != nil {
+			return req, ExecResult{}, fmt.Errorf("primary execute failed: %w; fallback(%s) failed: %v",
+				err, fallbackReq.Agent, fallbackErr)
+		}
+		logger.Info("Fallback execute succeeded",
+			"task_id", req.TaskID,
+			"agent", fallbackReq.Agent,
+		)
+		return fallbackReq, fallback, nil
+	}
+}
+
+func shouldFallbackExecutionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "preflight:") {
+		return false
+	}
+	return strings.Contains(msg, "execute cli:") ||
+		strings.Contains(msg, "agent exited with code") ||
+		strings.Contains(msg, "rate limited") ||
+		strings.Contains(msg, "context cancelled during exec retry")
+}
+
+func withFallbackProvider(req TaskRequest) (TaskRequest, bool) {
+	nextAgent, nextModel, ok := nextFallbackExecutionProvider(req.Agent)
+	if !ok {
+		return req, false
+	}
+	fallbackReq := req
+	fallbackReq.Agent = nextAgent
+	fallbackReq.Model = strings.TrimSpace(nextModel)
+	return fallbackReq, true
+}
+
+func nextFallbackExecutionProvider(agent string) (agentCLI string, model string, ok bool) {
+	switch llm.NormalizeCLIName(agent) {
+	case "gemini":
+		return "codex", "", true
+	case "codex":
+		return "gemini", "", true
+	default:
+		return "", "", false
+	}
 }

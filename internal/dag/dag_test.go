@@ -3,11 +3,18 @@ package dag
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 	_ "modernc.org/sqlite"
 )
+
+type testSQLResult struct{}
+
+func (testSQLResult) LastInsertId() (int64, error) { return 0, nil }
+func (testSQLResult) RowsAffected() (int64, error) { return 1, nil }
 
 // newTestDAG returns a DAG backed by an in-memory SQLite database.
 func newTestDAG(t *testing.T) *DAG {
@@ -84,6 +91,42 @@ func TestCreateTask_UsesExplicitID(t *testing.T) {
 	}
 	if id != "explicit-1" {
 		t.Fatalf("ID = %q, want explicit-1", id)
+	}
+}
+
+func TestIsSQLiteBusyError(t *testing.T) {
+	t.Parallel()
+
+	if !isSQLiteBusyError(fmt.Errorf("database is locked (5) (SQLITE_BUSY)")) {
+		t.Fatal("expected SQLITE_BUSY to be detected")
+	}
+	if !isSQLiteBusyError(fmt.Errorf("database table is locked")) {
+		t.Fatal("expected table lock to be detected")
+	}
+	if isSQLiteBusyError(fmt.Errorf("some other sql error")) {
+		t.Fatal("unexpected busy classification for non-busy error")
+	}
+}
+
+func TestExecWithBusyRetry_SucceedsAfterRetries(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	res, err := execWithBusyRetry(context.Background(), func() (sql.Result, error) {
+		calls++
+		if calls < 3 {
+			return nil, fmt.Errorf("database is locked (5) (SQLITE_BUSY)")
+		}
+		return testSQLResult{}, nil
+	})
+	if err != nil {
+		t.Fatalf("execWithBusyRetry: %v", err)
+	}
+	if res == nil {
+		t.Fatal("expected non-nil sql.Result")
+	}
+	if calls != 3 {
+		t.Fatalf("calls = %d, want 3", calls)
 	}
 }
 
@@ -631,6 +674,24 @@ func TestGetReadyNodes_UnblockedWhenDepCompleted(t *testing.T) {
 	}
 }
 
+func TestGetReadyNodes_UnblockedWhenDepDone(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	_, _ = d.CreateTask(ctx, Task{ID: "ud-a", Project: "p", Status: "done"})
+	_, _ = d.CreateTask(ctx, Task{ID: "ud-b", Project: "p", Status: "ready"})
+	_ = d.AddEdge(ctx, "ud-b", "ud-a") // b depends on a
+
+	ready, err := d.GetReadyNodes(ctx, "p")
+	if err != nil {
+		t.Fatalf("GetReadyNodes: %v", err)
+	}
+	if len(ready) != 1 || ready[0].ID != "ud-b" {
+		t.Fatalf("ready = %v, want [ud-b]", taskIDs(ready))
+	}
+}
+
 func TestGetReadyNodes_PriorityOrdering(t *testing.T) {
 	t.Parallel()
 	d := newTestDAG(t)
@@ -669,6 +730,67 @@ func TestGetReadyNodes_MultipleDeps_AllMustComplete(t *testing.T) {
 	ready, _ = d.GetReadyNodes(ctx, "p")
 	if len(ready) != 1 || ready[0].ID != "md-c" {
 		t.Fatalf("ready = %v, want [md-c]", taskIDs(ready))
+	}
+}
+
+func TestGetReadyNodes_ASTFenceBlocksOnlyActiveDeps(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		depStatus   string
+		expectReady bool
+	}{
+		{name: "ready blocks", depStatus: string(types.StatusReady), expectReady: false},
+		{name: "running blocks", depStatus: string(types.StatusRunning), expectReady: false},
+		{name: "needs_review unblocks", depStatus: string(types.StatusNeedsReview), expectReady: true},
+		{name: "completed unblocks", depStatus: string(types.StatusCompleted), expectReady: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _ = d.CreateTask(ctx, Task{
+				ID:      "ast-dep-" + strings.ReplaceAll(tc.depStatus, "_", "-"),
+				Project: "p",
+				Status:  tc.depStatus,
+			})
+			_, _ = d.CreateTask(ctx, Task{
+				ID:      "ast-main-" + strings.ReplaceAll(tc.depStatus, "_", "-"),
+				Project: "p",
+				Status:  string(types.StatusReady),
+			})
+			if err := d.AddEdgeWithSource(ctx,
+				"ast-main-"+strings.ReplaceAll(tc.depStatus, "_", "-"),
+				"ast-dep-"+strings.ReplaceAll(tc.depStatus, "_", "-"),
+				"ast",
+			); err != nil {
+				t.Fatalf("AddEdgeWithSource(ast): %v", err)
+			}
+		})
+	}
+
+	ready, err := d.GetReadyNodes(ctx, "p")
+	if err != nil {
+		t.Fatalf("GetReadyNodes: %v", err)
+	}
+	readySet := map[string]bool{}
+	for _, task := range ready {
+		readySet[task.ID] = true
+	}
+
+	if readySet["ast-main-ready"] {
+		t.Fatal("ast-main-ready should be blocked by active AST dependency")
+	}
+	if readySet["ast-main-running"] {
+		t.Fatal("ast-main-running should be blocked by active AST dependency")
+	}
+	if !readySet["ast-main-needs-review"] {
+		t.Fatal("ast-main-needs-review should be unblocked when AST dependency is inactive")
+	}
+	if !readySet["ast-main-completed"] {
+		t.Fatal("ast-main-completed should be unblocked when AST dependency is completed")
 	}
 }
 

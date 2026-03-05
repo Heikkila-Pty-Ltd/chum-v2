@@ -334,3 +334,49 @@ func TestAgentWorkflow_MergeFailure(t *testing.T) {
 		t.Fatalf("unexpected workflow error: %v", err)
 	}
 }
+
+func TestShouldFallbackExecutionError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "preflight", err: errors.New("PREFLIGHT: project doesn't build before coding"), want: false},
+		{name: "execute cli", err: errors.New("execute CLI: CLI gemini exited with code 1"), want: true},
+		{name: "agent exit", err: errors.New("agent exited with code 1"), want: true},
+		{name: "rate limited", err: errors.New("rate limited: gemini"), want: true},
+		{name: "other", err: errors.New("some other failure"), want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := shouldFallbackExecutionError(tt.err); got != tt.want {
+				t.Fatalf("shouldFallbackExecutionError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNextFallbackExecutionProvider(t *testing.T) {
+	t.Parallel()
+
+	agent, model, ok := nextFallbackExecutionProvider("gemini")
+	if !ok || agent != "codex" || model != "" {
+		t.Fatalf("gemini fallback = (%q,%q,%v), want (codex,\"\",true)", agent, model, ok)
+	}
+
+	agent, model, ok = nextFallbackExecutionProvider("codex")
+	if !ok || agent != "gemini" || model != "" {
+		t.Fatalf("codex fallback = (%q,%q,%v), want (gemini,\"\",true)", agent, model, ok)
+	}
+
+	_, _, ok = nextFallbackExecutionProvider("claude")
+	if ok {
+		t.Fatal("expected no fallback for claude")
+	}
+}

@@ -24,7 +24,7 @@ func EvaluateGate(issue beads.Issue, canaryLabel string) GateDecision {
 	if strings.TrimSpace(issue.Title) == "" {
 		return GateDecision{Pass: false, Reason: "missing_title"}
 	}
-	if strings.TrimSpace(canaryLabel) != "" && !hasLabel(issue.Labels, canaryLabel) {
+	if strings.TrimSpace(canaryLabel) != "" && !hasLabel(issue.Labels, canaryLabel) && !isCHUMGenerated(issue) {
 		return GateDecision{Pass: false, Reason: "no_canary_label"}
 	}
 	if issue.Status == "closed" || issue.Status == "done" || issue.Status == "completed" {
@@ -70,4 +70,10 @@ func hasLabel(labels []string, label string) bool {
 		}
 	}
 	return false
+}
+
+func isCHUMGenerated(issue beads.Issue) bool {
+	owner := strings.ToLower(strings.TrimSpace(issue.Owner))
+	createdBy := strings.ToLower(strings.TrimSpace(issue.CreatedBy))
+	return strings.HasSuffix(owner, "@localhost") && strings.HasPrefix(createdBy, "chum")
 }

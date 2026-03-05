@@ -38,6 +38,11 @@ type ghPRMergeState struct {
 	MergeStateStatus string `json:"mergeStateStatus"`
 }
 
+const (
+	selfReviewRequestChangesFallbackMarker = "<!-- chum-self-review-fallback:request_changes -->"
+	selfReviewApproveFallbackMarker        = "<!-- chum-self-review-fallback:approve -->"
+)
+
 // RunReviewActivity runs the reviewer model in print mode and parses signal/body.
 func (a *Activities) RunReviewActivity(ctx context.Context, workDir string, prNumber, round int, execAgent string) (*ReviewDraft, error) {
 	logger := activity.GetLogger(ctx)
@@ -120,14 +125,15 @@ func (a *Activities) SubmitReviewActivity(ctx context.Context, workDir string, p
 		return nil, err
 	}
 
-	args := []string{
-		"api",
-		fmt.Sprintf("repos/%s/pulls/%d/reviews", repoSlug, prNumber),
-		"-X", "POST",
-		"--raw-field", "event=" + event,
-		"--raw-field", "body=" + reviewBody,
+	out, err := submitPRReview(ctx, workDir, repoSlug, prNumber, event, reviewBody)
+	if err != nil && event == "REQUEST_CHANGES" && isSelfRequestChangesError(err) {
+		fallbackBody := reviewBody + "\n\n" + selfReviewRequestChangesFallbackMarker
+		out, err = submitPRReview(ctx, workDir, repoSlug, prNumber, "COMMENT", fallbackBody)
 	}
-	out, err := runCommand(ctx, workDir, "gh", args...)
+	if err != nil && event == "APPROVE" && isSelfApproveError(err) {
+		fallbackBody := reviewBody + "\n\n" + selfReviewApproveFallbackMarker
+		out, err = submitPRReview(ctx, workDir, repoSlug, prNumber, "COMMENT", fallbackBody)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("submit review: %w", err)
 	}
@@ -138,7 +144,7 @@ func (a *Activities) SubmitReviewActivity(ctx context.Context, workDir string, p
 	}
 
 	return &ReviewResult{
-		Outcome:   reviewStateToOutcome(posted.State),
+		Outcome:   reviewToOutcome(posted),
 		Reason:    "review submitted",
 		ReviewURL: posted.HTMLURL,
 		Comments:  posted.Body,
@@ -158,7 +164,7 @@ func (a *Activities) CheckPRStateActivity(ctx context.Context, workDir string, p
 	match, ok := findLatestMatchingReview(reviews, reviewerLogin, headSHA, round)
 	if ok {
 		return &ReviewResult{
-			Outcome:   reviewStateToOutcome(match.State),
+			Outcome:   reviewToOutcome(match),
 			Reason:    "matched review state",
 			ReviewURL: match.HTMLURL,
 			Comments:  match.Body,
@@ -437,33 +443,66 @@ PR diff:
 func parseReviewSignal(output string) (signal string, body string, invalid bool) {
 	output = llm.UnwrapClaudeJSON(output)
 	lines := strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n")
-	first := -1
 	for i, line := range lines {
-		if strings.TrimSpace(line) != "" {
-			first = i
-			break
+		signal, inlineBody, ok := parseReviewSignalLine(line)
+		if !ok {
+			continue
 		}
-	}
-	if first == -1 {
-		return "REQUEST_CHANGES", "Invalid reviewer output: empty response.", true
-	}
-
-	s := strings.ToUpper(strings.TrimSpace(lines[first]))
-	rest := strings.TrimSpace(strings.Join(lines[first+1:], "\n"))
-	switch s {
-	case "APPROVE", "REQUEST_CHANGES":
+		rest := strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
+		if inlineBody != "" {
+			if rest != "" {
+				rest = inlineBody + "\n" + rest
+			} else {
+				rest = inlineBody
+			}
+		}
 		if rest == "" {
-			if s == "APPROVE" {
+			if signal == "APPROVE" {
 				rest = "Approved."
 			} else {
 				rest = "Changes requested."
 			}
 		}
-		return s, rest, false
-	default:
-		raw := types.Truncate(strings.TrimSpace(output), 2000)
-		return "REQUEST_CHANGES", "Invalid reviewer signal. Expected APPROVE or REQUEST_CHANGES.\n\nRaw output:\n" + raw, true
+		return signal, rest, false
 	}
+
+	if strings.TrimSpace(output) == "" {
+		return "REQUEST_CHANGES", "Invalid reviewer output: empty response.", true
+	}
+	raw := types.Truncate(strings.TrimSpace(output), 2000)
+	return "REQUEST_CHANGES", "Invalid reviewer signal. Expected APPROVE or REQUEST_CHANGES.\n\nRaw output:\n" + raw, true
+}
+
+func parseReviewSignalLine(line string) (signal string, inlineBody string, ok bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return "", "", false
+	}
+
+	canonical := strings.ToUpper(strings.Trim(trimmed, "`*#>_- "))
+	for _, prefix := range []string{"SIGNAL:", "DECISION:", "VERDICT:"} {
+		if strings.HasPrefix(canonical, prefix) {
+			trimmed = strings.TrimSpace(trimmed[len(prefix):])
+			canonical = strings.ToUpper(strings.Trim(trimmed, "`*#>_- "))
+			break
+		}
+	}
+
+	if canonical == "APPROVE" || canonical == "REQUEST_CHANGES" {
+		return canonical, "", true
+	}
+
+	for _, sig := range []string{"APPROVE", "REQUEST_CHANGES"} {
+		if strings.HasPrefix(canonical, sig+":") {
+			body := strings.TrimSpace(trimmed[len(sig)+1:])
+			return sig, body, true
+		}
+		if strings.HasPrefix(canonical, sig+" -") {
+			body := strings.TrimSpace(trimmed[len(sig)+2:])
+			return sig, body, true
+		}
+	}
+	return "", "", false
 }
 
 func buildReviewDiffInput(ctx context.Context, workDir string, prNumber int) (string, error) {
@@ -492,14 +531,59 @@ func roundMarker(round int) string {
 }
 
 func reviewStateToOutcome(state string) ReviewOutcome {
+	return reviewStateWithBodyToOutcome(state, "")
+}
+
+func reviewToOutcome(review ghReview) ReviewOutcome {
+	return reviewStateWithBodyToOutcome(review.State, review.Body)
+}
+
+func reviewStateWithBodyToOutcome(state, body string) ReviewOutcome {
 	switch strings.ToUpper(strings.TrimSpace(state)) {
 	case "APPROVED":
 		return ReviewApproved
 	case "CHANGES_REQUESTED":
 		return ReviewChangesRequested
+	case "COMMENTED":
+		if strings.Contains(body, selfReviewApproveFallbackMarker) {
+			return ReviewApproved
+		}
+		if strings.Contains(body, selfReviewRequestChangesFallbackMarker) {
+			return ReviewChangesRequested
+		}
+		return ReviewNoActivity
 	default:
 		return ReviewNoActivity
 	}
+}
+
+func isSelfRequestChangesError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "cannot request changes on your own pull request") ||
+		strings.Contains(msg, "can not request changes on your own pull request")
+}
+
+func isSelfApproveError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "cannot approve your own pull request") ||
+		strings.Contains(msg, "can not approve your own pull request")
+}
+
+func submitPRReview(ctx context.Context, workDir, repoSlug string, prNumber int, event, reviewBody string) (string, error) {
+	args := []string{
+		"api",
+		fmt.Sprintf("repos/%s/pulls/%d/reviews", repoSlug, prNumber),
+		"-X", "POST",
+		"--raw-field", "event=" + event,
+		"--raw-field", "body=" + reviewBody,
+	}
+	return runCommand(ctx, workDir, "gh", args...)
 }
 
 func listPRReviews(ctx context.Context, workDir string, prNumber int) ([]ghReview, error) {

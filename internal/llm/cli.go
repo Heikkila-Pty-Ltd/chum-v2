@@ -51,7 +51,7 @@ type CLIResult struct {
 	LatencyMs    int64   // wall-clock execution time
 }
 
-// RunCLI executes an LLM CLI in PLAN mode (--print, stdout capture only).
+// RunCLI executes an LLM CLI in PLAN mode (read-only where supported).
 // The CLI does NOT modify files — it just returns text output.
 func RunCLI(ctx context.Context, agent, model, workDir, prompt string) (*CLIResult, error) {
 	cmd := BuildPlanCommand(ctx, agent, model, workDir)
@@ -59,7 +59,7 @@ func RunCLI(ctx context.Context, agent, model, workDir, prompt string) (*CLIResu
 }
 
 // RunCLIExec executes an LLM CLI in EXECUTE mode (file-modifying).
-// The CLI WILL modify files in workDir. No --print flag.
+// The CLI WILL modify files in workDir.
 func RunCLIExec(ctx context.Context, agent, model, workDir, prompt string) (*CLIResult, error) {
 	cmd := BuildExecCommand(ctx, agent, model, workDir)
 	return RunWithPrompt(cmd, prompt, agent)
@@ -148,13 +148,17 @@ var providers = map[string]providerConfig{
 	},
 	"gemini": {
 		binary:    "gemini",
-		planFlags: []string{"--print"},
-		execFlags: []string{"--sandbox=false"},
+		// Gemini v0.27+ uses --prompt for headless mode.
+		// A single-space argument avoids duplicating the real prompt payload in argv;
+		// the actual prompt is provided via stdin.
+		planFlags: []string{"--prompt", " ", "--approval-mode", "plan"},
+		execFlags: []string{"--prompt", " ", "--approval-mode", "yolo", "--sandbox", "false"},
 	},
 	"codex": {
 		binary:    "codex",
-		planFlags: []string{"--quiet"},
-		execFlags: []string{"--quiet", "--full-auto"},
+		// Codex CLI v0.104+ requires the non-interactive "exec" subcommand.
+		planFlags: []string{"exec", "--sandbox", "read-only", "--color", "never"},
+		execFlags: []string{"exec", "--full-auto", "--color", "never"},
 	},
 }
 

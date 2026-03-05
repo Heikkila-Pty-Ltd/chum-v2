@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"testing"
@@ -104,6 +105,65 @@ func TestCloseTaskWithDetailActivity_EnqueuesBridgeTerminalProjection(t *testing
 	}
 	if spy.closeCalls != 0 || spy.updateCalls != 0 {
 		t.Fatalf("bridge mode should enqueue outbox instead of direct writeback, closeCalls=%d updateCalls=%d", spy.closeCalls, spy.updateCalls)
+	}
+}
+
+func TestCloseTaskWithDetailActivity_PreservesExistingPRMetadata(t *testing.T) {
+	t.Parallel()
+	d := newEngineBridgeTestDAG(t)
+	ctx := context.Background()
+
+	prev := CloseDetail{
+		Reason:    CloseNeedsReview,
+		SubReason: "review_submit_failed",
+		PRNumber:  39,
+		ReviewURL: "https://example.test/pr/39",
+	}
+	prevRaw, err := json.Marshal(prev)
+	if err != nil {
+		t.Fatalf("marshal previous detail: %v", err)
+	}
+
+	if _, err := d.CreateTask(ctx, dag.Task{
+		ID:       "task-pr-preserve",
+		Title:    "Task",
+		Project:  "proj",
+		Status:   "running",
+		ErrorLog: string(prevRaw),
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	a := &Activities{
+		DAG:    d,
+		Config: &config.Config{BeadsBridge: config.BeadsBridge{Enabled: false}},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(a.CloseTaskWithDetailActivity)
+	_, err = env.ExecuteActivity(a.CloseTaskWithDetailActivity, "task-pr-preserve", CloseDetail{
+		Reason:    CloseNeedsReview,
+		SubReason: "exec_failed",
+	})
+	if err != nil {
+		t.Fatalf("close activity failed: %v", err)
+	}
+
+	gotTask, err := d.GetTask(ctx, "task-pr-preserve")
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	var got CloseDetail
+	if err := json.Unmarshal([]byte(gotTask.ErrorLog), &got); err != nil {
+		t.Fatalf("parse stored error_log: %v", err)
+	}
+	if got.PRNumber != 39 {
+		t.Fatalf("PRNumber = %d, want 39", got.PRNumber)
+	}
+	if got.ReviewURL != "https://example.test/pr/39" {
+		t.Fatalf("ReviewURL = %q, want preserved URL", got.ReviewURL)
 	}
 }
 

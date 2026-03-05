@@ -1,7 +1,7 @@
 [general]
-paused = true
+paused = false
 tick_interval = "2m"
-max_concurrent = 2
+max_concurrent = 4
 max_review_rounds = 5
 require_cross_provider_review = false
 temporal_host_port = "localhost:7233"
@@ -28,24 +28,29 @@ ingress_policy = "beads_only"
 
 [projects.chum]
 enabled = true
-workspace = "/home/ubuntu/projects/chum-factory"
+workspace = "/home/ubuntu/projects/chum-automation"
 dod_checks = ["go build ./...", "go test ./...", "go vet ./..."]
 
-[providers.claude]
-cli = "claude"
-model = "claude-sonnet-4-20250514"
-reviewer = "gemini"
+[projects.hg]
 enabled = true
-tier = "balanced"
+workspace = "/home/ubuntu/projects/hg-chum-integration-automation"
+dod_checks = ["go build ./...", "go vet ./..."]
 
 [providers.gemini]
 cli = "gemini"
 model = "gemini-2.5-flash"
-reviewer = "claude"
-enabled = false
+reviewer = "codex"
+enabled = true
 tier = "fast"
+
+[providers.codex]
+cli = "codex"
+model = ""
+reviewer = "gemini"
+enabled = true
+tier = "balanced"
 
 [tiers]
 fast = ["gemini"]
-balanced = ["claude"]
-premium = []
+balanced = ["gemini", "codex"]
+premium = ["codex"]

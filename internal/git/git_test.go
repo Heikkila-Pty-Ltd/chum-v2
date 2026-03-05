@@ -162,6 +162,56 @@ func TestSetupWorktree_ConfiguresHooksBypass(t *testing.T) {
 	}
 }
 
+func TestSetupWorktree_RemovesConflictingBranchWorktree(t *testing.T) {
+	t.Parallel()
+
+	repo := initRepo(t)
+	taskID := fmt.Sprintf("task-conflict-%d", time.Now().UnixNano())
+	branch := fmt.Sprintf("chum/%s", taskID)
+	conflictDir := filepath.Join(t.TempDir(), "conflict-wt")
+
+	runGit(t, repo, "worktree", "add", "-b", branch, conflictDir, "HEAD")
+
+	wtDir, err := SetupWorktree(context.Background(), repo, taskID)
+	if err != nil {
+		t.Fatalf("SetupWorktree error: %v", err)
+	}
+	defer func() { _ = CleanupWorktree(context.Background(), repo, wtDir) }()
+
+	list := runGit(t, repo, "worktree", "list")
+	if strings.Contains(list, conflictDir) {
+		t.Fatalf("expected conflicting worktree %q to be removed, got list:\n%s", conflictDir, list)
+	}
+	if !strings.Contains(list, wtDir) {
+		t.Fatalf("expected new worktree %q to exist, got list:\n%s", wtDir, list)
+	}
+}
+
+func TestSetupWorktreeAtRef_StartsFromProvidedRef(t *testing.T) {
+	t.Parallel()
+
+	repo := initRepo(t)
+	startRef := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("new line\n"), 0o644); err != nil {
+		t.Fatalf("mutate README.md: %v", err)
+	}
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "second commit")
+
+	taskID := fmt.Sprintf("task-start-ref-%d", time.Now().UnixNano())
+	wtDir, err := SetupWorktreeAtRef(context.Background(), repo, taskID, startRef)
+	if err != nil {
+		t.Fatalf("SetupWorktreeAtRef error: %v", err)
+	}
+	defer func() { _ = CleanupWorktree(context.Background(), repo, wtDir) }()
+
+	head := strings.TrimSpace(runGit(t, wtDir, "rev-parse", "HEAD"))
+	if head != startRef {
+		t.Fatalf("worktree HEAD = %q, want %q", head, startRef)
+	}
+}
+
 func TestResolveDefaultBranch_FromOriginHead(t *testing.T) {
 	t.Parallel()
 

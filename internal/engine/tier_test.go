@@ -207,8 +207,26 @@ func TestPickProvider_FallbackWhenAllEmpty(t *testing.T) {
 		Tiers:     config.Tiers{},
 	}
 	cli, model, tier := PickProvider(cfg, "fast")
-	if cli != "claude" || model != "" || tier != "fast" {
-		t.Errorf("got (%q, %q, %q), want (claude, \"\", fast)", cli, model, tier)
+	if cli != "" || model != "" || tier != "" {
+		t.Errorf("got (%q, %q, %q), want (\"\", \"\", \"\")", cli, model, tier)
+	}
+}
+
+func TestPickProvider_PremiumFallsBackToEnabledLowerTier(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		Providers: map[string]config.Provider{
+			"gemini": {CLI: "gemini", Model: "flash", Enabled: true, Tier: "fast"},
+		},
+		Tiers: config.Tiers{
+			Fast:     []string{"gemini"},
+			Balanced: []string{"gemini"},
+			Premium:  []string{},
+		},
+	}
+	cli, model, tier := PickProvider(cfg, "premium")
+	if cli != "gemini" || model != "flash" || tier != "fast" {
+		t.Errorf("got (%q, %q, %q), want (gemini, flash, fast)", cli, model, tier)
 	}
 }
 

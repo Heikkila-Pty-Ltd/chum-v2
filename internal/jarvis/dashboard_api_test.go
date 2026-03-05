@@ -103,7 +103,9 @@ func TestDashboardGraphEmpty(t *testing.T) {
 		Nodes []any `json:"nodes"`
 		Edges []any `json:"edges"`
 	}
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if result.Nodes == nil {
 		t.Error("nodes should be empty array, not null")
 	}
@@ -116,8 +118,12 @@ func TestDashboardTasks(t *testing.T) {
 	api, d := testDashboardAPI(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, dag.Task{Title: "Running task", Project: "chum", Status: "running"})
-	d.CreateTask(ctx, dag.Task{Title: "Done task", Project: "chum", Status: "completed"})
+	if _, err := d.CreateTask(ctx, dag.Task{Title: "Running task", Project: "chum", Status: "running"}); err != nil {
+		t.Fatalf("CreateTask running: %v", err)
+	}
+	if _, err := d.CreateTask(ctx, dag.Task{Title: "Done task", Project: "chum", Status: "completed"}); err != nil {
+		t.Fatalf("CreateTask done: %v", err)
+	}
 
 	// Unfiltered
 	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/tasks/chum", nil)
@@ -127,7 +133,9 @@ func TestDashboardTasks(t *testing.T) {
 	var result struct {
 		Tasks []dag.Task `json:"tasks"`
 	}
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode unfiltered: %v", err)
+	}
 	if len(result.Tasks) != 2 {
 		t.Fatalf("expected 2 tasks, got %d", len(result.Tasks))
 	}
@@ -138,7 +146,9 @@ func TestDashboardTasks(t *testing.T) {
 	api.Handler().ServeHTTP(w, req)
 
 	result.Tasks = nil
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode filtered: %v", err)
+	}
 	if len(result.Tasks) != 1 {
 		t.Fatalf("expected 1 running task, got %d", len(result.Tasks))
 	}
@@ -168,7 +178,9 @@ func TestDashboardTaskDetail(t *testing.T) {
 		Targets      []any    `json:"targets"`
 		Decisions    []any    `json:"decisions"`
 	}
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if result.Task.ID != id {
 		t.Errorf("task id = %q, want %q", result.Task.ID, id)
 	}
@@ -193,9 +205,15 @@ func TestDashboardStats(t *testing.T) {
 	api, d := testDashboardAPI(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, dag.Task{Title: "A", Project: "chum", Status: "completed", EstimateMinutes: 10})
-	d.CreateTask(ctx, dag.Task{Title: "B", Project: "chum", Status: "completed", EstimateMinutes: 5})
-	d.CreateTask(ctx, dag.Task{Title: "C", Project: "chum", Status: "running"})
+	if _, err := d.CreateTask(ctx, dag.Task{Title: "A", Project: "chum", Status: "completed", EstimateMinutes: 10}); err != nil {
+		t.Fatalf("CreateTask A: %v", err)
+	}
+	if _, err := d.CreateTask(ctx, dag.Task{Title: "B", Project: "chum", Status: "completed", EstimateMinutes: 5}); err != nil {
+		t.Fatalf("CreateTask B: %v", err)
+	}
+	if _, err := d.CreateTask(ctx, dag.Task{Title: "C", Project: "chum", Status: "running"}); err != nil {
+		t.Fatalf("CreateTask C: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/stats/chum", nil)
 	w := httptest.NewRecorder()
@@ -209,7 +227,9 @@ func TestDashboardStats(t *testing.T) {
 		Total    int            `json:"total"`
 		ByStatus map[string]int `json:"by_status"`
 	}
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if result.Total != 3 {
 		t.Errorf("total = %d, want 3", result.Total)
 	}
@@ -225,8 +245,12 @@ func TestDashboardTimeline(t *testing.T) {
 	api, d := testDashboardAPI(t)
 	ctx := context.Background()
 
-	d.CreateTask(ctx, dag.Task{Title: "First", Project: "chum", Status: "completed"})
-	d.CreateTask(ctx, dag.Task{Title: "Second", Project: "chum", Status: "running"})
+	if _, err := d.CreateTask(ctx, dag.Task{Title: "First", Project: "chum", Status: "completed"}); err != nil {
+		t.Fatalf("CreateTask first: %v", err)
+	}
+	if _, err := d.CreateTask(ctx, dag.Task{Title: "Second", Project: "chum", Status: "running"}); err != nil {
+		t.Fatalf("CreateTask second: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/timeline/chum", nil)
 	w := httptest.NewRecorder()
@@ -239,7 +263,9 @@ func TestDashboardTimeline(t *testing.T) {
 	var result struct {
 		Tasks []dag.Task `json:"tasks"`
 	}
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if len(result.Tasks) != 2 {
 		t.Fatalf("expected 2 tasks, got %d", len(result.Tasks))
 	}
@@ -251,11 +277,19 @@ func TestDashboardOverviewGrouped(t *testing.T) {
 
 	// Create a goal with children
 	goalID, _ := d.CreateTask(ctx, dag.Task{Title: "Goal A", Project: "chum", Status: "open", Type: "goal"})
-	d.CreateTask(ctx, dag.Task{Title: "Sub 1", Project: "chum", Status: "completed", ParentID: goalID})
-	d.CreateTask(ctx, dag.Task{Title: "Sub 2", Project: "chum", Status: "failed", ParentID: goalID})
-	d.CreateTask(ctx, dag.Task{Title: "Sub 3", Project: "chum", Status: "running", ParentID: goalID})
+	if _, err := d.CreateTask(ctx, dag.Task{Title: "Sub 1", Project: "chum", Status: "completed", ParentID: goalID}); err != nil {
+		t.Fatalf("CreateTask sub1: %v", err)
+	}
+	if _, err := d.CreateTask(ctx, dag.Task{Title: "Sub 2", Project: "chum", Status: "failed", ParentID: goalID}); err != nil {
+		t.Fatalf("CreateTask sub2: %v", err)
+	}
+	if _, err := d.CreateTask(ctx, dag.Task{Title: "Sub 3", Project: "chum", Status: "running", ParentID: goalID}); err != nil {
+		t.Fatalf("CreateTask sub3: %v", err)
+	}
 	// Orphan task
-	d.CreateTask(ctx, dag.Task{Title: "Orphan", Project: "chum", Status: "failed"})
+	if _, err := d.CreateTask(ctx, dag.Task{Title: "Orphan", Project: "chum", Status: "failed"}); err != nil {
+		t.Fatalf("CreateTask orphan: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/overview-grouped/chum", nil)
 	w := httptest.NewRecorder()
@@ -346,7 +380,9 @@ func TestDashboardOverviewGroupedEmpty(t *testing.T) {
 		Goals   []any `json:"goals"`
 		Orphans []any `json:"orphans"`
 	}
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if result.Goals == nil {
 		t.Error("goals should be empty array, not null")
 	}
@@ -511,9 +547,15 @@ func TestDashboardOverviewGroupedDisplayStatus(t *testing.T) {
 
 	// Goal with mixed children — should show "has_failures" not "rejected"
 	goalID, _ := d.CreateTask(ctx, dag.Task{Title: "Goal", Project: "chum", Status: "open", Type: "goal"})
-	d.CreateTask(ctx, dag.Task{Title: "Child 1", Project: "chum", Status: "completed", ParentID: goalID})
-	d.CreateTask(ctx, dag.Task{Title: "Child 2", Project: "chum", Status: "failed", ParentID: goalID})
-	d.CreateTask(ctx, dag.Task{Title: "Child 3", Project: "chum", Status: "running", ParentID: goalID})
+	if _, err := d.CreateTask(ctx, dag.Task{Title: "Child 1", Project: "chum", Status: "completed", ParentID: goalID}); err != nil {
+		t.Fatalf("CreateTask child1: %v", err)
+	}
+	if _, err := d.CreateTask(ctx, dag.Task{Title: "Child 2", Project: "chum", Status: "failed", ParentID: goalID}); err != nil {
+		t.Fatalf("CreateTask child2: %v", err)
+	}
+	if _, err := d.CreateTask(ctx, dag.Task{Title: "Child 3", Project: "chum", Status: "running", ParentID: goalID}); err != nil {
+		t.Fatalf("CreateTask child3: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/overview-grouped/chum", nil)
 	w := httptest.NewRecorder()
@@ -548,9 +590,13 @@ func TestDashboardOverviewGroupedEstimates(t *testing.T) {
 
 	goalID, _ := d.CreateTask(ctx, dag.Task{Title: "Goal", Project: "chum", Status: "open", Type: "goal"})
 	c1ID, _ := d.CreateTask(ctx, dag.Task{Title: "C1", Project: "chum", Status: "completed", ParentID: goalID, EstimateMinutes: 10})
-	d.UpdateTask(ctx, c1ID, map[string]any{"actual_duration_sec": 300})
+	if err := d.UpdateTask(ctx, c1ID, map[string]any{"actual_duration_sec": 300}); err != nil {
+		t.Fatalf("UpdateTask c1: %v", err)
+	}
 	c2ID, _ := d.CreateTask(ctx, dag.Task{Title: "C2", Project: "chum", Status: "running", ParentID: goalID, EstimateMinutes: 5})
-	d.UpdateTask(ctx, c2ID, map[string]any{"actual_duration_sec": 120})
+	if err := d.UpdateTask(ctx, c2ID, map[string]any{"actual_duration_sec": 120}); err != nil {
+		t.Fatalf("UpdateTask c2: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/overview-grouped/chum", nil)
 	w := httptest.NewRecorder()
@@ -562,7 +608,9 @@ func TestDashboardOverviewGroupedEstimates(t *testing.T) {
 			TotalActualSec   int `json:"total_actual_duration_sec"`
 		} `json:"goals"`
 	}
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if len(result.Goals) != 1 {
 		t.Fatalf("expected 1 goal, got %d", len(result.Goals))
 	}

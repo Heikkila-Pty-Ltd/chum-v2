@@ -33,6 +33,8 @@ type Issue struct {
 	Status             string       `json:"status"`
 	Priority           int          `json:"priority"`
 	IssueType          string       `json:"issue_type"`
+	Owner              string       `json:"owner,omitempty"`
+	CreatedBy          string       `json:"created_by,omitempty"`
 	Labels             []string     `json:"labels,omitempty"`
 	Dependencies       []Dependency `json:"dependencies,omitempty"`
 	AcceptanceCriteria string       `json:"acceptance_criteria,omitempty"`
@@ -82,7 +84,7 @@ func NewReadOnlyClient(workDir string) (*Client, error) {
 
 // List returns all issues from bd.
 func (c *Client) List(ctx context.Context, limit int) ([]Issue, error) {
-	args := []string{"list", "--json"}
+	args := []string{"list", "--all", "--json"}
 	if limit > 0 {
 		args = append(args, "--limit", strconv.Itoa(limit))
 	}

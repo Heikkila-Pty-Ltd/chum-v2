@@ -36,14 +36,10 @@ func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*t
 		return &types.DecompResult{Atomic: true}, nil
 	}
 
-	var decomp types.DecompResult
-	if err := json.Unmarshal([]byte(jsonStr), &decomp); err != nil {
+	decomp, err := parseDecompJSON(jsonStr)
+	if err != nil {
 		logger.Warn("Failed to parse decomposition JSON, treating as atomic", "error", err)
 		return &types.DecompResult{Atomic: true}, nil
-	}
-
-	if len(decomp.Steps) == 0 {
-		decomp.Atomic = true
 	}
 
 	logger.Info("Decomposition result", "Steps", len(decomp.Steps), "Atomic", decomp.Atomic)
@@ -119,4 +115,26 @@ Rules:
   - "Add feature and update docs and tests" → three separate steps
   - "Investigate and fix" → split into "Diagnose root cause" and "Apply fix"
 - Output ONLY the JSON object. No commentary, no markdown fences.`, taskPrompt, codeContext)
+}
+
+// parseDecompJSON accepts both canonical object form:
+// {"steps":[...]} and bare-array form: [{...}, {...}].
+func parseDecompJSON(jsonStr string) (types.DecompResult, error) {
+	var decomp types.DecompResult
+	if err := json.Unmarshal([]byte(jsonStr), &decomp); err == nil {
+		if len(decomp.Steps) == 0 {
+			decomp.Atomic = true
+		}
+		return decomp, nil
+	}
+
+	var steps []types.DecompStep
+	if err := json.Unmarshal([]byte(jsonStr), &steps); err == nil {
+		return types.DecompResult{
+			Steps:  steps,
+			Atomic: len(steps) == 0,
+		}, nil
+	}
+
+	return types.DecompResult{}, fmt.Errorf("unsupported decomposition JSON shape")
 }

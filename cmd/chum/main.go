@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -141,8 +142,8 @@ func main() {
 					logger.Error("Bridge scan failed", "project", projectName, "error", err)
 					continue
 				}
-				fmt.Printf("  %s bridge-scan: candidates=%d admitted=%d updated=%d deduped=%d edges=%d dry_run=%t\n",
-					projectName, scanResult.Candidates, scanResult.Admitted, scanResult.Updated, scanResult.Deduped, scanResult.EdgesProjected, scanResult.DryRun)
+				fmt.Printf("  %s bridge-scan: candidates=%d admitted=%d updated=%d deduped=%d edges_projected=%d edges_pruned=%d dry_run=%t\n",
+					projectName, scanResult.Candidates, scanResult.Admitted, scanResult.Updated, scanResult.Deduped, scanResult.EdgesProjected, scanResult.EdgesPruned, scanResult.DryRun)
 				if !cfg.BeadsBridge.DryRun {
 					worker := &beadsbridge.OutboxWorker{DAG: d, Logger: logger}
 					processed, outErr := worker.ProcessProject(context.Background(), projectName, client, 100)
@@ -399,7 +400,12 @@ func main() {
 			case "--estimate":
 				v := requireFlagValue(os.Args, i)
 				i++
-				fmt.Sscanf(v, "%d", &estimate)
+				parsed, parseErr := strconv.Atoi(v)
+				if parseErr != nil {
+					fmt.Fprintf(os.Stderr, "Error: --estimate must be an integer (got %q)\n", v)
+					os.Exit(1)
+				}
+				estimate = parsed
 			}
 		}
 		if directTaskIngressBlocked(cfg) {
