@@ -688,6 +688,26 @@ func (da *DispatchActivities) ScanOrphanedReviewsActivity(ctx context.Context) (
 			if detail.PRNumber <= 0 {
 				continue
 			}
+			if merged, err := isPRMerged(ctx, project.Workspace, detail.PRNumber); err == nil && merged {
+				detail.Reason = CloseCompleted
+				detail.SubReason = "completed"
+				raw, marshalErr := json.Marshal(detail)
+				if marshalErr != nil {
+					logger.Warn("Failed to marshal merged PR completion detail", "task", t.ID, "error", marshalErr)
+					continue
+				}
+				if err := da.DAG.UpdateTask(ctx, t.ID, map[string]any{
+					"status":    string(types.StatusCompleted),
+					"error_log": string(raw),
+				}); err != nil {
+					logger.Warn("Failed to auto-complete merged PR task", "task", t.ID, "pr", detail.PRNumber, "error", err)
+					continue
+				}
+				logger.Info("Auto-completed stale needs_review task with merged PR", "task", t.ID, "pr", detail.PRNumber)
+				continue
+			} else if err != nil {
+				logger.Warn("PR merged-state check failed; continuing with orphan scan", "task", t.ID, "pr", detail.PRNumber, "error", err)
+			}
 			if !orphanReviewRecoverable(detail) {
 				continue
 			}
@@ -739,4 +759,16 @@ func orphanReviewRecoverable(detail CloseDetail) bool {
 	default:
 		return false
 	}
+}
+
+func isPRMerged(ctx context.Context, workDir string, prNumber int) (bool, error) {
+	out, err := runCommand(ctx, workDir, "gh", "pr", "view", strconv.Itoa(prNumber), "--json", "state")
+	if err != nil {
+		return false, err
+	}
+	var payload ghPRState
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		return false, fmt.Errorf("parse PR state JSON: %w", err)
+	}
+	return strings.EqualFold(strings.TrimSpace(payload.State), "MERGED"), nil
 }

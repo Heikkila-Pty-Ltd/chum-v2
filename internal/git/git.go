@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // SetupWorktree creates an isolated git worktree for a task.
@@ -44,15 +45,15 @@ func SetupWorktreeAtRef(ctx context.Context, baseDir, taskID, startRef string) (
 	_ = removeBranchWorktrees(ctx, baseDir, branch, wtDir)
 
 	// Delete stale branch if it exists (leftover from previous run)
-	cmd := exec.CommandContext(ctx, "git", "branch", "-D", branch)
-	cmd.Dir = baseDir
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runGitWithConfigLockRetry(ctx, baseDir, "branch", "-D", branch); err != nil {
 		msg := strings.ToLower(string(out))
 		// Branch missing is fine; any other error is actionable.
 		if !strings.Contains(msg, "not found") && !strings.Contains(msg, "not a valid branch name") {
 			return "", fmt.Errorf("delete stale branch %s: %s: %w", branch, string(out), err)
 		}
 	}
+
+	var cmd *exec.Cmd
 
 	// Prune any stale worktree entries
 	cmd = exec.CommandContext(ctx, "git", "worktree", "prune")
@@ -92,10 +93,8 @@ func SetupWorktreeAtRef(ctx context.Context, baseDir, taskID, startRef string) (
 	// Create the worktree on a new branch.
 	// Use -c core.hooksPath=/dev/null to bypass any project hooks (e.g. beads)
 	// that may reference tools not installed in the execution environment.
-	cmd = exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null",
-		"worktree", "add", "-b", branch, wtDir, start)
-	cmd.Dir = baseDir
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := runGitWithConfigLockRetry(ctx, baseDir, "-c", "core.hooksPath=/dev/null",
+		"worktree", "add", "-b", branch, wtDir, start); err != nil {
 		return "", fmt.Errorf("git worktree add (start=%s): %s: %w", start, string(out), err)
 	}
 
@@ -209,9 +208,75 @@ func Push(ctx context.Context, workDir string) error {
 	cmd := exec.CommandContext(ctx, "git", "push", "-u", "origin", "HEAD")
 	cmd.Dir = workDir
 	if out, err := cmd.CombinedOutput(); err != nil {
+		if isNonFastForwardPushError(err, out) {
+			branch, branchErr := currentBranch(ctx, workDir)
+			if branchErr == nil && strings.HasPrefix(branch, "chum/") {
+				retry := exec.CommandContext(ctx, "git", "push", "--force-with-lease", "-u", "origin", "HEAD")
+				retry.Dir = workDir
+				if retryOut, retryErr := retry.CombinedOutput(); retryErr == nil {
+					return nil
+				} else {
+					return fmt.Errorf("git push (force-with-lease fallback): %s: %w", string(retryOut), retryErr)
+				}
+			}
+		}
 		return fmt.Errorf("git push: %s: %w", string(out), err)
 	}
 	return nil
+}
+
+func currentBranch(ctx context.Context, workDir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = workDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse --abbrev-ref HEAD: %s: %w", string(out), err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func isNonFastForwardPushError(err error, out []byte) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(string(out))
+	return strings.Contains(msg, "non-fast-forward") ||
+		strings.Contains(msg, "fetch first") ||
+		strings.Contains(msg, "rejected")
+}
+
+func runGitWithConfigLockRetry(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	const maxAttempts = 5
+	backoff := 120 * time.Millisecond
+	var (
+		out []byte
+		err error
+	)
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = dir
+		out, err = cmd.CombinedOutput()
+		if err == nil {
+			return out, nil
+		}
+		if !isGitConfigLockError(out) || attempt == maxAttempts {
+			return out, err
+		}
+		select {
+		case <-ctx.Done():
+			return out, ctx.Err()
+		case <-time.After(backoff):
+			backoff *= 2
+		}
+	}
+	return out, err
+}
+
+func isGitConfigLockError(out []byte) bool {
+	msg := strings.ToLower(string(out))
+	return strings.Contains(msg, "could not lock config file") ||
+		strings.Contains(msg, ".git/config.lock")
 }
 
 // CommitAll stages all changes and creates a commit.

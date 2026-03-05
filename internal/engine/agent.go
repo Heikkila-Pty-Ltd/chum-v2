@@ -45,6 +45,10 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	if reviewTimeout <= 0 {
 		reviewTimeout = 10 * time.Minute
 	}
+	dodTimeout := execTimeout
+	if reviewTimeout > dodTimeout {
+		dodTimeout = reviewTimeout
+	}
 
 	shortOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: shortTimeout,
@@ -55,7 +59,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 	dodOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: reviewTimeout,
+		StartToCloseTimeout: dodTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 	reviewOpts := workflow.ActivityOptions{
@@ -235,6 +239,13 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	prCtx := workflow.WithActivityOptions(ctx, shortOpts)
 	var prInfo PRInfo
 	if err := workflow.ExecuteActivity(prCtx, a.CreatePRInfoActivity, req.WorkDir, prTitle).Get(ctx, &prInfo); err != nil {
+		if isNoCommitsPRCreateError(err) {
+			logger.Info("PR creation skipped: branch has no commits ahead of base", "TaskID", req.TaskID)
+			return closeAndTrace(CloseDetail{
+				Reason:    CloseCompleted,
+				SubReason: "no_changes",
+			})
+		}
 		logger.Error("PR creation failed", "error", err)
 		return closeAndTrace(CloseDetail{
 			Reason:    CloseNeedsReview,
@@ -468,6 +479,14 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		PRNumber:  prInfo.Number,
 		ReviewURL: prInfo.URL,
 	})
+}
+
+func isNoCommitsPRCreateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no commits between")
 }
 
 // truncateForTitle extracts a short title from a task prompt for PR titles.

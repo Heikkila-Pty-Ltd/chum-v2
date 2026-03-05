@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,6 +26,7 @@ import (
 type mockTaskStore struct {
 	tasks          map[string][]dag.Task
 	statusUpdates  map[string]string // taskID -> new status
+	taskUpdates    map[string]map[string]any
 	globalPaused   bool
 	globalPauseSet bool // true = DB row exists (SetGlobalPaused was called)
 	globalPauseErr error
@@ -43,6 +45,28 @@ func (m *mockTaskStore) CreateTask(ctx context.Context, t dag.Task) (string, err
 }
 
 func (m *mockTaskStore) UpdateTask(ctx context.Context, id string, fields map[string]any) error {
+	if m.taskUpdates != nil {
+		copied := make(map[string]any, len(fields))
+		for k, v := range fields {
+			copied[k] = v
+		}
+		m.taskUpdates[id] = copied
+	}
+	for project, tasks := range m.tasks {
+		for i := range tasks {
+			if tasks[i].ID != id {
+				continue
+			}
+			if v, ok := fields["status"].(string); ok {
+				tasks[i].Status = v
+			}
+			if v, ok := fields["error_log"].(string); ok {
+				tasks[i].ErrorLog = v
+			}
+			m.tasks[project] = tasks
+			return nil
+		}
+	}
 	return nil
 }
 
@@ -967,6 +991,83 @@ func TestScanOrphanedReviewsActivity_RecoversNoReviewerActivityOnly(t *testing.T
 	}
 	if orphans[0].TaskID != "task-resume" {
 		t.Fatalf("task id = %q, want task-resume", orphans[0].TaskID)
+	}
+}
+
+func TestScanOrphanedReviewsActivity_AutoCompletesMergedPR(t *testing.T) {
+	mockStore := &mockTaskStore{
+		tasks: map[string][]dag.Task{
+			"proj": {
+				{
+					ID:       "task-merged",
+					Status:   string(types.StatusNeedsReview),
+					Project:  "proj",
+					ErrorLog: `{"reason":"needs_review","sub_reason":"merge_blocked","review_url":"https://example.com/pr/2","pr_number":2}`,
+				},
+			},
+		},
+		taskUpdates: map[string]map[string]any{},
+	}
+
+	binDir := t.TempDir()
+	ghPath := filepath.Join(binDir, "gh")
+	script := `#!/bin/sh
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  echo '{"state":"MERGED"}'
+  exit 0
+fi
+echo "unexpected gh invocation: $@" >&2
+exit 1
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workspace := t.TempDir()
+	da := &DispatchActivities{
+		DAG: mockStore,
+		Config: &config.Config{
+			General: config.General{
+				ExecTimeout:   config.Duration{Duration: 45 * time.Minute},
+				ShortTimeout:  config.Duration{Duration: 2 * time.Minute},
+				ReviewTimeout: config.Duration{Duration: 10 * time.Minute},
+			},
+			Projects: map[string]config.Project{
+				"proj": {Enabled: true, Workspace: workspace},
+			},
+			Providers: map[string]config.Provider{
+				"gemini": {CLI: "gemini", Enabled: true, Tier: "fast"},
+			},
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(da.ScanOrphanedReviewsActivity)
+
+	value, err := env.ExecuteActivity(da.ScanOrphanedReviewsActivity)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var orphans []ReviewRequest
+	if err := value.Get(&orphans); err != nil {
+		t.Fatalf("decode activity result: %v", err)
+	}
+	if len(orphans) != 0 {
+		t.Fatalf("orphans = %d, want 0", len(orphans))
+	}
+
+	if got := mockStore.tasks["proj"][0].Status; got != string(types.StatusCompleted) {
+		t.Fatalf("task status = %q, want completed", got)
+	}
+	update, ok := mockStore.taskUpdates["task-merged"]
+	if !ok {
+		t.Fatalf("expected UpdateTask call for task-merged")
+	}
+	if got, _ := update["status"].(string); got != string(types.StatusCompleted) {
+		t.Fatalf("updated status = %q, want completed", got)
 	}
 }
 

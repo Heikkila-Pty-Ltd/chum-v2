@@ -276,3 +276,84 @@ done
 		t.Fatalf("expected --base master in gh args, got:\n%s", args)
 	}
 }
+
+func initRepoWithRemote(t *testing.T) (repo string, remote string) {
+	t.Helper()
+	remote = filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+
+	repo = initRepo(t)
+	runGit(t, repo, "remote", "add", "origin", remote)
+	runGit(t, repo, "push", "-u", "origin", "main")
+	return repo, remote
+}
+
+func TestPush_ForceWithLeaseFallbackOnChumBranch(t *testing.T) {
+	t.Parallel()
+
+	repo, _ := initRepoWithRemote(t)
+
+	// Create remote branch tip A.
+	runGit(t, repo, "checkout", "-b", "chum/task-push-fallback")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("remote tip A\n"), 0o644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "remote tip A")
+	runGit(t, repo, "push", "-u", "origin", "HEAD")
+
+	// Recreate same local branch from main to force a non-fast-forward push.
+	runGit(t, repo, "checkout", "main")
+	runGit(t, repo, "fetch", "origin")
+	runGit(t, repo, "branch", "-D", "chum/task-push-fallback")
+	runGit(t, repo, "checkout", "-b", "chum/task-push-fallback")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("local tip B\n"), 0o644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "local tip B")
+
+	if err := Push(context.Background(), repo); err != nil {
+		t.Fatalf("Push fallback failed: %v", err)
+	}
+
+	localHead := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+	remoteHead := strings.TrimSpace(runGit(t, repo, "rev-parse", "origin/chum/task-push-fallback"))
+	if localHead != remoteHead {
+		t.Fatalf("remote head = %s, want %s", remoteHead, localHead)
+	}
+}
+
+func TestPush_NonFastForwardNonChumBranchFails(t *testing.T) {
+	t.Parallel()
+
+	repo, _ := initRepoWithRemote(t)
+
+	// Create remote branch tip A.
+	runGit(t, repo, "checkout", "-b", "feature/task-no-force")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("remote tip A\n"), 0o644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "remote tip A")
+	runGit(t, repo, "push", "-u", "origin", "HEAD")
+
+	// Recreate same local branch from main to force non-fast-forward.
+	runGit(t, repo, "checkout", "main")
+	runGit(t, repo, "fetch", "origin")
+	runGit(t, repo, "branch", "-D", "feature/task-no-force")
+	runGit(t, repo, "checkout", "-b", "feature/task-no-force")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("local tip B\n"), 0o644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "local tip B")
+
+	err := Push(context.Background(), repo)
+	if err == nil {
+		t.Fatal("expected non-fast-forward push on non-chum branch to fail")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "non-fast-forward") {
+		t.Fatalf("error = %v, want non-fast-forward hint", err)
+	}
+}

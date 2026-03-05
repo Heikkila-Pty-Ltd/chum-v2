@@ -41,6 +41,10 @@ func ReviewWorkflow(ctx workflow.Context, req ReviewRequest) error {
 	if reviewTimeout <= 0 {
 		reviewTimeout = 10 * time.Minute
 	}
+	dodTimeout := execTimeout
+	if reviewTimeout > dodTimeout {
+		dodTimeout = reviewTimeout
+	}
 
 	shortOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: shortTimeout,
@@ -55,7 +59,7 @@ func ReviewWorkflow(ctx workflow.Context, req ReviewRequest) error {
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 	dodOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: reviewTimeout,
+		StartToCloseTimeout: dodTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 
