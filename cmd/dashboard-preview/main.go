@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/jarvis"
@@ -47,6 +48,7 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	workDirs := map[string]string{"chum": "."}
+	var cfg *config.Config
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -79,6 +81,19 @@ func main() {
 	defer s.Close()
 
 	eng := jarvis.NewEngine(d, nil, "", workDirs, logger)
+	if cfg != nil && cfg.BeadsBridge.Enabled {
+		beadsClients := make(map[string]beads.Store)
+		for name, workspace := range workDirs {
+			bc, bcErr := beads.NewClient(workspace)
+			if bcErr != nil {
+				logger.Warn("Dashboard preview beads ingress disabled for project (client init failed)",
+					"project", name, "error", bcErr)
+				continue
+			}
+			beadsClients[name] = bc
+		}
+		eng.ConfigureBeadsIngress(cfg.BeadsBridge.IngressPolicy, cfg.BeadsBridge.CanaryLabel, beadsClients)
+	}
 	runner := llm.CLIRunner{}
 	api := &jarvis.API{Engine: eng, DAG: d, Store: s, LLM: runner, Logger: logger, WebDir: webDir}
 

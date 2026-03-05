@@ -82,13 +82,26 @@ func main() {
 			}
 
 			workDirs := make(map[string]string)
+			beadsClients := make(map[string]beads.Store)
 			for name, proj := range cfg.Projects {
 				if proj.Enabled {
 					workDirs[name] = proj.Workspace
+					if cfg.BeadsBridge.Enabled {
+						bc, bcErr := beads.NewClient(proj.Workspace)
+						if bcErr != nil {
+							logger.Warn("Jarvis beads ingress disabled for project (client init failed)",
+								"project", name, "error", bcErr)
+						} else {
+							beadsClients[name] = bc
+						}
+					}
 				}
 			}
 
 			eng := jarvis.NewEngine(d, c, cfg.General.TaskQueue, workDirs, logger)
+			if cfg.BeadsBridge.Enabled {
+				eng.ConfigureBeadsIngress(cfg.BeadsBridge.IngressPolicy, cfg.BeadsBridge.CanaryLabel, beadsClients)
+			}
 			policy := "legacy"
 			if cfg.BeadsBridge.Enabled {
 				policy = cfg.BeadsBridge.IngressPolicy

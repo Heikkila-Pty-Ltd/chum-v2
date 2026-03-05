@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
 )
 
 func TestAPISubmit(t *testing.T) {
@@ -55,6 +57,47 @@ func TestAPISubmit_BlockedByIngressPolicy(t *testing.T) {
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAPISubmit_AllowedWithBeadsConfigured(t *testing.T) {
+	d := testDAG(t)
+	e := NewEngine(d, nil, "test-queue", map[string]string{"chum": "/tmp/chum"}, testLogger())
+	e.ConfigureBeadsIngress("beads_only", "chum-canary", map[string]beads.Store{
+		"chum": newStubBeadsStore(),
+	})
+	api := &API{Engine: e, Logger: testLogger(), IngressPolicy: "beads_only"}
+
+	body, _ := json.Marshal(WorkRequest{
+		Title:       "API beads task",
+		Description: "Test via API beads ingress",
+		Project:     "chum",
+		Source:      "api-test",
+		ExternalRef: "ext-api-1",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/jarvis/submit", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	var result map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	taskID := result["task_id"]
+	if taskID == "" {
+		t.Fatal("expected non-empty task_id")
+	}
+	task, err := d.GetTask(t.Context(), taskID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if task.Metadata["external_ref"] != "ext-api-1" {
+		t.Fatalf("metadata[external_ref] = %q, want ext-api-1", task.Metadata["external_ref"])
 	}
 }
 

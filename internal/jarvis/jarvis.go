@@ -13,11 +13,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beadsbridge"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
@@ -46,6 +49,10 @@ type WorkRequest struct {
 	// "jarvis-goal-5", "jarvis-observation").
 	Source string `json:"source,omitempty"`
 
+	// ExternalRef is an optional upstream correlation key (ticket ID, webhook ID).
+	// This is distinct from beads issue IDs and DAG task IDs.
+	ExternalRef string `json:"external_ref,omitempty"`
+
 	// ParentTaskID links subtasks for decomposed work.
 	ParentTaskID string `json:"parent_task_id,omitempty"`
 
@@ -55,12 +62,12 @@ type WorkRequest struct {
 
 // WorkResult is returned when a work request completes.
 type WorkResult struct {
-	TaskID   string `json:"task_id"`
-	Status   string `json:"status"` // ready, running, completed, failed, needs_review, decomposed
-	PRNumber int    `json:"pr_number,omitempty"`
-	ReviewURL string `json:"review_url,omitempty"`
-	Error    string `json:"error,omitempty"`
-	SubTasks []string `json:"sub_tasks,omitempty"`
+	TaskID    string   `json:"task_id"`
+	Status    string   `json:"status"` // ready, running, completed, failed, needs_review, decomposed
+	PRNumber  int      `json:"pr_number,omitempty"`
+	ReviewURL string   `json:"review_url,omitempty"`
+	Error     string   `json:"error,omitempty"`
+	SubTasks  []string `json:"sub_tasks,omitempty"`
 }
 
 // Engine is the Jarvis-CHUM integration. It wraps the DAG and Temporal
@@ -71,6 +78,10 @@ type Engine struct {
 	taskQueue string
 	workDirs  map[string]string // project → workspace path
 	logger    *slog.Logger
+
+	ingressPolicy string
+	canaryLabel   string
+	beadsClients  map[string]beads.Store
 }
 
 // NewEngine creates a Jarvis execution engine.
@@ -81,7 +92,35 @@ func NewEngine(d dag.TaskStore, tc client.Client, taskQueue string, workDirs map
 		taskQueue: taskQueue,
 		workDirs:  workDirs,
 		logger:    logger,
+
+		ingressPolicy: "legacy",
 	}
+}
+
+// ConfigureBeadsIngress configures beads-first ingress for external submissions.
+// Any non-legacy policy requires Submit to create work in beads before DAG admission.
+func (e *Engine) ConfigureBeadsIngress(policy, canaryLabel string, clients map[string]beads.Store) {
+	p := strings.ToLower(strings.TrimSpace(policy))
+	if p == "" {
+		p = "legacy"
+	}
+	e.ingressPolicy = p
+	e.canaryLabel = strings.TrimSpace(canaryLabel)
+	e.beadsClients = clients
+}
+
+func (e *Engine) ingressRequiresBeads() bool {
+	p := strings.ToLower(strings.TrimSpace(e.ingressPolicy))
+	return p != "" && p != "legacy"
+}
+
+// CanSubmitViaBeads reports whether Submit can route the given project through
+// beads-first ingress under the current policy/configuration.
+func (e *Engine) CanSubmitViaBeads(project string) bool {
+	if !e.ingressRequiresBeads() {
+		return false
+	}
+	return e.beadsClients[project] != nil
 }
 
 // Submit creates a task in the DAG as "ready". The task will be picked up
@@ -98,12 +137,34 @@ func (e *Engine) Submit(ctx context.Context, req WorkRequest) (string, error) {
 		source = "jarvis"
 	}
 
-	labels := req.Labels
-	if labels == nil {
-		labels = []string{}
+	labels := make([]string, 0, len(req.Labels)+1)
+	seenLabels := map[string]bool{}
+	for _, raw := range req.Labels {
+		label := strings.TrimSpace(raw)
+		if label == "" {
+			continue
+		}
+		key := strings.ToLower(label)
+		if seenLabels[key] {
+			continue
+		}
+		seenLabels[key] = true
+		labels = append(labels, label)
 	}
-	// Tag all Jarvis-submitted tasks.
-	labels = append(labels, "jarvis-submitted")
+	if !seenLabels["jarvis-submitted"] {
+		labels = append(labels, "jarvis-submitted")
+	}
+
+	metadata := map[string]string{
+		"source": source,
+	}
+	if externalRef := strings.TrimSpace(req.ExternalRef); externalRef != "" {
+		metadata["external_ref"] = externalRef
+	}
+
+	if e.ingressRequiresBeads() {
+		return e.submitViaBeads(ctx, req, labels, metadata)
+	}
 
 	task := dag.Task{
 		Title:       req.Title,
@@ -112,7 +173,7 @@ func (e *Engine) Submit(ctx context.Context, req WorkRequest) (string, error) {
 		Project:     req.Project,
 		Labels:      labels,
 		ParentID:    req.ParentTaskID,
-		Metadata:    map[string]string{"source": source},
+		Metadata:    metadata,
 	}
 
 	if req.Priority > 0 {
@@ -132,6 +193,127 @@ func (e *Engine) Submit(ctx context.Context, req WorkRequest) (string, error) {
 	)
 
 	return id, nil
+}
+
+func (e *Engine) submitViaBeads(ctx context.Context, req WorkRequest, labels []string, metadata map[string]string) (string, error) {
+	bc := e.beadsClients[req.Project]
+	if bc == nil {
+		return "", fmt.Errorf("beads ingress policy %q requires a beads client for project %q", e.ingressPolicy, req.Project)
+	}
+	bridgeDAG, ok := e.dag.(*dag.DAG)
+	if !ok {
+		return "", fmt.Errorf("beads ingress policy %q requires concrete DAG backend for project %q", e.ingressPolicy, req.Project)
+	}
+
+	issueLabels := append([]string(nil), labels...)
+	if canary := strings.TrimSpace(e.canaryLabel); canary != "" {
+		seen := false
+		for _, label := range issueLabels {
+			if strings.EqualFold(strings.TrimSpace(label), canary) {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			issueLabels = append(issueLabels, canary)
+		}
+	}
+
+	parentIssueID := strings.TrimSpace(req.ParentTaskID)
+	if parentIssueID != "" {
+		if mapping, err := bridgeDAG.GetBeadsMappingByTask(ctx, req.Project, parentIssueID); err == nil {
+			if mapped := strings.TrimSpace(mapping.IssueID); mapped != "" {
+				parentIssueID = mapped
+			}
+		} else if !dag.IsNoRows(err) {
+			return "", fmt.Errorf("resolve parent mapping for %s: %w", parentIssueID, err)
+		}
+	}
+
+	priority := -1
+	if req.Priority > 0 {
+		priority = req.Priority
+	}
+
+	issueID, err := bc.Create(ctx, beads.CreateParams{
+		Title:       req.Title,
+		Description: req.Description,
+		IssueType:   "task",
+		Priority:    priority,
+		Labels:      issueLabels,
+		ParentID:    parentIssueID,
+	})
+	if err != nil {
+		return "", fmt.Errorf("create beads issue: %w", err)
+	}
+	if err := bc.Update(ctx, issueID, map[string]string{"status": string(types.StatusReady)}); err != nil {
+		return "", fmt.Errorf("mark beads issue %s ready: %w", issueID, err)
+	}
+
+	fingerprint := ""
+	if issue, showErr := bc.Show(ctx, issueID); showErr == nil {
+		fingerprint = beadsbridge.FingerprintIssue(issue)
+	}
+
+	taskMetadata := copyMetadata(metadata)
+	taskMetadata["beads_issue_id"] = issueID
+	taskMetadata["beads_bridge"] = "true"
+	taskMetadata["ingress"] = "beads"
+
+	fields := map[string]any{
+		"title":       req.Title,
+		"description": req.Description,
+		"status":      string(types.StatusReady),
+		"labels":      issueLabels,
+		"parent_id":   req.ParentTaskID,
+		"metadata":    taskMetadata,
+	}
+	if req.Priority > 0 {
+		fields["priority"] = req.Priority
+	}
+
+	if _, getErr := e.dag.GetTask(ctx, issueID); getErr == nil {
+		if err := e.dag.UpdateTask(ctx, issueID, fields); err != nil {
+			return "", fmt.Errorf("update task %s from beads submit: %w", issueID, err)
+		}
+	} else if dag.IsNoRows(getErr) {
+		task := dag.Task{
+			ID:          issueID,
+			Title:       req.Title,
+			Description: req.Description,
+			Status:      string(types.StatusReady),
+			Project:     req.Project,
+			Priority:    req.Priority,
+			Labels:      issueLabels,
+			ParentID:    req.ParentTaskID,
+			Metadata:    taskMetadata,
+		}
+		if _, err := e.dag.CreateTask(ctx, task); err != nil {
+			return "", fmt.Errorf("create task %s from beads submit: %w", issueID, err)
+		}
+	} else {
+		return "", fmt.Errorf("get task %s for beads submit: %w", issueID, getErr)
+	}
+
+	if err := bridgeDAG.UpsertBeadsMapping(ctx, req.Project, issueID, issueID, fingerprint); err != nil {
+		return "", fmt.Errorf("persist beads mapping for %s: %w", issueID, err)
+	}
+
+	e.logger.Info("Jarvis submitted task via beads",
+		"task_id", issueID,
+		"issue_id", issueID,
+		"project", req.Project,
+		"title", req.Title,
+	)
+	return issueID, nil
+}
+
+func copyMetadata(src map[string]string) map[string]string {
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }
 
 // SubmitAndDispatch creates a task and immediately triggers the dispatcher
