@@ -98,6 +98,14 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 			var childExecution workflow.Execution
 			if err := childFuture.GetChildWorkflowExecution().Get(ctx, &childExecution); err != nil {
 				logger.Error("Failed to start agent workflow", "TaskID", c.TaskID, "error", err)
+				if isWorkflowAlreadyStartedError(err) {
+					logger.Info("Agent workflow already started elsewhere; leaving task running", "TaskID", c.TaskID)
+					continue
+				}
+				resetCtx := workflow.WithActivityOptions(ctx, writeOpts)
+				if resetErr := workflow.ExecuteActivity(resetCtx, da.MarkTaskReadyActivity, c.TaskID).Get(ctx, nil); resetErr != nil {
+					logger.Error("Failed to reset task after start failure", "TaskID", c.TaskID, "error", resetErr)
+				}
 				continue
 			}
 			startCtx := workflow.WithActivityOptions(ctx, writeOpts)
@@ -134,6 +142,14 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 			var childExecution workflow.Execution
 			if err := childFuture.GetChildWorkflowExecution().Get(ctx, &childExecution); err != nil {
 				logger.Error("Failed to start review workflow", "TaskID", o.TaskID, "PR", o.PRNumber, "error", err)
+				if isWorkflowAlreadyStartedError(err) {
+					logger.Info("Review workflow already started elsewhere; leaving task running", "TaskID", o.TaskID, "PR", o.PRNumber)
+					continue
+				}
+				resetCtx := workflow.WithActivityOptions(ctx, writeOpts)
+				if resetErr := workflow.ExecuteActivity(resetCtx, da.MarkTaskNeedsReviewActivity, o.TaskID).Get(ctx, nil); resetErr != nil {
+					logger.Error("Failed to reset orphan review task after start failure", "TaskID", o.TaskID, "error", resetErr)
+				}
 				continue
 			}
 			logger.Info("Dispatched review recovery", "TaskID", o.TaskID, "PR", o.PRNumber, "ChildWorkflowID", childExecution.ID)
@@ -177,6 +193,17 @@ type DispatchActivities struct {
 // Called before spawning the child workflow to prevent double-dispatch.
 func (da *DispatchActivities) MarkTaskRunningActivity(ctx context.Context, taskID string) error {
 	return da.DAG.UpdateTaskStatus(ctx, taskID, string(types.StatusRunning))
+}
+
+// MarkTaskReadyActivity marks a task as "ready" when dispatch startup fails.
+func (da *DispatchActivities) MarkTaskReadyActivity(ctx context.Context, taskID string) error {
+	return da.DAG.UpdateTaskStatus(ctx, taskID, string(types.StatusReady))
+}
+
+// MarkTaskNeedsReviewActivity marks a task as "needs_review" when orphan review
+// startup fails and no review workflow was launched.
+func (da *DispatchActivities) MarkTaskNeedsReviewActivity(ctx context.Context, taskID string) error {
+	return da.DAG.UpdateTaskStatus(ctx, taskID, string(types.StatusNeedsReview))
 }
 
 // RecordDispatchStartActivity emits an idempotent start projection event.
@@ -759,6 +786,14 @@ func orphanReviewRecoverable(detail CloseDetail) bool {
 	default:
 		return false
 	}
+}
+
+func isWorkflowAlreadyStartedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already started")
 }
 
 func isPRMerged(ctx context.Context, workDir string, prNumber int) (bool, error) {
