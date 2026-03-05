@@ -282,53 +282,84 @@ func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID str
 		return nil
 	}
 
+	mappedIssueID := ""
+	if bridgeDAG, ok := a.DAG.(*dag.DAG); ok {
+		if mapping, mapErr := bridgeDAG.GetBeadsMappingByTask(ctx, task.Project, taskID); mapErr == nil {
+			mappedIssueID = strings.TrimSpace(mapping.IssueID)
+		}
+	}
+
 	// S6-S8: When bridge mode is enabled, writebacks are projected via durable outbox.
 	if a.Config != nil && a.Config.BeadsBridge.Enabled && !a.Config.BeadsBridge.DryRun {
 		if bridgeDAG, ok := a.DAG.(*dag.DAG); ok {
-			if mapping, mapErr := bridgeDAG.GetBeadsMappingByTask(ctx, task.Project, taskID); mapErr == nil {
+			if mappedIssueID != "" {
 				if detail.Reason != CloseDecomposed {
-					if err := beadsbridge.EnqueueTaskTerminal(ctx, bridgeDAG, task.Project, mapping.IssueID, taskID,
+					if err := beadsbridge.EnqueueTaskTerminal(ctx, bridgeDAG, task.Project, mappedIssueID, taskID,
 						string(detail.Reason), detail.SubReason, map[string]any{
 							"category":   detail.Category,
 							"summary":    detail.Summary,
 							"review_url": detail.ReviewURL,
 							"pr_number":  detail.PRNumber,
 						}); err != nil {
-						logger.Warn("Bridge outbox enqueue failed", "taskID", taskID, "issueID", mapping.IssueID, "error", err)
+						logger.Warn("Bridge outbox enqueue failed", "taskID", taskID, "issueID", mappedIssueID, "error", err)
 					}
 				}
 				return nil
 			}
 		}
+		logger.Info("Beads writeback skipped: bridge mode requires mapped beads issue",
+			"taskID", taskID,
+			"project", task.Project,
+		)
+		return nil
 	}
 
 	bc, ok := a.BeadsClients[task.Project]
 	if !ok {
 		return nil
 	}
+	issueID := mappedIssueID
+	if issueID == "" && task.Metadata != nil {
+		issueID = strings.TrimSpace(task.Metadata["beads_issue_id"])
+	}
+	if issueID == "" {
+		issueID = taskID
+	}
+	// In non-bridge mode, avoid noisy writeback failures for DAG-only synthetic tasks.
+	if mappedIssueID == "" {
+		if _, showErr := bc.Show(ctx, issueID); showErr != nil {
+			logger.Info("Beads writeback skipped: task has no matching beads issue",
+				"taskID", taskID,
+				"project", task.Project,
+				"issueID", issueID,
+				"error", showErr,
+			)
+			return nil
+		}
+	}
 	switch detail.Reason {
 	case CloseCompleted:
 		reason := fmt.Sprintf("Completed by CHUM. PR #%d", detail.PRNumber)
-		if err := bc.Close(ctx, taskID, reason); err != nil {
-			logger.Warn("Beads writeback failed", "taskID", taskID, "error", err)
+		if err := bc.Close(ctx, issueID, reason); err != nil {
+			logger.Warn("Beads writeback failed", "taskID", taskID, "issueID", issueID, "error", err)
 		}
 	case CloseDecomposed:
-		if err := bc.Update(ctx, taskID, map[string]string{
+		if err := bc.Update(ctx, issueID, map[string]string{
 			"status": string(types.StatusDecomposed),
 		}); err != nil {
-			logger.Warn("Beads decomposed writeback failed", "taskID", taskID, "error", err)
+			logger.Warn("Beads decomposed writeback failed", "taskID", taskID, "issueID", issueID, "error", err)
 		}
 	case CloseDoDFailed:
-		if err := bc.Update(ctx, taskID, map[string]string{
+		if err := bc.Update(ctx, issueID, map[string]string{
 			"status": string(types.StatusDoDFailed),
 		}); err != nil {
-			logger.Warn("Beads dod_failed writeback failed", "taskID", taskID, "error", err)
+			logger.Warn("Beads dod_failed writeback failed", "taskID", taskID, "issueID", issueID, "error", err)
 		}
 	case CloseFailed:
-		if err := bc.Update(ctx, taskID, map[string]string{
+		if err := bc.Update(ctx, issueID, map[string]string{
 			"status": string(types.StatusFailed),
 		}); err != nil {
-			logger.Warn("Beads failed writeback failed", "taskID", taskID, "error", err)
+			logger.Warn("Beads failed writeback failed", "taskID", taskID, "issueID", issueID, "error", err)
 		}
 	}
 	return nil

@@ -439,10 +439,14 @@ func (s *Scanner) promoteMappedTaskFromReady(ctx context.Context, taskID string)
 		return err
 	}
 	switch strings.ToLower(strings.TrimSpace(task.Status)) {
-	case string(types.StatusReady), string(types.StatusRunning), string(types.StatusCompleted), string(types.StatusDone):
-		return nil
-	default:
+	case string(types.StatusOpen):
+		// Open tasks should be promoted to ready.
 		return s.DAG.UpdateTaskStatus(ctx, taskID, string(types.StatusReady))
+	default:
+		// Every other status (ready, running, completed, done, decomposed,
+		// failed, dod_failed, needs_review, needs_refinement, stale) is
+		// already past the "open" stage and must not be reset.
+		return nil
 	}
 }
 
@@ -528,6 +532,23 @@ func mapReadyIssueStatus(status string) string {
 		return string(types.StatusReady)
 	}
 	return mapped
+}
+
+// isCHUMInternalStatus returns true for statuses that are managed by CHUM's
+// engine and should never be overwritten by beads sync. These statuses have
+// no equivalent in beads and represent internal workflow states.
+func isCHUMInternalStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case string(types.StatusDecomposed),
+		string(types.StatusFailed),
+		string(types.StatusDoDFailed),
+		string(types.StatusNeedsReview),
+		string(types.StatusNeedsRefinement),
+		string(types.StatusStale):
+		return true
+	default:
+		return false
+	}
 }
 
 func isTerminalTaskStatus(status string) bool {

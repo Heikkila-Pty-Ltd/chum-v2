@@ -1,8 +1,8 @@
 [general]
 paused = false
-tick_interval = "2m"
-max_concurrent = 4
-max_review_rounds = 5
+tick_interval = "4m"
+max_concurrent = 2
+max_review_rounds = 3
 require_cross_provider_review = false
 temporal_host_port = "localhost:7233"
 temporal_namespace = "chum-v2"
@@ -13,7 +13,7 @@ matrix_room_id = ""
 matrix_access_token = ""
 matrix_homeserver = "https://matrix.org"
 dolt_health_check_enabled = true
-dolt_health_check_interval = "30s"
+dolt_health_check_interval = "2m"
 dolt_data_dir = ".beads/dolt/beads_chum"
 dolt_host = "127.0.0.1"
 dolt_port = 3307

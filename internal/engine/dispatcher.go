@@ -366,6 +366,10 @@ func (da *DispatchActivities) scanProjectReadyTasks(ctx context.Context, project
 	if len(tasks) == 0 {
 		return nil, nil
 	}
+	tasks = da.filterBeadsMappedReadyTasks(ctx, projectName, tasks)
+	if len(tasks) == 0 {
+		return nil, nil
+	}
 
 	// Cap per project
 	max := da.Config.General.MaxConcurrent
@@ -424,6 +428,51 @@ func (da *DispatchActivities) suppressRedundantParentDispatch(ctx context.Contex
 			continue
 		}
 		filtered = append(filtered, t)
+	}
+	return filtered
+}
+
+// filterBeadsMappedReadyTasks enforces beads-first ingress at dispatch time.
+// Ready DAG tasks without a resolvable beads mapping are skipped.
+func (da *DispatchActivities) filterBeadsMappedReadyTasks(ctx context.Context, projectName string, ready []dag.Task) []dag.Task {
+	if da.Config == nil || !da.Config.BeadsBridge.Enabled {
+		return ready
+	}
+	bridgeDAG, ok := da.DAG.(*dag.DAG)
+	if !ok {
+		return ready
+	}
+	bc := da.BeadsClients[projectName]
+	filtered := make([]dag.Task, 0, len(ready))
+	for _, t := range ready {
+		mapping, err := bridgeDAG.GetBeadsMappingByTask(ctx, projectName, t.ID)
+		if err == nil && strings.TrimSpace(mapping.IssueID) != "" {
+			filtered = append(filtered, t)
+			continue
+		}
+		if err != nil && !dag.IsNoRows(err) {
+			da.Logger.Warn("Skipping ready task: unable to resolve beads mapping",
+				"project", projectName, "task", t.ID, "error", err)
+			continue
+		}
+
+		// Legacy recovery: for old tasks where task ID equals beads issue ID,
+		// bootstrap the mapping on demand and allow dispatch.
+		if bc != nil {
+			issue, showErr := bc.Show(ctx, t.ID)
+			if showErr == nil && strings.TrimSpace(issue.ID) != "" {
+				fingerprint := beadsbridge.FingerprintIssue(issue)
+				if upErr := bridgeDAG.UpsertBeadsMapping(ctx, projectName, issue.ID, t.ID, fingerprint); upErr != nil {
+					da.Logger.Warn("Skipping ready task: failed to backfill beads mapping",
+						"project", projectName, "task", t.ID, "issue", issue.ID, "error", upErr)
+					continue
+				}
+				filtered = append(filtered, t)
+				continue
+			}
+		}
+
+		da.Logger.Warn("Skipping ready task without beads mapping", "project", projectName, "task", t.ID, "parent", t.ParentID)
 	}
 	return filtered
 }

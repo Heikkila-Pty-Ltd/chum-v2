@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"go.temporal.io/sdk/activity"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/admit"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beadsbridge"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
@@ -53,21 +56,88 @@ func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*t
 func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, project string, steps []types.DecompStep) ([]string, error) {
 	logger := activity.GetLogger(ctx)
 
-	var tasks []dag.Task
+	bc, ok := a.BeadsClients[project]
+	if !ok || bc == nil {
+		return nil, fmt.Errorf("beads-first policy: no beads client configured for project %q", project)
+	}
+
+	parentIssueID := strings.TrimSpace(parentID)
+	bridgeDAG, canMap := a.DAG.(*dag.DAG)
+	if canMap {
+		if mapping, err := bridgeDAG.GetBeadsMappingByTask(ctx, project, parentID); err == nil && strings.TrimSpace(mapping.IssueID) != "" {
+			parentIssueID = strings.TrimSpace(mapping.IssueID)
+		}
+	}
+
+	type preparedSubtask struct {
+		issueID string
+		step    types.DecompStep
+	}
+	prepared := make([]preparedSubtask, 0, len(steps))
+	var prevIssueID string
 	for _, step := range steps {
+		issueID, err := bc.Create(ctx, beads.CreateParams{
+			Title:            step.Title,
+			Description:      step.Description,
+			IssueType:        "task",
+			Priority:         -1, // Use beads default priority unless planner explicitly changes it later.
+			ParentID:         parentIssueID,
+			Acceptance:       step.Acceptance,
+			EstimatedMinutes: step.Estimate,
+			Dependencies: func() []string {
+				if prevIssueID == "" {
+					return nil
+				}
+				return []string{prevIssueID}
+			}(),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create beads subtask for %q: %w", step.Title, err)
+		}
+		prepared = append(prepared, preparedSubtask{
+			issueID: issueID,
+			step:    step,
+		})
+		prevIssueID = issueID
+	}
+
+	var tasks []dag.Task
+	for _, subtask := range prepared {
 		tasks = append(tasks, dag.Task{
-			Title:           step.Title,
-			Description:     step.Description,
+			ID:              subtask.issueID,
+			Title:           subtask.step.Title,
+			Description:     subtask.step.Description,
 			ParentID:        parentID,
-			Acceptance:      step.Acceptance,
-			EstimateMinutes: step.Estimate,
+			Acceptance:      subtask.step.Acceptance,
+			EstimateMinutes: subtask.step.Estimate,
 			Project:         project,
+			Metadata: map[string]string{
+				"beads_issue_id": subtask.issueID,
+				"beads_bridge":   "true",
+			},
 		})
 	}
 
 	ids, err := a.DAG.CreateSubtasksAtomic(ctx, parentID, tasks)
 	if err != nil {
+		for _, subtask := range prepared {
+			closeErr := bc.Close(ctx, subtask.issueID, "Automatic rollback: DAG subtask creation failed")
+			if closeErr != nil {
+				logger.Warn("Failed to roll back beads subtask after DAG failure", "issueID", subtask.issueID, "error", closeErr)
+			}
+		}
 		return nil, fmt.Errorf("create subtasks for %s: %w", parentID, err)
+	}
+	if canMap {
+		for _, subtask := range prepared {
+			fingerprint := ""
+			if issue, showErr := bc.Show(ctx, subtask.issueID); showErr == nil {
+				fingerprint = beadsbridge.FingerprintIssue(issue)
+			}
+			if err := bridgeDAG.UpsertBeadsMapping(ctx, project, subtask.issueID, subtask.issueID, fingerprint); err != nil {
+				return nil, fmt.Errorf("persist beads mapping for %s: %w", subtask.issueID, err)
+			}
+		}
 	}
 	logger.Info("Created subtasks atomically", "Parent", parentID, "Count", len(ids), "IDs", ids)
 
