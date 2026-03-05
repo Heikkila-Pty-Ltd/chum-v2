@@ -21,9 +21,10 @@ type TaskRequest struct {
 	ParentID string `json:"parent_id"` // non-empty for subtasks (skip decomposition)
 
 	// Timeouts (zero = use defaults). Populated from config by dispatcher.
-	ExecTimeout   time.Duration `json:"exec_timeout,omitempty"`
-	ShortTimeout  time.Duration `json:"short_timeout,omitempty"`
-	ReviewTimeout time.Duration `json:"review_timeout,omitempty"`
+	ExecTimeout     time.Duration `json:"exec_timeout,omitempty"`
+	ShortTimeout    time.Duration `json:"short_timeout,omitempty"`
+	ReviewTimeout   time.Duration `json:"review_timeout,omitempty"`
+	MaxReviewRounds int           `json:"max_review_rounds,omitempty"`
 }
 
 // ExecResult is the output of the execute activity.
@@ -97,14 +98,15 @@ type CloseDetail struct {
 // Tasks that created a PR but whose workflow died before review can be
 // recovered by spawning a ReviewWorkflow with the PR number from error_log.
 type ReviewRequest struct {
-	TaskID        string        `json:"task_id"`
-	Project       string        `json:"project"`
-	WorkDir       string        `json:"work_dir"`
-	PRNumber      int           `json:"pr_number"`
-	Agent         string        `json:"agent"` // original executor agent (used to pick cross-reviewer)
-	Model         string        `json:"model"`
-	Prompt        string        `json:"prompt"` // original task prompt for re-execution on changes_requested
-	ExecTimeout   time.Duration `json:"exec_timeout,omitempty"`
-	ShortTimeout  time.Duration `json:"short_timeout,omitempty"`
-	ReviewTimeout time.Duration `json:"review_timeout,omitempty"`
+	TaskID          string        `json:"task_id"`
+	Project         string        `json:"project"`
+	WorkDir         string        `json:"work_dir"`
+	PRNumber        int           `json:"pr_number"`
+	Agent           string        `json:"agent"` // original executor agent (used to pick cross-reviewer)
+	Model           string        `json:"model"`
+	Prompt          string        `json:"prompt"` // original task prompt for re-execution on changes_requested
+	ExecTimeout     time.Duration `json:"exec_timeout,omitempty"`
+	ShortTimeout    time.Duration `json:"short_timeout,omitempty"`
+	ReviewTimeout   time.Duration `json:"review_timeout,omitempty"`
+	MaxReviewRounds int           `json:"max_review_rounds,omitempty"`
 }

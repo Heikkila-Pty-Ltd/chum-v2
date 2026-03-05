@@ -43,6 +43,9 @@ workspace = "/tmp/myproject"
 	if cfg.General.MaxConcurrent != 2 {
 		t.Errorf("expected default max_concurrent=2, got %d", cfg.General.MaxConcurrent)
 	}
+	if cfg.General.MaxReviewRounds != 5 {
+		t.Errorf("expected default max_review_rounds=5, got %d", cfg.General.MaxReviewRounds)
+	}
 	if cfg.General.TickInterval.Duration != 2*time.Minute {
 		t.Errorf("expected default tick interval 2m, got %v", cfg.General.TickInterval.Duration)
 	}
@@ -273,6 +276,8 @@ func TestTimeoutCustomValues(t *testing.T) {
 exec_timeout = "1h"
 short_timeout = "5m"
 review_timeout = "20m"
+max_review_rounds = 7
+require_cross_provider_review = true
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "chum.toml")
@@ -293,6 +298,48 @@ review_timeout = "20m"
 	}
 	if cfg.General.ReviewTimeout.Duration != 20*time.Minute {
 		t.Errorf("expected review_timeout 20m, got %v", cfg.General.ReviewTimeout.Duration)
+	}
+	if cfg.General.MaxReviewRounds != 7 {
+		t.Errorf("expected max_review_rounds 7, got %d", cfg.General.MaxReviewRounds)
+	}
+	if !cfg.General.RequireCrossProviderReview {
+		t.Error("expected require_cross_provider_review=true")
+	}
+}
+
+func TestMaxReviewRoundsInvalid(t *testing.T) {
+	t.Parallel()
+	content := `
+[general]
+max_review_rounds = -1
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chum.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for invalid max_review_rounds")
+	}
+}
+
+func TestMaxReviewRoundsZeroDefaultsToFive(t *testing.T) {
+	t.Parallel()
+	content := `
+[general]
+max_review_rounds = 0
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chum.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.General.MaxReviewRounds != 5 {
+		t.Fatalf("max_review_rounds = %d, want default 5", cfg.General.MaxReviewRounds)
 	}
 }
 

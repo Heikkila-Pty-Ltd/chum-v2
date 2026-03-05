@@ -82,6 +82,7 @@ type BeadsBridge struct {
 type General struct {
 	TickInterval      Duration `toml:"tick_interval"`
 	MaxConcurrent     int      `toml:"max_concurrent"`
+	MaxReviewRounds   int      `toml:"max_review_rounds"` // max auto review/fix cycles before escalating (default: 5)
 	TemporalHostPort  string   `toml:"temporal_host_port"`
 	TemporalNamespace string   `toml:"temporal_namespace"`
 	TaskQueue         string   `toml:"task_queue"`
@@ -91,9 +92,10 @@ type General struct {
 	MatrixAccessToken string   `toml:"matrix_access_token"`
 	MatrixHomeserver  string   `toml:"matrix_homeserver"`
 
-	ExecTimeout   Duration `toml:"exec_timeout"`   // LLM execution timeout (default: 45m)
-	ShortTimeout  Duration `toml:"short_timeout"`  // short ops like push/PR (default: 2m)
-	ReviewTimeout Duration `toml:"review_timeout"` // review activity timeout (default: 10m)
+	ExecTimeout                Duration `toml:"exec_timeout"`                  // LLM execution timeout (default: 45m)
+	ShortTimeout               Duration `toml:"short_timeout"`                 // short ops like push/PR (default: 2m)
+	ReviewTimeout              Duration `toml:"review_timeout"`                // review activity timeout (default: 10m)
+	RequireCrossProviderReview bool     `toml:"require_cross_provider_review"` // if true, reviewer must use a different provider than executor
 
 	DoltHealthCheckEnabled  bool     `toml:"dolt_health_check_enabled"`
 	DoltHealthCheckInterval Duration `toml:"dolt_health_check_interval"`
@@ -140,6 +142,10 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.General.MaxConcurrent == 0 {
 		cfg.General.MaxConcurrent = 2
+	}
+	// max_review_rounds=0 means "unset" and is promoted to the default.
+	if cfg.General.MaxReviewRounds == 0 {
+		cfg.General.MaxReviewRounds = 5
 	}
 	if cfg.General.TemporalHostPort == "" {
 		cfg.General.TemporalHostPort = "localhost:7233"
@@ -227,6 +233,10 @@ func Load(path string) (*Config, error) {
 }
 
 func validate(cfg *Config) error {
+	if cfg.General.MaxReviewRounds < 0 {
+		return fmt.Errorf("invalid general.max_review_rounds %d: must be >= 0 (0 means default)", cfg.General.MaxReviewRounds)
+	}
+
 	switch strings.ToLower(strings.TrimSpace(cfg.BeadsBridge.IngressPolicy)) {
 	case "legacy", "beads_first", "beads-only", "beads_only":
 		// Normalize aliases to stable internal values.

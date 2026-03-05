@@ -481,6 +481,46 @@ func TestScanCandidatesActivity_GlobalPauseSkipsCandidates(t *testing.T) {
 	}
 }
 
+func TestScanCandidatesActivity_PropagatesMaxReviewRounds(t *testing.T) {
+	t.Parallel()
+
+	mockStore := &mockTaskStore{
+		tasks: map[string][]dag.Task{
+			"proj": {
+				{ID: "task-1", Description: "review rounds"},
+			},
+		},
+	}
+	da := &DispatchActivities{
+		DAG: mockStore,
+		Config: &config.Config{
+			General: config.General{
+				MaxConcurrent:   1,
+				MaxReviewRounds: 7,
+			},
+			Projects: map[string]config.Project{
+				"proj": {Enabled: true, Workspace: "/tmp/proj"},
+			},
+			Providers: map[string]config.Provider{
+				"claude": {CLI: "claude", Model: "sonnet", Enabled: true, Tier: "balanced"},
+			},
+			Tiers: config.Tiers{Balanced: []string{"claude"}},
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	candidates, err := da.ScanCandidatesActivity(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	}
+	if candidates[0].MaxReviewRounds != 7 {
+		t.Fatalf("MaxReviewRounds = %d, want 7", candidates[0].MaxReviewRounds)
+	}
+}
+
 func TestPickProvider_PerfInformed(t *testing.T) {
 	t.Parallel()
 

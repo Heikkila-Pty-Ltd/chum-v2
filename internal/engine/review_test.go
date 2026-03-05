@@ -1,6 +1,12 @@
 package engine
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
+	"go.temporal.io/sdk/testsuite"
+)
 
 func TestParseReviewSignal_UnwrapsClaudeEnvelope(t *testing.T) {
 	t.Parallel()
@@ -44,6 +50,186 @@ func TestDefaultReviewer(t *testing.T) {
 	}
 	if got := DefaultReviewer("codex"); got != "claude" {
 		t.Fatalf("DefaultReviewer(codex) = %q, want claude", got)
+	}
+}
+
+func TestResolveReviewer_UsesConfiguredCrossProvider(t *testing.T) {
+	t.Parallel()
+
+	a := &Activities{
+		Config: &config.Config{
+			Providers: map[string]config.Provider{
+				"claude": {
+					CLI:      "claude",
+					Model:    "claude-sonnet",
+					Reviewer: "gemini",
+					Enabled:  true,
+				},
+				"gemini": {
+					CLI:     "gemini",
+					Model:   "gemini-2.5-flash",
+					Enabled: true,
+				},
+			},
+		},
+	}
+
+	agent, model, cross := a.resolveReviewer("claude")
+	if agent != "gemini" {
+		t.Fatalf("reviewer agent = %q, want gemini", agent)
+	}
+	if model != "gemini-2.5-flash" {
+		t.Fatalf("reviewer model = %q, want gemini-2.5-flash", model)
+	}
+	if !cross {
+		t.Fatal("expected cross-provider reviewer")
+	}
+}
+
+func TestResolveReviewer_FallsBackToAnyEnabledCrossProvider(t *testing.T) {
+	t.Parallel()
+
+	a := &Activities{
+		Config: &config.Config{
+			Providers: map[string]config.Provider{
+				"claude": {
+					CLI:      "claude",
+					Model:    "claude-sonnet",
+					Reviewer: "gemini",
+					Enabled:  true,
+				},
+				"gemini": {
+					CLI:     "gemini",
+					Model:   "gemini-2.5-flash",
+					Enabled: false,
+				},
+				"codex": {
+					CLI:     "codex",
+					Model:   "gpt-5-codex",
+					Enabled: true,
+				},
+			},
+		},
+	}
+
+	agent, model, cross := a.resolveReviewer("claude")
+	if agent != "codex" {
+		t.Fatalf("reviewer agent = %q, want codex", agent)
+	}
+	if model != "gpt-5-codex" {
+		t.Fatalf("reviewer model = %q, want gpt-5-codex", model)
+	}
+	if !cross {
+		t.Fatal("expected cross-provider reviewer")
+	}
+}
+
+func TestResolveReviewer_NoCrossProviderAvailable(t *testing.T) {
+	t.Parallel()
+
+	a := &Activities{
+		Config: &config.Config{
+			Providers: map[string]config.Provider{
+				"claude": {
+					CLI:      "claude",
+					Model:    "claude-sonnet",
+					Reviewer: "claude",
+					Enabled:  true,
+				},
+			},
+		},
+	}
+
+	agent, model, cross := a.resolveReviewer("claude")
+	if agent != "claude" {
+		t.Fatalf("reviewer agent = %q, want claude", agent)
+	}
+	if model != "claude-sonnet" {
+		t.Fatalf("reviewer model = %q, want claude-sonnet", model)
+	}
+	if cross {
+		t.Fatal("did not expect cross-provider reviewer")
+	}
+}
+
+func TestBuildReviewPrompt_AdversarialRole(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildReviewPrompt(123, 2, "diff --git a x")
+	if !strings.Contains(prompt, "adversarial reviewer") {
+		t.Fatalf("expected adversarial reviewer instruction, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "If confidence is not high, choose REQUEST_CHANGES.") {
+		t.Fatalf("expected strict request-changes bias, got: %q", prompt)
+	}
+}
+
+func TestRunReviewActivity_RequireCrossProviderReviewEnforced(t *testing.T) {
+	t.Parallel()
+
+	a := &Activities{
+		Config: &config.Config{
+			General: config.General{
+				RequireCrossProviderReview: true,
+			},
+			Providers: map[string]config.Provider{
+				"claude": {
+					CLI:      "claude",
+					Model:    "claude-sonnet",
+					Reviewer: "claude",
+					Enabled:  true,
+				},
+			},
+		},
+	}
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(a.RunReviewActivity)
+
+	_, err := env.ExecuteActivity(a.RunReviewActivity, t.TempDir(), 1, 1, "claude")
+	if err == nil {
+		t.Fatal("expected cross-provider enforcement error, got nil")
+	}
+	if !strings.Contains(err.Error(), "cross-provider reviewer required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunReviewActivity_RequireCrossProviderReviewRejectsDisabledReviewer(t *testing.T) {
+	t.Parallel()
+
+	a := &Activities{
+		Config: &config.Config{
+			General: config.General{
+				RequireCrossProviderReview: true,
+			},
+			Providers: map[string]config.Provider{
+				"claude": {
+					CLI:      "claude",
+					Model:    "claude-sonnet",
+					Reviewer: "gemini",
+					Enabled:  true,
+				},
+				"gemini": {
+					CLI:     "gemini",
+					Model:   "gemini-2.5-flash",
+					Enabled: false,
+				},
+			},
+		},
+	}
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(a.RunReviewActivity)
+
+	_, err := env.ExecuteActivity(a.RunReviewActivity, t.TempDir(), 1, 1, "claude")
+	if err == nil {
+		t.Fatal("expected strict cross-provider enforcement error, got nil")
+	}
+	if !strings.Contains(err.Error(), "no enabled cross-provider reviewer") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
