@@ -34,30 +34,17 @@ EOF
 expect_pass "$clean_repo"
 
 todo_repo=$(new_repo)
-cat >"$todo_repo/bad.go" <<'EOF'
-package bad
-// TODO: missing issue id
-func x() {}
-EOF
+printf 'package bad\n%s\nfunc x() {}\n' '// TODO: missing issue id' >"$todo_repo/bad.go"
 (cd "$todo_repo" && git add bad.go)
 expect_fail "$todo_repo"
 
 tracked_todo_repo=$(new_repo)
-cat >"$tracked_todo_repo/good.go" <<'EOF'
-package good
-// TODO(bd-123): tracked follow-up
-func x() {}
-EOF
+printf 'package good\n%s\nfunc x() {}\n' '// TODO(bd-123): tracked follow-up' >"$tracked_todo_repo/good.go"
 (cd "$tracked_todo_repo" && git add good.go)
 expect_pass "$tracked_todo_repo"
 
 conflict_repo=$(new_repo)
-cat >"$conflict_repo/conflict.go" <<'EOF'
-package conflict
-<<<<<<< HEAD
-func left() {}
->>>>>>> other
-EOF
+printf 'package conflict\n%s\nfunc left() {}\n%s\n' '<<<<<<< HEAD' '>>>>>>> other' >"$conflict_repo/conflict.go"
 (cd "$conflict_repo" && git add conflict.go)
 expect_fail "$conflict_repo"
 

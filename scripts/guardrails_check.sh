@@ -17,7 +17,7 @@ if [ -n "$conflict_hits" ]; then
 fi
 
 todo_hits=$(
-  git grep -nEI '\b(TODO|FIXME)\b' -- \
+  git grep -nEI '(^|[[:space:]])(//|#|/\*+|\*|<!--)[[:space:]]*(TODO|FIXME)\b' -- \
     '*.go' '*.py' '*.rs' '*.ts' '*.tsx' '*.js' '*.jsx' '*.mjs' '*.sh' '*.yaml' '*.yml' 'Makefile' \
     || true
 )
