@@ -10,7 +10,11 @@ branch=$1
 start_point=${2:-HEAD}
 repo_root=$(git rev-parse --show-toplevel)
 common_git_dir=$(git rev-parse --git-common-dir)
-common_git_dir_abs=$(cd "$repo_root/$common_git_dir" 2>/dev/null && pwd || cd "$common_git_dir" && pwd)
+if [ -d "$repo_root/$common_git_dir" ]; then
+  common_git_dir_abs=$(cd "$repo_root/$common_git_dir" && pwd)
+else
+  common_git_dir_abs=$(cd "$common_git_dir" && pwd)
+fi
 primary_checkout=$(dirname "$common_git_dir_abs")
 repo_name=$(basename "$primary_checkout")
 repo_parent=$(dirname "$primary_checkout")

@@ -91,7 +91,7 @@ These are mandatory for all agent-authored code changes.
      - beads-required mode behavior (`beads_first`/`beads_only`)
 6. **No unresolved conflict markers or TODO debt in merged code**
    - Verify no `<<<<<<<`, `=======`, `>>>>>>>` markers before commit.
-   - Do not leave TODO/FIXME without a tracked `bd` issue ID.
+   - Do not leave TODO/FIXME without a tracked issue ID in-line, e.g. `TODO(bd-123)`.
 
 
 <!-- BEGIN BEADS INTEGRATION -->
