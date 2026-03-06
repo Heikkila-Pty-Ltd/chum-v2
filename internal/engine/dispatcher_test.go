@@ -642,7 +642,6 @@ func TestScanCandidatesActivity_ReadyParentWithChildrenIsAutoDecomposed(t *testi
 		t.Fatalf("parent status update = %q, want %q", got, types.StatusDecomposed)
 	}
 }
-
 func TestPickProvider_PerfInformed(t *testing.T) {
 	t.Parallel()
 
