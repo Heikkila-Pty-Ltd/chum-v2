@@ -3,7 +3,11 @@ set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
 common_git_dir=$(git rev-parse --git-common-dir)
-common_git_dir_abs=$(cd "$repo_root/$common_git_dir" 2>/dev/null && pwd || cd "$common_git_dir" && pwd)
+if [ -d "$repo_root/$common_git_dir" ]; then
+  common_git_dir_abs=$(cd "$repo_root/$common_git_dir" && pwd)
+else
+  common_git_dir_abs=$(cd "$common_git_dir" && pwd)
+fi
 primary_checkout=$(dirname "$common_git_dir_abs")
 repo_name=$(basename "$primary_checkout")
 cd "$repo_root"
@@ -32,7 +36,7 @@ case "$repo_name" in
   assistant)
     risky_re='(^|/)(internal/(agent|knowledge|matrix|git|temporal)|cmd/|memory/)'
     ;;
-  chum|chum-automation|cortex|cortex-factory)
+  chum|chum-v2|chum-automation|cortex|cortex-factory)
     risky_re='(^|/)(internal/|cmd/|scripts/|build/)'
     ;;
   hg-chum-integration|hg-chum-integration-automation)
