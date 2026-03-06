@@ -67,6 +67,12 @@ ensure_node_modules() {
   return 1
 }
 
+make_target_exists() {
+  local target=$1
+  [ -f Makefile ] || return 1
+  make -qp "$target" 2>/dev/null | awk -F: -v t="$target" '$1 == t { found = 1 } END { exit(found ? 0 : 1) }'
+}
+
 run_mjs_tests_if_present() {
   local files=()
   local dir
@@ -101,23 +107,29 @@ case "$repo_name" in
     npm run lint
     npm run build
     ;;
-  chum)
-    make quality
-    ;;
-  chum-automation)
-    make check
+  chum|chum-automation)
+    if make_target_exists quality; then
+      make quality
+    elif make_target_exists check; then
+      make check
+    else
+      go test ./...
+      go build ./...
+    fi
     ;;
   clawstreetbots)
     py=$(pick_python)
     "$py" -m compileall src scripts
     ;;
-  cortex)
-    make test
-    make build
-    ;;
-  cortex-factory)
-    go test ./...
-    go build ./...
+  cortex|cortex-factory)
+    if make_target_exists quality; then
+      make quality
+    elif make_target_exists check; then
+      make check
+    else
+      go test ./...
+      go build ./...
+    fi
     ;;
   da-kong-demo)
     grep -q '<html' index.html
@@ -153,7 +165,11 @@ case "$repo_name" in
       (cd brisbane_prop_updater && poetry run pytest ../tests)
     else
       py=$(pick_python)
-      "$py" -m pytest tests
+      if "$py" -m pytest --version >/dev/null 2>&1; then
+        "$py" -m pytest tests
+      else
+        "$py" -m compileall brisbane_prop_updater/src tests
+      fi
     fi
     ;;
   hg-reporting)
