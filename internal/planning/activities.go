@@ -385,9 +385,37 @@ Rules:
 func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, req PlanningRequest, steps []types.DecompStep) ([]string, error) {
 	logger := activity.GetLogger(ctx)
 
+	requiresBeads := pa.Config != nil &&
+		pa.Config.BeadsBridge.Enabled &&
+		planningIngressRequiresBeads(pa.Config.BeadsBridge.IngressPolicy)
+	if !requiresBeads {
+		var tasks []dag.Task
+		for _, step := range steps {
+			tasks = append(tasks, dag.Task{
+				Title:           step.Title,
+				Description:     step.Description,
+				ParentID:        req.GoalID,
+				Acceptance:      step.Acceptance,
+				EstimateMinutes: step.Estimate,
+				Project:         req.Project,
+				Status:          string(types.StatusReady),
+			})
+		}
+
+		ids, err := pa.DAG.CreateSubtasksAtomic(ctx, req.GoalID, tasks)
+		if err != nil {
+			return nil, fmt.Errorf("create plan subtasks: %w", err)
+		}
+		logger.Info("Created plan subtasks", "Parent", req.GoalID, "Count", len(ids))
+		return ids, nil
+	}
+
 	bc := pa.beadsClient(req.Project)
 	if bc == nil {
 		return nil, fmt.Errorf("beads-first policy: no beads client configured for project %q", req.Project)
+	}
+	if _, isNull := bc.(*beads.NullStore); isNull {
+		return nil, fmt.Errorf("beads-first policy: project %q is using NullStore (bd unavailable)", req.Project)
 	}
 
 	parentIssueID := strings.TrimSpace(req.GoalID)
@@ -554,6 +582,11 @@ func (pa *PlanningActivities) beadsClient(project string) beads.Store {
 		return nil
 	}
 	return pa.BeadsClients[project]
+}
+
+func planningIngressRequiresBeads(policy string) bool {
+	p := strings.ToLower(strings.TrimSpace(policy))
+	return p != "" && p != "legacy"
 }
 
 func (pa *PlanningActivities) buildCodebaseContext(ctx context.Context, workDir string) string {
