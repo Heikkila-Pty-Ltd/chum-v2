@@ -27,7 +27,7 @@ func TestExtractJSONVariants(t *testing.T) {
 			contains: []string{`"summary":"ok"`},
 		},
 		{
-			name: "claude envelope",
+			name:  "claude envelope",
 			input: `{"type":"result","result":[{"type":"text","text":"{\"summary\":\"ok\",\"steps\":[\"a\"]}"}]}`,
 			contains: []string{
 				`"summary":"ok"`,

@@ -307,4 +307,3 @@ func (b *Bridge) clearActiveSession(room, sessionID string) {
 		delete(b.activeByRoom, room)
 	}
 }
-

@@ -72,7 +72,7 @@ type SafetyBlock struct {
 // StoredLesson is a lesson persisted with FTS5 indexing.
 type StoredLesson struct {
 	ID        int64
-	TaskID  string
+	TaskID    string
 	Project   string
 	Category  string // pattern, antipattern, rule, insight
 	Summary   string

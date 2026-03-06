@@ -147,7 +147,7 @@ var providers = map[string]providerConfig{
 		execFlags: []string{"--dangerously-skip-permissions"},
 	},
 	"gemini": {
-		binary:    "gemini",
+		binary: "gemini",
 		// Gemini v0.27+ uses --prompt for headless mode.
 		// A single-space argument avoids duplicating the real prompt payload in argv;
 		// the actual prompt is provided via stdin.
@@ -155,7 +155,7 @@ var providers = map[string]providerConfig{
 		execFlags: []string{"--prompt", " ", "--approval-mode", "yolo", "--sandbox", "false"},
 	},
 	"codex": {
-		binary:    "codex",
+		binary: "codex",
 		// Codex CLI v0.104+ requires the non-interactive "exec" subcommand.
 		planFlags: []string{"exec", "--sandbox", "read-only", "--color", "never"},
 		execFlags: []string{"exec", "--full-auto", "--color", "never"},
