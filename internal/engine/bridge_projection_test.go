@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
@@ -285,7 +288,7 @@ func TestCreateSubtasksActivity_CreatesBeadsBackedMappedSubtasks(t *testing.T) {
 	a := &Activities{
 		DAG: d,
 		Config: &config.Config{
-			BeadsBridge: config.BeadsBridge{Enabled: true},
+			BeadsBridge: config.BeadsBridge{Enabled: true, IngressPolicy: "beads_only"},
 			Projects:    map[string]config.Project{},
 		},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -367,7 +370,7 @@ func TestCreateSubtasksActivity_RejectsEmptyBeadsIssueID(t *testing.T) {
 	a := &Activities{
 		DAG: d,
 		Config: &config.Config{
-			BeadsBridge: config.BeadsBridge{Enabled: true},
+			BeadsBridge: config.BeadsBridge{Enabled: true, IngressPolicy: "beads_only"},
 			Projects:    map[string]config.Project{},
 		},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -400,6 +403,58 @@ func TestCreateSubtasksActivity_RejectsEmptyBeadsIssueID(t *testing.T) {
 	}
 	if spy.closeCalls != 0 {
 		t.Fatalf("expected no rollback close for empty first issue id, got %d close calls", spy.closeCalls)
+	}
+}
+
+func TestCreateSubtasksActivity_LegacyIngressFallsBackToDAGOnlySubtasks(t *testing.T) {
+	t.Parallel()
+	d := newEngineBridgeTestDAG(t)
+	ctx := context.Background()
+	if _, err := d.CreateTask(ctx, dag.Task{
+		ID:      "task-parent",
+		Title:   "Parent",
+		Project: "proj",
+		Status:  "ready",
+	}); err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	a := &Activities{
+		DAG: d,
+		Config: &config.Config{
+			BeadsBridge: config.BeadsBridge{Enabled: true, IngressPolicy: "legacy"},
+			Projects:    map[string]config.Project{},
+		},
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		BeadsClients: map[string]beads.Store{},
+	}
+
+	steps := []types.DecompStep{
+		{Title: "Step one", Description: "Do first thing", Acceptance: "first ok", Estimate: 10},
+		{Title: "Step two", Description: "Do second thing", Acceptance: "second ok", Estimate: 12},
+	}
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(a.CreateSubtasksActivity)
+	var ids []string
+	value, err := env.ExecuteActivity(a.CreateSubtasksActivity, "task-parent", "proj", steps)
+	if err != nil {
+		t.Fatalf("legacy subtask creation failed: %v", err)
+	}
+	if err := value.Get(&ids); err != nil {
+		t.Fatalf("decode activity result: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 subtasks, got %d", len(ids))
+	}
+	for _, id := range ids {
+		if strings.TrimSpace(id) == "" {
+			t.Fatalf("expected generated non-empty ID, got %q", id)
+		}
+		if _, err := d.GetBeadsMappingByTask(ctx, "proj", id); err == nil || !dag.IsNoRows(err) {
+			t.Fatalf("expected no beads mapping for legacy subtask %s, got err=%v", id, err)
+		}
 	}
 }
 
@@ -477,5 +532,94 @@ func TestRecordDispatchStartActivity_EnqueuesOnce(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected exactly one start outbox event, got %d", count)
+	}
+}
+
+func TestScanOrphanedReviewsActivity_MergedPREnqueuesTerminalOutbox(t *testing.T) {
+	d := newEngineBridgeTestDAG(t)
+	ctx := context.Background()
+	if _, err := d.CreateTask(ctx, dag.Task{
+		ID:       "task-merged",
+		Title:    "Merged orphan",
+		Project:  "proj",
+		Status:   string(types.StatusNeedsReview),
+		ErrorLog: `{"reason":"needs_review","sub_reason":"merge_blocked","review_url":"https://example.com/pr/2","pr_number":2}`,
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if err := d.UpsertBeadsMapping(ctx, "proj", "bd-1", "task-merged", "fp"); err != nil {
+		t.Fatalf("upsert mapping: %v", err)
+	}
+
+	binDir := t.TempDir()
+	ghPath := filepath.Join(binDir, "gh")
+	script := `#!/bin/sh
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  echo '{"state":"MERGED"}'
+  exit 0
+fi
+echo "unexpected gh invocation: $@" >&2
+exit 1
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workspace := t.TempDir()
+	da := &DispatchActivities{
+		DAG: d,
+		Config: &config.Config{
+			General: config.General{
+				ExecTimeout:   config.Duration{Duration: 45 * time.Minute},
+				ShortTimeout:  config.Duration{Duration: 2 * time.Minute},
+				ReviewTimeout: config.Duration{Duration: 10 * time.Minute},
+			},
+			BeadsBridge: config.BeadsBridge{Enabled: true, DryRun: false},
+			Projects: map[string]config.Project{
+				"proj": {Enabled: true, Workspace: workspace},
+			},
+			Providers: map[string]config.Provider{
+				"gemini": {CLI: "gemini", Enabled: true, Tier: "fast"},
+			},
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		BeadsClients: map[string]beads.Store{
+			"proj": &spyBeadsStore{},
+		},
+	}
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(da.ScanOrphanedReviewsActivity)
+	var orphans []ReviewRequest
+	value, err := env.ExecuteActivity(da.ScanOrphanedReviewsActivity)
+	if err != nil {
+		t.Fatalf("scan orphaned reviews: %v", err)
+	}
+	if err := value.Get(&orphans); err != nil {
+		t.Fatalf("decode activity result: %v", err)
+	}
+	if len(orphans) != 0 {
+		t.Fatalf("expected no orphan recovery requests for merged PR, got %d", len(orphans))
+	}
+
+	task, err := d.GetTask(ctx, "task-merged")
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if task.Status != string(types.StatusCompleted) {
+		t.Fatalf("task status = %q, want completed", task.Status)
+	}
+
+	var count int
+	if err := d.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM beads_sync_outbox
+		WHERE project = ? AND issue_id = ? AND task_id = ? AND event_type = ?
+	`, "proj", "bd-1", "task-merged", "task_terminal").Scan(&count); err != nil {
+		t.Fatalf("count outbox rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one terminal outbox event, got %d", count)
 	}
 }

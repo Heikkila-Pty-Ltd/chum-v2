@@ -56,9 +56,49 @@ func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*t
 func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, project string, steps []types.DecompStep) ([]string, error) {
 	logger := activity.GetLogger(ctx)
 
+	requiresBeads := a.Config != nil &&
+		a.Config.BeadsBridge.Enabled &&
+		ingressPolicyRequiresBeads(a.Config.BeadsBridge.IngressPolicy)
+	if !requiresBeads {
+		var tasks []dag.Task
+		for _, step := range steps {
+			tasks = append(tasks, dag.Task{
+				Title:           step.Title,
+				Description:     step.Description,
+				ParentID:        parentID,
+				Acceptance:      step.Acceptance,
+				EstimateMinutes: step.Estimate,
+				Project:         project,
+			})
+		}
+
+		ids, err := a.DAG.CreateSubtasksAtomic(ctx, parentID, tasks)
+		if err != nil {
+			return nil, fmt.Errorf("create subtasks for %s: %w", parentID, err)
+		}
+		logger.Info("Created subtasks atomically", "Parent", parentID, "Count", len(ids), "IDs", ids)
+
+		// Run admission gate to validate, resolve targets, and promote open -> ready.
+		if a.Config != nil {
+			proj, ok := a.Config.Projects[project]
+			if ok && a.AST != nil {
+				gateResult, err := admit.RunGate(ctx, a.DAG, a.AST, project, proj.Workspace, a.Logger)
+				if err != nil {
+					logger.Warn("Admission gate failed after subtask creation", "error", err)
+				} else {
+					logger.Info("Admission gate ran inline", "result", gateResult.String())
+				}
+			}
+		}
+		return ids, nil
+	}
+
 	bc, ok := a.BeadsClients[project]
 	if !ok || bc == nil {
 		return nil, fmt.Errorf("beads-first policy: no beads client configured for project %q", project)
+	}
+	if _, isNull := bc.(*beads.NullStore); isNull {
+		return nil, fmt.Errorf("beads-first policy: project %q is using NullStore (bd unavailable)", project)
 	}
 
 	parentIssueID := strings.TrimSpace(parentID)
@@ -164,13 +204,15 @@ func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, proje
 	// Run admission gate to validate, resolve targets, and promote open → ready.
 	// Subtasks must pass the same structural checks and conflict fence logic as
 	// any other task. Without this they'd sit in "open" until the next chum sync.
-	proj, ok := a.Config.Projects[project]
-	if ok && a.AST != nil {
-		gateResult, err := admit.RunGate(ctx, a.DAG, a.AST, project, proj.Workspace, a.Logger)
-		if err != nil {
-			logger.Warn("Admission gate failed after subtask creation", "error", err)
-		} else {
-			logger.Info("Admission gate ran inline", "result", gateResult.String())
+	if a.Config != nil {
+		proj, ok := a.Config.Projects[project]
+		if ok && a.AST != nil {
+			gateResult, err := admit.RunGate(ctx, a.DAG, a.AST, project, proj.Workspace, a.Logger)
+			if err != nil {
+				logger.Warn("Admission gate failed after subtask creation", "error", err)
+			} else {
+				logger.Info("Admission gate ran inline", "result", gateResult.String())
+			}
 		}
 	}
 
