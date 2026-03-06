@@ -72,6 +72,27 @@ See also: `docs/OPERATIONS.md`.
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 
+## Quality Guardrails (Mandatory)
+
+These are mandatory for all agent-authored code changes.
+
+1. **No direct pushes to `master` for code changes**
+   - Use a feature branch + PR.
+2. **Run the full quality gate before push**
+   - `make quality`
+   - This must pass locally after conflict resolution/rebase.
+3. **Preserve existing behavior unless intentionally changing it**
+   - If behavior changes, document it in PR summary and add tests for old + new expected behavior.
+4. **Regression test requirement**
+   - Every bug fix must include at least one automated test that fails before and passes after.
+5. **Dual-mode coverage for ingress/bridge/dispatcher changes**
+   - Changes touching ingress policy, beads bridge, decomposition, or dispatcher logic must include tests for both:
+     - `legacy` mode behavior
+     - beads-required mode behavior (`beads_first`/`beads_only`)
+6. **No unresolved conflict markers or TODO debt in merged code**
+   - Verify no `<<<<<<<`, `=======`, `>>>>>>>` markers before commit.
+   - Do not leave TODO/FIXME without a tracked `bd` issue ID.
+
 
 <!-- BEGIN BEADS INTEGRATION -->
 ## Issue Tracking with bd (beads)

@@ -86,12 +86,12 @@ const (
 // Signal channel names used by the workflow.
 // All signals are sent and received as plain strings via the bridge.
 const (
-	SignalNameSelect       = "plan-select"
-	SignalNameDig          = "plan-dig"
-	SignalNameQuestion     = "plan-question"
-	SignalNameGreenlight   = "plan-greenlight"
+	SignalNameSelect        = "plan-select"
+	SignalNameDig           = "plan-dig"
+	SignalNameQuestion      = "plan-question"
+	SignalNameGreenlight    = "plan-greenlight"
 	SignalNameApproveDecomp = "plan-approve-decomp"
-	SignalNameCancel       = "plan-cancel"
+	SignalNameCancel        = "plan-cancel"
 )
 
 // --- Chat prompt types ---

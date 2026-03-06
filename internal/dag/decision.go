@@ -13,8 +13,8 @@ type Decision struct {
 	ID        string    `json:"id"`
 	TaskID    string    `json:"task_id"`
 	Title     string    `json:"title"`
-	Context   string    `json:"context"`   // what triggered the decision
-	Outcome   string    `json:"outcome"`   // summary of the chosen path
+	Context   string    `json:"context"` // what triggered the decision
+	Outcome   string    `json:"outcome"` // summary of the chosen path
 	CreatedAt time.Time `json:"created_at"`
 }
 

@@ -57,12 +57,12 @@ type ceremony struct {
 	notifyOpts   workflow.ActivityOptions
 
 	// Signal channels
-	selectCh      workflow.ReceiveChannel
-	digCh         workflow.ReceiveChannel
-	questionCh    workflow.ReceiveChannel
-	greenlightCh  workflow.ReceiveChannel
+	selectCh        workflow.ReceiveChannel
+	digCh           workflow.ReceiveChannel
+	questionCh      workflow.ReceiveChannel
+	greenlightCh    workflow.ReceiveChannel
 	approveDecompCh workflow.ReceiveChannel
-	cancelCh      workflow.ReceiveChannel
+	cancelCh        workflow.ReceiveChannel
 
 	// Shared mutable state — safe without mutex because Temporal workflow
 	// goroutines are cooperatively scheduled (single-threaded replay).

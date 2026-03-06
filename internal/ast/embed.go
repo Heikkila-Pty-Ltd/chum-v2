@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	defaultOllamaURL = "http://localhost:11434"
+	defaultOllamaURL  = "http://localhost:11434"
 	defaultEmbedModel = "nomic-embed-text"
 	// Timeout per batch — generous because large batches take time.
 	embedTimeout = 120 * time.Second
