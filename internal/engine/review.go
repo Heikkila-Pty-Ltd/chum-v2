@@ -508,31 +508,33 @@ func parseReviewSignal(output string) (signal string, body string, invalid bool)
 }
 
 func parseReviewSignalLine(line string) (signal string, inlineBody string, ok bool) {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" {
+	normalized := strings.TrimSpace(line)
+	if normalized == "" {
 		return "", "", false
 	}
+	normalized = strings.TrimSpace(strings.Trim(normalized, "`*#>_- "))
 
-	canonical := strings.ToUpper(strings.Trim(trimmed, "`*#>_- "))
 	for _, prefix := range []string{"SIGNAL:", "DECISION:", "VERDICT:"} {
-		if strings.HasPrefix(canonical, prefix) {
-			trimmed = strings.TrimSpace(trimmed[len(prefix):])
-			canonical = strings.ToUpper(strings.Trim(trimmed, "`*#>_- "))
+		upperNormalized := strings.ToUpper(normalized)
+		if strings.HasPrefix(upperNormalized, prefix) {
+			normalized = strings.TrimSpace(normalized[len(prefix):])
 			break
 		}
 	}
+	canonical := strings.ToUpper(strings.TrimSpace(strings.Trim(normalized, "`*#>_- ")))
 
 	if canonical == "APPROVE" || canonical == "REQUEST_CHANGES" {
 		return canonical, "", true
 	}
 
+	upperNormalized := strings.ToUpper(normalized)
 	for _, sig := range []string{"APPROVE", "REQUEST_CHANGES"} {
-		if strings.HasPrefix(canonical, sig+":") {
-			body := strings.TrimSpace(trimmed[len(sig)+1:])
+		if strings.HasPrefix(upperNormalized, sig+":") {
+			body := strings.TrimSpace(normalized[len(sig)+1:])
 			return sig, body, true
 		}
-		if strings.HasPrefix(canonical, sig+" -") {
-			body := strings.TrimSpace(trimmed[len(sig)+2:])
+		if strings.HasPrefix(upperNormalized, sig+" -") {
+			body := strings.TrimSpace(normalized[len(sig)+2:])
 			return sig, body, true
 		}
 	}

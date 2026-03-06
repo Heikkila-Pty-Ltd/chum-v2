@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
@@ -24,6 +25,9 @@ type spyBeadsStore struct {
 	createCalls int
 	nextID      int
 	created     []beads.CreateParams
+	createIDs   []string
+	closeIDs    []string
+	createErr   error
 	showIssues  map[string]beads.Issue
 	showErr     error
 }
@@ -42,13 +46,22 @@ func (s *spyBeadsStore) Show(_ context.Context, issueID string) (beads.Issue, er
 	}
 	return beads.Issue{ID: issueID, Status: "ready"}, nil
 }
-func (s *spyBeadsStore) Close(_ context.Context, _, _ string) error {
+func (s *spyBeadsStore) Close(_ context.Context, issueID, _ string) error {
 	s.closeCalls++
+	s.closeIDs = append(s.closeIDs, issueID)
 	return nil
 }
 func (s *spyBeadsStore) Create(_ context.Context, params beads.CreateParams) (string, error) {
 	s.createCalls++
 	s.created = append(s.created, params)
+	if s.createErr != nil {
+		return "", s.createErr
+	}
+	if len(s.createIDs) > 0 {
+		id := s.createIDs[0]
+		s.createIDs = s.createIDs[1:]
+		return id, nil
+	}
 	if s.nextID == 0 {
 		s.nextID = 1
 	}
@@ -332,6 +345,101 @@ func TestCreateSubtasksActivity_CreatesBeadsBackedMappedSubtasks(t *testing.T) {
 	}
 	if len(spy.created[1].Dependencies) != 1 || spy.created[1].Dependencies[0] != ids[0] {
 		t.Fatalf("second child dependencies = %v, want [%s]", spy.created[1].Dependencies, ids[0])
+	}
+}
+
+func TestCreateSubtasksActivity_RejectsEmptyBeadsIssueID(t *testing.T) {
+	t.Parallel()
+	d := newEngineBridgeTestDAG(t)
+	ctx := context.Background()
+	if _, err := d.CreateTask(ctx, dag.Task{
+		ID:      "task-parent",
+		Title:   "Parent",
+		Project: "proj",
+		Status:  "ready",
+	}); err != nil {
+		t.Fatalf("create parent task: %v", err)
+	}
+
+	spy := &spyBeadsStore{
+		createIDs: []string{""},
+	}
+	a := &Activities{
+		DAG: d,
+		Config: &config.Config{
+			BeadsBridge: config.BeadsBridge{Enabled: true},
+			Projects:    map[string]config.Project{},
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		BeadsClients: map[string]beads.Store{
+			"proj": spy,
+		},
+	}
+
+	steps := []types.DecompStep{
+		{Title: "Step one", Description: "Do first thing", Acceptance: "first ok", Estimate: 10},
+	}
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(a.CreateSubtasksActivity)
+	_, err := env.ExecuteActivity(a.CreateSubtasksActivity, "task-parent", "proj", steps)
+	if err == nil {
+		t.Fatal("expected empty beads issue id to fail")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "empty issue id") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	allTasks, listErr := d.ListTasks(ctx, "proj")
+	if listErr != nil {
+		t.Fatalf("list tasks: %v", listErr)
+	}
+	if len(allTasks) != 1 {
+		t.Fatalf("expected only parent task to remain, got %d tasks", len(allTasks))
+	}
+	if spy.closeCalls != 0 {
+		t.Fatalf("expected no rollback close for empty first issue id, got %d close calls", spy.closeCalls)
+	}
+}
+
+func TestScanProjectReadyTasks_LegacyIngressAllowsUnmappedReadyTasks(t *testing.T) {
+	t.Parallel()
+	d := newEngineBridgeTestDAG(t)
+	ctx := context.Background()
+
+	if _, err := d.CreateTask(ctx, dag.Task{
+		ID:      "legacy-unmapped-1",
+		Title:   "Legacy unmapped",
+		Project: "proj",
+		Status:  string(types.StatusReady),
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	da := &DispatchActivities{
+		DAG: d,
+		Config: &config.Config{
+			General: config.General{
+				MaxConcurrent: 5,
+			},
+			BeadsBridge: config.BeadsBridge{
+				Enabled:       true,
+				IngressPolicy: "legacy",
+			},
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		BeadsClients: map[string]beads.Store{
+			"proj": &spyBeadsStore{},
+		},
+	}
+
+	ready, err := da.scanProjectReadyTasks(ctx, "proj")
+	if err != nil {
+		t.Fatalf("scan project ready tasks: %v", err)
+	}
+	if len(ready) != 1 || ready[0].ID != "legacy-unmapped-1" {
+		t.Fatalf("expected legacy unmapped task to remain dispatchable, got %+v", ready)
 	}
 }
 

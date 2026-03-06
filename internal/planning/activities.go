@@ -403,6 +403,18 @@ func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, re
 		step    types.DecompStep
 	}
 	prepared := make([]preparedSubtask, 0, len(steps))
+	rollbackPrepared := func(reason string) {
+		for _, subtask := range prepared {
+			issueID := strings.TrimSpace(subtask.issueID)
+			if issueID == "" {
+				continue
+			}
+			closeErr := bc.Close(ctx, issueID, reason)
+			if closeErr != nil {
+				logger.Warn("Failed to roll back beads subtask", "issueID", issueID, "error", closeErr)
+			}
+		}
+	}
 	var prevIssueID string
 	for _, step := range steps {
 		issueID, err := bc.Create(ctx, beads.CreateParams{
@@ -421,7 +433,13 @@ func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, re
 			}(),
 		})
 		if err != nil {
+			rollbackPrepared("Automatic rollback: beads subtask batch creation failed")
 			return nil, fmt.Errorf("create beads subtask for %q: %w", step.Title, err)
+		}
+		issueID = strings.TrimSpace(issueID)
+		if issueID == "" {
+			rollbackPrepared("Automatic rollback: beads returned empty subtask id")
+			return nil, fmt.Errorf("create beads subtask for %q: empty issue id", step.Title)
 		}
 		prepared = append(prepared, preparedSubtask{
 			issueID: issueID,
@@ -450,12 +468,7 @@ func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, re
 
 	ids, err := pa.DAG.CreateSubtasksAtomic(ctx, req.GoalID, tasks)
 	if err != nil {
-		for _, subtask := range prepared {
-			closeErr := bc.Close(ctx, subtask.issueID, "Automatic rollback: DAG subtask creation failed")
-			if closeErr != nil {
-				logger.Warn("Failed to roll back beads subtask after DAG failure", "issueID", subtask.issueID, "error", closeErr)
-			}
-		}
+		rollbackPrepared("Automatic rollback: DAG subtask creation failed")
 		return nil, fmt.Errorf("create plan subtasks: %w", err)
 	}
 	if canMap {
@@ -465,7 +478,14 @@ func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, re
 				fingerprint = beadsbridge.FingerprintIssue(issue)
 			}
 			if err := bridgeDAG.UpsertBeadsMapping(ctx, req.Project, subtask.issueID, subtask.issueID, fingerprint); err != nil {
-				return nil, fmt.Errorf("persist beads mapping for %s: %w", subtask.issueID, err)
+				// DAG subtasks are already committed here; keep execution moving and
+				// rely on dispatch backfill (taskID==issueID) to repair mapping later.
+				logger.Warn("Persist beads mapping failed after planning subtask commit",
+					"project", req.Project,
+					"taskID", subtask.issueID,
+					"issueID", subtask.issueID,
+					"error", err,
+				)
 			}
 		}
 	}

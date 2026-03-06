@@ -366,9 +366,11 @@ func (da *DispatchActivities) scanProjectReadyTasks(ctx context.Context, project
 	if len(tasks) == 0 {
 		return nil, nil
 	}
-	tasks = da.filterBeadsMappedReadyTasks(ctx, projectName, tasks)
-	if len(tasks) == 0 {
-		return nil, nil
+	if ingressPolicyRequiresBeads(da.Config.BeadsBridge.IngressPolicy) {
+		tasks = da.filterBeadsMappedReadyTasks(ctx, projectName, tasks)
+		if len(tasks) == 0 {
+			return nil, nil
+		}
 	}
 
 	// Cap per project
@@ -435,7 +437,7 @@ func (da *DispatchActivities) suppressRedundantParentDispatch(ctx context.Contex
 // filterBeadsMappedReadyTasks enforces beads-first ingress at dispatch time.
 // Ready DAG tasks without a resolvable beads mapping are skipped.
 func (da *DispatchActivities) filterBeadsMappedReadyTasks(ctx context.Context, projectName string, ready []dag.Task) []dag.Task {
-	if da.Config == nil || !da.Config.BeadsBridge.Enabled {
+	if da.Config == nil || !da.Config.BeadsBridge.Enabled || !ingressPolicyRequiresBeads(da.Config.BeadsBridge.IngressPolicy) {
 		return ready
 	}
 	bridgeDAG, ok := da.DAG.(*dag.DAG)
@@ -475,6 +477,11 @@ func (da *DispatchActivities) filterBeadsMappedReadyTasks(ctx context.Context, p
 		da.Logger.Warn("Skipping ready task without beads mapping", "project", projectName, "task", t.ID, "parent", t.ParentID)
 	}
 	return filtered
+}
+
+func ingressPolicyRequiresBeads(policy string) bool {
+	p := strings.ToLower(strings.TrimSpace(policy))
+	return p != "" && p != "legacy"
 }
 
 func (da *DispatchActivities) buildProjectCandidates(ctx context.Context, projectName string, project config.Project, tasks []dag.Task) []DispatchCandidate {

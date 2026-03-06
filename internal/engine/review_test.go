@@ -70,6 +70,21 @@ func TestParseReviewSignal_ParsesSignalPrefixLine(t *testing.T) {
 	}
 }
 
+func TestParseReviewSignal_ParsesMarkdownPrefixedSignalLine(t *testing.T) {
+	t.Parallel()
+
+	signal, body, invalid := parseReviewSignal("### SIGNAL: APPROVE\nLooks good.")
+	if invalid {
+		t.Fatal("expected valid signal from markdown-prefixed line")
+	}
+	if signal != "APPROVE" {
+		t.Fatalf("signal = %q, want APPROVE", signal)
+	}
+	if body != "Looks good." {
+		t.Fatalf("body = %q, want reviewer rationale", body)
+	}
+}
+
 func TestDefaultReviewer(t *testing.T) {
 	t.Parallel()
 
