@@ -10,5 +10,9 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Run hygiene check
         run: bash scripts/hygiene_check.sh --ci
+      - name: Run review guard
+        run: bash scripts/review_guard.sh --ci

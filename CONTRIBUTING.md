@@ -44,3 +44,14 @@ Every PR should include:
 - why it changed
 - how it was validated
 - logic risks that were checked explicitly
+
+## Review Guard
+
+Run these before pushing:
+
+```bash
+bash scripts/review_guard.sh
+bash scripts/validate_repo.sh
+```
+
+`review_guard.sh` fails high-risk code changes that do not come with matching test changes.

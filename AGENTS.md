@@ -188,3 +188,4 @@ For more details, see README.md and docs/QUICKSTART.md.
 - Prefer `bash scripts/new_worktree.sh <branch-name>` to create task branches in `../_worktrees/`.
 - Before commit or push, run the narrowest relevant test command for the repo and then `bash scripts/hygiene_check.sh` again.
 - If repo state changes unexpectedly, stop and inspect `git status`, `git branch --show-current`, and `git reflog --date=iso -5` before continuing.
+- Before push, run `bash scripts/review_guard.sh` and `bash scripts/validate_repo.sh` in addition to `bash scripts/hygiene_check.sh`.

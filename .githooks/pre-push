@@ -3,3 +3,5 @@ set -euo pipefail
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 bash scripts/hygiene_check.sh
+bash scripts/review_guard.sh
+bash scripts/validate_repo.sh

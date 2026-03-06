@@ -2,8 +2,9 @@
 - 
 
 ## Validation
-- [ ] Ran the relevant tests/build for this change
 - [ ] Ran `bash scripts/hygiene_check.sh`
+- [ ] Ran `bash scripts/review_guard.sh`
+- [ ] Ran `bash scripts/validate_repo.sh`
 
 ## Hygiene Checklist
 - [ ] Work was done from a dedicated linked worktree
