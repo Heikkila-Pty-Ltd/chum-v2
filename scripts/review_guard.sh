@@ -36,7 +36,7 @@ case "$repo_name" in
   assistant)
     risky_re='(^|/)(internal/(agent|knowledge|matrix|git|temporal)|cmd/|memory/)'
     ;;
-  chum|chum-automation|cortex|cortex-factory)
+  chum|chum-v2|chum-automation|cortex|cortex-factory)
     risky_re='(^|/)(internal/|cmd/|scripts/|build/)'
     ;;
   hg-chum-integration|hg-chum-integration-automation)

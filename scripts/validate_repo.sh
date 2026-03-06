@@ -111,7 +111,7 @@ case "$repo_name" in
     npm run lint
     npm run build
     ;;
-  chum|chum-automation)
+  chum|chum-v2|chum-automation)
     if make_target_exists quality; then
       make quality
     elif make_target_exists check; then

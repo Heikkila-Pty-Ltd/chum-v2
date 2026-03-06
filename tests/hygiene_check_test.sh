@@ -28,7 +28,7 @@ fi
 (
   cd "$tmp_repo"
   git checkout --detach >/dev/null 2>&1
-  if bash "$hygiene_script" --ci >/dev/null 2>&1; then
+  if env -u GITHUB_HEAD_REF -u GITHUB_REF_NAME -u GITHUB_REF -u GITHUB_EVENT_NAME bash "$hygiene_script" --ci >/dev/null 2>&1; then
     echo "hygiene_check_test: expected detached-head CI rejection without branch env" >&2
     exit 1
   fi
