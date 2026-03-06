@@ -43,7 +43,9 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		server.Shutdown(shutdownCtx)
+		if err := server.Shutdown(shutdownCtx); err != nil && err != context.Canceled {
+			s.logger.Warn("Health server shutdown failed", "error", err)
+		}
 	}()
 
 	s.logger.Info("Starting health server", "addr", addr)
@@ -82,10 +84,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// All checks passed
-	response := HealthResponse{Status: "ok"}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	s.writeJSON(w, http.StatusOK, HealthResponse{Status: "ok"})
 }
 
 func (s *Server) respondUnhealthy(w http.ResponseWriter, errorMsg string) {
@@ -93,7 +92,13 @@ func (s *Server) respondUnhealthy(w http.ResponseWriter, errorMsg string) {
 		Status: "unhealthy",
 		Error:  errorMsg,
 	}
+	s.writeJSON(w, http.StatusServiceUnavailable, response)
+}
+
+func (s *Server) writeJSON(w http.ResponseWriter, status int, response HealthResponse) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusServiceUnavailable)
-	json.NewEncoder(w).Encode(response)
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		s.logger.Warn("Failed to write health response", "status", status, "error", err)
+	}
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -81,13 +82,26 @@ func main() {
 			}
 
 			workDirs := make(map[string]string)
+			beadsClients := make(map[string]beads.Store)
 			for name, proj := range cfg.Projects {
 				if proj.Enabled {
 					workDirs[name] = proj.Workspace
+					if cfg.BeadsBridge.Enabled {
+						bc, bcErr := beads.NewClient(proj.Workspace)
+						if bcErr != nil {
+							logger.Warn("Jarvis beads ingress disabled for project (client init failed)",
+								"project", name, "error", bcErr)
+						} else {
+							beadsClients[name] = bc
+						}
+					}
 				}
 			}
 
 			eng := jarvis.NewEngine(d, c, cfg.General.TaskQueue, workDirs, logger)
+			if cfg.BeadsBridge.Enabled {
+				eng.ConfigureBeadsIngress(cfg.BeadsBridge.IngressPolicy, cfg.BeadsBridge.CanaryLabel, beadsClients)
+			}
 			policy := "legacy"
 			if cfg.BeadsBridge.Enabled {
 				policy = cfg.BeadsBridge.IngressPolicy
@@ -141,8 +155,8 @@ func main() {
 					logger.Error("Bridge scan failed", "project", projectName, "error", err)
 					continue
 				}
-				fmt.Printf("  %s bridge-scan: candidates=%d admitted=%d updated=%d deduped=%d edges=%d dry_run=%t\n",
-					projectName, scanResult.Candidates, scanResult.Admitted, scanResult.Updated, scanResult.Deduped, scanResult.EdgesProjected, scanResult.DryRun)
+				fmt.Printf("  %s bridge-scan: candidates=%d admitted=%d updated=%d deduped=%d edges_projected=%d edges_pruned=%d dry_run=%t\n",
+					projectName, scanResult.Candidates, scanResult.Admitted, scanResult.Updated, scanResult.Deduped, scanResult.EdgesProjected, scanResult.EdgesPruned, scanResult.DryRun)
 				if !cfg.BeadsBridge.DryRun {
 					worker := &beadsbridge.OutboxWorker{DAG: d, Logger: logger}
 					processed, outErr := worker.ProcessProject(context.Background(), projectName, client, 100)
@@ -399,7 +413,12 @@ func main() {
 			case "--estimate":
 				v := requireFlagValue(os.Args, i)
 				i++
-				fmt.Sscanf(v, "%d", &estimate)
+				parsed, parseErr := strconv.Atoi(v)
+				if parseErr != nil {
+					fmt.Fprintf(os.Stderr, "Error: --estimate must be an integer (got %q)\n", v)
+					os.Exit(1)
+				}
+				estimate = parsed
 			}
 		}
 		if directTaskIngressBlocked(cfg) {

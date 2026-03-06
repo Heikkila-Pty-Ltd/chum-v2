@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"go.temporal.io/api/enums/v1"
 	workflowpb "go.temporal.io/api/workflow/v1"
 	workflowservice "go.temporal.io/api/workflowservice/v1"
+	"go.temporal.io/sdk/testsuite"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
@@ -23,13 +25,18 @@ import (
 
 type mockTaskStore struct {
 	tasks          map[string][]dag.Task
+	readyNodes     map[string][]dag.Task
 	statusUpdates  map[string]string // taskID -> new status
+	taskUpdates    map[string]map[string]any
 	globalPaused   bool
 	globalPauseSet bool // true = DB row exists (SetGlobalPaused was called)
 	globalPauseErr error
 }
 
 func (m *mockTaskStore) GetReadyNodes(ctx context.Context, project string) ([]dag.Task, error) {
+	if m.readyNodes != nil {
+		return m.readyNodes[project], nil
+	}
 	return m.tasks[project], nil
 }
 
@@ -42,6 +49,28 @@ func (m *mockTaskStore) CreateTask(ctx context.Context, t dag.Task) (string, err
 }
 
 func (m *mockTaskStore) UpdateTask(ctx context.Context, id string, fields map[string]any) error {
+	if m.taskUpdates != nil {
+		copied := make(map[string]any, len(fields))
+		for k, v := range fields {
+			copied[k] = v
+		}
+		m.taskUpdates[id] = copied
+	}
+	for project, tasks := range m.tasks {
+		for i := range tasks {
+			if tasks[i].ID != id {
+				continue
+			}
+			if v, ok := fields["status"].(string); ok {
+				tasks[i].Status = v
+			}
+			if v, ok := fields["error_log"].(string); ok {
+				tasks[i].ErrorLog = v
+			}
+			m.tasks[project] = tasks
+			return nil
+		}
+	}
 	return nil
 }
 
@@ -57,6 +86,9 @@ func (m *mockTaskStore) CloseTask(ctx context.Context, id, status string) error 
 }
 
 func (m *mockTaskStore) ListTasks(ctx context.Context, project string, statuses ...string) ([]dag.Task, error) {
+	if len(statuses) == 0 {
+		return m.tasks[project], nil
+	}
 	var result []dag.Task
 	for _, t := range m.tasks[project] {
 		for _, s := range statuses {
@@ -131,6 +163,7 @@ func (m *mockTaskStore) GetAllTargetsForStatuses(ctx context.Context, project st
 type mockDescriber struct {
 	// responses maps workflowID to (response, error) pairs.
 	responses map[string]describeResult
+	calls     map[string]int
 }
 
 type describeResult struct {
@@ -139,6 +172,9 @@ type describeResult struct {
 }
 
 func (m *mockDescriber) DescribeWorkflowExecution(ctx context.Context, workflowID, runID string) (*workflowservice.DescribeWorkflowExecutionResponse, error) {
+	if m.calls != nil {
+		m.calls[workflowID]++
+	}
 	r, ok := m.responses[workflowID]
 	if !ok {
 		return nil, fmt.Errorf("workflow %q not found", workflowID)
@@ -222,6 +258,46 @@ func TestScanCandidatesActivity(t *testing.T) {
 			expectedCount:    1,
 			expectedProjects: []string{"enabled-project"},
 			checkPrompts:     true,
+		},
+		{
+			name: "task skipped when no enabled provider",
+			config: &config.Config{
+				General: config.General{
+					MaxConcurrent: 5,
+					ExecTimeout:   config.Duration{Duration: 45 * time.Minute},
+					ShortTimeout:  config.Duration{Duration: 2 * time.Minute},
+					ReviewTimeout: config.Duration{Duration: 10 * time.Minute},
+				},
+				Projects: map[string]config.Project{
+					"enabled-project": {
+						Enabled:   true,
+						Workspace: "/tmp/enabled-project",
+					},
+				},
+				Providers: map[string]config.Provider{
+					"gemini": {
+						CLI:     "gemini",
+						Model:   "gemini-2.5-flash",
+						Enabled: false,
+						Tier:    "fast",
+					},
+				},
+				Tiers: config.Tiers{
+					Fast: []string{"gemini"},
+				},
+			},
+			tasks: map[string][]dag.Task{
+				"enabled-project": {
+					{
+						ID:              "task-1",
+						Description:     "No provider available",
+						EstimateMinutes: 5,
+						ParentID:        "",
+					},
+				},
+			},
+			expectedCount:    0,
+			expectedProjects: []string{},
 		},
 		{
 			name: "max+1 tasks capped at MaxConcurrent",
@@ -521,6 +597,51 @@ func TestScanCandidatesActivity_PropagatesMaxReviewRounds(t *testing.T) {
 	}
 }
 
+func TestScanCandidatesActivity_ReadyParentWithChildrenIsAutoDecomposed(t *testing.T) {
+	t.Parallel()
+
+	mockStore := &mockTaskStore{
+		readyNodes: map[string][]dag.Task{
+			"proj": {
+				{ID: "parent-1", Description: "already decomposed parent"},
+			},
+		},
+		tasks: map[string][]dag.Task{
+			"proj": {
+				{ID: "parent-1", Status: string(types.StatusReady)},
+				{ID: "child-1", ParentID: "parent-1", Status: string(types.StatusReady)},
+			},
+		},
+		statusUpdates: make(map[string]string),
+	}
+	da := &DispatchActivities{
+		DAG: mockStore,
+		Config: &config.Config{
+			General: config.General{
+				MaxConcurrent: 5,
+			},
+			Projects: map[string]config.Project{
+				"proj": {Enabled: true, Workspace: "/tmp/proj"},
+			},
+			Providers: map[string]config.Provider{
+				"gemini": {CLI: "gemini", Model: "flash", Enabled: true, Tier: "balanced"},
+			},
+			Tiers: config.Tiers{Balanced: []string{"gemini"}},
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	candidates, err := da.ScanCandidatesActivity(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(candidates) != 0 {
+		t.Fatalf("expected parent to be suppressed, got %d candidates", len(candidates))
+	}
+	if got := mockStore.statusUpdates["parent-1"]; got != string(types.StatusDecomposed) {
+		t.Fatalf("parent status update = %q, want %q", got, types.StatusDecomposed)
+	}
+}
 func TestPickProvider_PerfInformed(t *testing.T) {
 	t.Parallel()
 
@@ -728,7 +849,7 @@ func TestScanZombieRunningActivity_WorkflowStillRunning(t *testing.T) {
 				},
 			},
 		},
-	}}
+	}, calls: make(map[string]int)}
 
 	da := &DispatchActivities{
 		DAG: mockStore,
@@ -751,6 +872,61 @@ func TestScanZombieRunningActivity_WorkflowStillRunning(t *testing.T) {
 	if _, ok := mockStore.statusUpdates["alive-1"]; ok {
 		t.Error("should not have updated status for still-running workflow")
 	}
+	if got := describer.calls["chum-review-alive-1"]; got != 0 {
+		t.Errorf("review workflow should not be described when agent is active; calls=%d", got)
+	}
+}
+
+func TestScanZombieRunningActivity_ReviewWorkflowStillRunning(t *testing.T) {
+	t.Parallel()
+
+	mockStore := &mockTaskStore{
+		tasks: map[string][]dag.Task{
+			"proj": {
+				{ID: "review-alive-1", Status: string(types.StatusRunning)},
+			},
+		},
+		statusUpdates: make(map[string]string),
+	}
+
+	describer := &mockDescriber{responses: map[string]describeResult{
+		"chum-agent-review-alive-1": {
+			resp: &workflowservice.DescribeWorkflowExecutionResponse{
+				WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{
+					Status: enums.WORKFLOW_EXECUTION_STATUS_COMPLETED,
+				},
+			},
+		},
+		"chum-review-review-alive-1": {
+			resp: &workflowservice.DescribeWorkflowExecutionResponse{
+				WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{
+					Status: enums.WORKFLOW_EXECUTION_STATUS_RUNNING,
+				},
+			},
+		},
+	}}
+
+	da := &DispatchActivities{
+		DAG: mockStore,
+		Config: &config.Config{
+			Projects: map[string]config.Project{
+				"proj": {Enabled: true},
+			},
+		},
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Temporal: describer,
+	}
+
+	recovered, err := da.ScanZombieRunningActivity(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recovered != 0 {
+		t.Errorf("recovered = %d, want 0 (review workflow still running)", recovered)
+	}
+	if _, ok := mockStore.statusUpdates["review-alive-1"]; ok {
+		t.Error("should not have updated status when review workflow is still running")
+	}
 }
 
 func TestScanZombieRunningActivity_NilTemporal(t *testing.T) {
@@ -769,5 +945,236 @@ func TestScanZombieRunningActivity_NilTemporal(t *testing.T) {
 	}
 	if recovered != 0 {
 		t.Errorf("recovered = %d, want 0 (nil Temporal)", recovered)
+	}
+}
+
+func TestParseAheadBehind(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		input      string
+		wantAhead  int
+		wantBehind int
+		wantErr    bool
+	}{
+		{name: "normal", input: "2\t5\n", wantAhead: 2, wantBehind: 5, wantErr: false},
+		{name: "spaces", input: "0 1", wantAhead: 0, wantBehind: 1, wantErr: false},
+		{name: "bad format", input: "1", wantErr: true},
+		{name: "bad number", input: "a 1", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ahead, behind, err := parseAheadBehind(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseAheadBehind(%q) error = nil, want non-nil", tt.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseAheadBehind(%q) unexpected error: %v", tt.input, err)
+			}
+			if ahead != tt.wantAhead || behind != tt.wantBehind {
+				t.Fatalf("parseAheadBehind(%q) = (%d,%d), want (%d,%d)", tt.input, ahead, behind, tt.wantAhead, tt.wantBehind)
+			}
+		})
+	}
+}
+
+func TestScanOrphanedReviewsActivity_RecoversNoReviewerActivityOnly(t *testing.T) {
+	t.Parallel()
+
+	mockStore := &mockTaskStore{
+		tasks: map[string][]dag.Task{
+			"proj": {
+				{
+					ID:       "task-resume",
+					Status:   string(types.StatusNeedsReview),
+					Project:  "proj",
+					ErrorLog: `{"reason":"needs_review","sub_reason":"no_reviewer_activity","review_url":"https://example.com/pr/1","pr_number":1}`,
+				},
+				{
+					ID:       "task-merge-blocked",
+					Status:   string(types.StatusNeedsReview),
+					Project:  "proj",
+					ErrorLog: `{"reason":"needs_review","sub_reason":"merge_blocked","review_url":"https://example.com/pr/2","pr_number":2}`,
+				},
+			},
+		},
+	}
+
+	da := &DispatchActivities{
+		DAG: mockStore,
+		Config: &config.Config{
+			General: config.General{
+				ExecTimeout:   config.Duration{Duration: 45 * time.Minute},
+				ShortTimeout:  config.Duration{Duration: 2 * time.Minute},
+				ReviewTimeout: config.Duration{Duration: 10 * time.Minute},
+			},
+			Projects: map[string]config.Project{
+				"proj": {Enabled: true, Workspace: "/tmp/proj"},
+			},
+			Providers: map[string]config.Provider{
+				"gemini": {CLI: "gemini", Enabled: true, Tier: "fast"},
+			},
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(da.ScanOrphanedReviewsActivity)
+
+	value, err := env.ExecuteActivity(da.ScanOrphanedReviewsActivity)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var orphans []ReviewRequest
+	if err := value.Get(&orphans); err != nil {
+		t.Fatalf("decode activity result: %v", err)
+	}
+	if len(orphans) != 1 {
+		t.Fatalf("orphans = %d, want 1", len(orphans))
+	}
+	if orphans[0].TaskID != "task-resume" {
+		t.Fatalf("task id = %q, want task-resume", orphans[0].TaskID)
+	}
+}
+
+func TestScanOrphanedReviewsActivity_AutoCompletesMergedPR(t *testing.T) {
+	mockStore := &mockTaskStore{
+		tasks: map[string][]dag.Task{
+			"proj": {
+				{
+					ID:       "task-merged",
+					Status:   string(types.StatusNeedsReview),
+					Project:  "proj",
+					ErrorLog: `{"reason":"needs_review","sub_reason":"merge_blocked","review_url":"https://example.com/pr/2","pr_number":2}`,
+				},
+			},
+		},
+		taskUpdates: map[string]map[string]any{},
+	}
+
+	binDir := t.TempDir()
+	ghPath := filepath.Join(binDir, "gh")
+	script := `#!/bin/sh
+if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
+  echo '{"state":"MERGED"}'
+  exit 0
+fi
+echo "unexpected gh invocation: $@" >&2
+exit 1
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workspace := t.TempDir()
+	da := &DispatchActivities{
+		DAG: mockStore,
+		Config: &config.Config{
+			General: config.General{
+				ExecTimeout:   config.Duration{Duration: 45 * time.Minute},
+				ShortTimeout:  config.Duration{Duration: 2 * time.Minute},
+				ReviewTimeout: config.Duration{Duration: 10 * time.Minute},
+			},
+			Projects: map[string]config.Project{
+				"proj": {Enabled: true, Workspace: workspace},
+			},
+			Providers: map[string]config.Provider{
+				"gemini": {CLI: "gemini", Enabled: true, Tier: "fast"},
+			},
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(da.ScanOrphanedReviewsActivity)
+
+	value, err := env.ExecuteActivity(da.ScanOrphanedReviewsActivity)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var orphans []ReviewRequest
+	if err := value.Get(&orphans); err != nil {
+		t.Fatalf("decode activity result: %v", err)
+	}
+	if len(orphans) != 0 {
+		t.Fatalf("orphans = %d, want 0", len(orphans))
+	}
+
+	if got := mockStore.tasks["proj"][0].Status; got != string(types.StatusCompleted) {
+		t.Fatalf("task status = %q, want completed", got)
+	}
+	update, ok := mockStore.taskUpdates["task-merged"]
+	if !ok {
+		t.Fatalf("expected UpdateTask call for task-merged")
+	}
+	if got, _ := update["status"].(string); got != string(types.StatusCompleted) {
+		t.Fatalf("updated status = %q, want completed", got)
+	}
+}
+
+func TestOrphanReviewRecoverable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		detail CloseDetail
+		want   bool
+	}{
+		{
+			name: "no reviewer activity",
+			detail: CloseDetail{
+				Reason:    CloseNeedsReview,
+				SubReason: "no_reviewer_activity",
+				PRNumber:  42,
+			},
+			want: true,
+		},
+		{
+			name: "merge blocked",
+			detail: CloseDetail{
+				Reason:    CloseNeedsReview,
+				SubReason: "merge_blocked",
+				PRNumber:  42,
+			},
+			want: false,
+		},
+		{
+			name: "missing pr",
+			detail: CloseDetail{
+				Reason:    CloseNeedsReview,
+				SubReason: "no_reviewer_activity",
+				PRNumber:  0,
+			},
+			want: false,
+		},
+		{
+			name: "legacy blank subreason",
+			detail: CloseDetail{
+				Reason:   CloseNeedsReview,
+				PRNumber: 42,
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := orphanReviewRecoverable(tt.detail); got != tt.want {
+				t.Fatalf("orphanReviewRecoverable() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

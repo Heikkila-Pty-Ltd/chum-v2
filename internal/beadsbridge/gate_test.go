@@ -26,6 +26,21 @@ func TestEvaluateGate(t *testing.T) {
 	}
 }
 
+func TestEvaluateGate_CHUMGeneratedBypassesCanaryLabel(t *testing.T) {
+	t.Parallel()
+	issue := beads.Issue{
+		ID:        "bd-2",
+		Title:     "System-generated task",
+		Status:    "open",
+		Owner:     "chum@localhost",
+		CreatedBy: "CHUM v2",
+	}
+	got := EvaluateGate(issue, "chum-canary")
+	if !got.Pass || got.Reason != "gate_pass" {
+		t.Fatalf("expected CHUM-generated issue to bypass canary gate, got %+v", got)
+	}
+}
+
 func TestFingerprintIssue_Deterministic(t *testing.T) {
 	t.Parallel()
 	a := beads.Issue{

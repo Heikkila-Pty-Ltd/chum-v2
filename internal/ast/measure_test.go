@@ -2,16 +2,30 @@ package ast
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestMeasureFilterEfficiency(t *testing.T) {
 	parser := NewParser(slog.Default())
 	ctx := context.Background()
+	embedServer := newDeterministicEmbedServer(t)
 
-	files, err := parser.ParseDir(ctx, "/home/ubuntu/projects/chum")
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+	files, err := parser.ParseDir(ctx, repoRoot)
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -47,10 +61,16 @@ func TestMeasureFilterEfficiency(t *testing.T) {
 				kwSize += len(f.Summary())
 			}
 
-			// Embedding filter: same approach but semantic matching
-			// Only test with a small subset to avoid timeout
+			// Embedding filter: semantic matching via deterministic local server.
 			ef := NewEmbedFilter()
-			relEmb, surEmb := ef.FilterRelevantByEmbedding(ctx, task, files[:10])
+			ef.OllamaURL = embedServer.URL
+			ef.client.Timeout = 2 * time.Second
+
+			sample := files
+			if len(sample) > 10 {
+				sample = sample[:10]
+			}
+			relEmb, surEmb := ef.FilterRelevantByEmbedding(ctx, task, sample)
 			embSize := 0
 			for _, f := range relEmb {
 				embSize += len(f.DetailedSummary())
@@ -72,5 +92,53 @@ func TestMeasureFilterEfficiency(t *testing.T) {
 			fmt.Printf("Embed (10-file sample):   %6d chars (~%5d tokens) [%d relevant / %d surrounding]\n",
 				embSize, embSize/4, len(relEmb), len(surEmb))
 		})
+	}
+}
+
+func newDeterministicEmbedServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/embeddings":
+			var req ollamaEmbedRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "bad embeddings request", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(ollamaEmbedResponse{Embedding: deterministicEmbedding(req.Prompt)}); err != nil {
+				http.Error(w, "encode embeddings response", http.StatusInternalServerError)
+			}
+		case "/api/embed":
+			var req ollamaBatchEmbedRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "bad embed request", http.StatusBadRequest)
+				return
+			}
+			embeddings := make([][]float64, 0, len(req.Input))
+			for _, input := range req.Input {
+				embeddings = append(embeddings, deterministicEmbedding(input))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(ollamaBatchEmbedResponse{Embeddings: embeddings}); err != nil {
+				http.Error(w, "encode embed response", http.StatusInternalServerError)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func deterministicEmbedding(text string) []float64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(strings.ToLower(text)))
+	sum := h.Sum64()
+	return []float64{
+		float64(sum&0xFFFF) / 65535.0,
+		float64((sum>>16)&0xFFFF) / 65535.0,
+		float64((sum>>32)&0xFFFF) / 65535.0,
+		float64((sum>>48)&0xFFFF) / 65535.0,
 	}
 }

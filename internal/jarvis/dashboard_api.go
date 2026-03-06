@@ -3,6 +3,7 @@ package jarvis
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -275,22 +276,22 @@ func (a *API) handleDashboardTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type treeNode struct {
-		ID              string            `json:"id"`
-		Title           string            `json:"title"`
-		Status          string            `json:"status"`
-		Type            string            `json:"type"`
-		ParentID        string            `json:"parent_id"`
-		EstimateMinutes int               `json:"estimate_minutes"`
-		ActualDurationS int               `json:"actual_duration_sec"`
-		IterationsUsed  int               `json:"iterations_used"`
-		ErrorLog        string            `json:"error_log,omitempty"`
-		CreatedAt       time.Time         `json:"created_at"`
-		UpdatedAt       time.Time         `json:"updated_at"`
-		Children        []string          `json:"children"`
-		Dependencies    []string          `json:"dependencies"`
-		Dependents      []string          `json:"dependents"`
-		Decisions       []treeDecision    `json:"decisions"`
-		HasTraces       bool              `json:"has_traces"`
+		ID              string         `json:"id"`
+		Title           string         `json:"title"`
+		Status          string         `json:"status"`
+		Type            string         `json:"type"`
+		ParentID        string         `json:"parent_id"`
+		EstimateMinutes int            `json:"estimate_minutes"`
+		ActualDurationS int            `json:"actual_duration_sec"`
+		IterationsUsed  int            `json:"iterations_used"`
+		ErrorLog        string         `json:"error_log,omitempty"`
+		CreatedAt       time.Time      `json:"created_at"`
+		UpdatedAt       time.Time      `json:"updated_at"`
+		Children        []string       `json:"children"`
+		Dependencies    []string       `json:"dependencies"`
+		Dependents      []string       `json:"dependents"`
+		Decisions       []treeDecision `json:"decisions"`
+		HasTraces       bool           `json:"has_traces"`
 	}
 
 	// Build parent→children map
@@ -685,7 +686,6 @@ func (a *API) handleDashboardOverviewGrouped(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-
 // handleDashboardTaskPause sets a running task back to ready.
 func (a *API) handleDashboardTaskPause(w http.ResponseWriter, r *http.Request) {
 	taskID := r.PathValue("taskID")
@@ -721,7 +721,10 @@ func (a *API) handleDashboardTaskKill(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Reason string `json:"reason"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		a.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
 	if body.Reason == "" {
 		body.Reason = "killed via dashboard"
 	}

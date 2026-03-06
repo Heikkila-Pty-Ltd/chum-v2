@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 	_ "modernc.org/sqlite"
@@ -36,6 +37,10 @@ func Open(dbPath string) (*DAG, error) {
 	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	}
+	if _, err := db.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("set busy timeout: %w", err)
 	}
 	d := &DAG{db: db}
 	if err := d.EnsureSchema(context.Background()); err != nil {
@@ -365,7 +370,9 @@ func (d *DAG) UpdateTask(ctx context.Context, id string, fields map[string]any) 
 	setClauses = append(setClauses, "updated_at = datetime('now')")
 	args = append(args, id)
 	query := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(setClauses, ", "))
-	res, err := d.db.ExecContext(ctx, query, args...)
+	res, err := execWithBusyRetry(ctx, func() (sql.Result, error) {
+		return d.db.ExecContext(ctx, query, args...)
+	})
 	if err != nil {
 		return fmt.Errorf("update task: %w", err)
 	}
@@ -386,7 +393,11 @@ func (d *DAG) UpdateTaskStatus(ctx context.Context, id, status string) error {
 	return d.UpdateTask(ctx, id, map[string]any{"status": status})
 }
 
-// GetReadyNodes returns tasks with status="ready" whose dependencies are all "completed".
+// GetReadyNodes returns tasks with status="ready" whose dependencies are satisfied.
+// Dependency semantics are source-aware:
+// - non-AST edges require terminal deps (completed/done)
+// - AST fences only block while the dependency is still active (ready/running)
+// Legacy "done" remains satisfied for backward compatibility.
 func (d *DAG) GetReadyNodes(ctx context.Context, project string) ([]Task, error) {
 	query := `SELECT ` + taskColumns + ` FROM tasks t
 		WHERE t.project = ? AND t.status = ?
@@ -394,10 +405,26 @@ func (d *DAG) GetReadyNodes(ctx context.Context, project string) ([]Task, error)
 			SELECT 1 FROM task_edges e
 			LEFT JOIN tasks dep ON dep.id = e.to_task
 			WHERE e.from_task = t.id
-			AND (dep.id IS NULL OR dep.status != ?)
+			AND (
+				dep.id IS NULL OR (
+					CASE
+						WHEN lower(trim(COALESCE(e.source, ''))) = 'ast'
+							THEN lower(trim(COALESCE(dep.status, ''))) IN (?, ?)
+						ELSE
+							lower(trim(COALESCE(dep.status, ''))) NOT IN (?, ?)
+					END
+				)
+			)
 		)
 		ORDER BY t.priority ASC, t.created_at ASC`
-	rows, err := d.db.QueryContext(ctx, query, project, types.StatusReady, types.StatusCompleted)
+	rows, err := d.db.QueryContext(ctx, query,
+		project,
+		types.StatusReady,
+		types.StatusReady,
+		types.StatusRunning,
+		types.StatusCompleted,
+		types.StatusDone,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("get ready nodes: %w", err)
 	}
@@ -418,6 +445,45 @@ func (d *DAG) GetReadyNodes(ctx context.Context, project string) ([]Task, error)
 // Safety: this generates only literal "?" characters — no user input is interpolated.
 func sqlPlaceholders(n int) string {
 	return strings.TrimRight(strings.Repeat("?,", n), ",")
+}
+
+func execWithBusyRetry(ctx context.Context, fn func() (sql.Result, error)) (sql.Result, error) {
+	const maxAttempts = 5
+	backoff := 40 * time.Millisecond
+	var lastErr error
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		res, err := fn()
+		if err == nil {
+			return res, nil
+		}
+		if !isSQLiteBusyError(err) || attempt == maxAttempts-1 {
+			return nil, err
+		}
+		lastErr = err
+
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+		if backoff < 500*time.Millisecond {
+			backoff *= 2
+		}
+	}
+	return nil, lastErr
+}
+
+func isSQLiteBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "sqlite_busy") ||
+		strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "database table is locked")
 }
 
 // --- scan helpers ---

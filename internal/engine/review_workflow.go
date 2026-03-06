@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,9 +18,9 @@ import (
 // completes, the task lands in "needs_review" with a PR number but no
 // running workflow. ReviewWorkflow picks up from that point:
 //
-//	GetPRInfo → Review Loop → Merge → Close
+//	GetPRInfo → SetupWorktree(at PR head) → Review Loop → Merge → Close
 //
-// No setup/execute/dod — assumes the PR already exists and passed DoD.
+// It resumes from an existing PR and only re-executes when reviewer requests changes.
 func ReviewWorkflow(ctx workflow.Context, req ReviewRequest) error {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("ReviewWorkflow started", "TaskID", req.TaskID, "PR", req.PRNumber)
@@ -39,6 +41,10 @@ func ReviewWorkflow(ctx workflow.Context, req ReviewRequest) error {
 	if reviewTimeout <= 0 {
 		reviewTimeout = 10 * time.Minute
 	}
+	dodTimeout := execTimeout
+	if reviewTimeout > dodTimeout {
+		dodTimeout = reviewTimeout
+	}
 
 	shortOpts := workflow.ActivityOptions{
 		StartToCloseTimeout: shortTimeout,
@@ -53,9 +59,22 @@ func ReviewWorkflow(ctx workflow.Context, req ReviewRequest) error {
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
 	dodOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: reviewTimeout,
+		StartToCloseTimeout: dodTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	}
+
+	baseWorkDir := req.WorkDir
+	predictableWorktreePath := filepath.Join(os.TempDir(), "chum-worktrees", req.TaskID)
+	cleaned := false
+	cleanup := func() {
+		if cleaned {
+			return
+		}
+		cleaned = true
+		cleanCtx := workflow.WithActivityOptions(ctx, shortOpts)
+		_ = workflow.ExecuteActivity(cleanCtx, a.CleanupWorktreeActivity, baseWorkDir, predictableWorktreePath).Get(ctx, nil)
+	}
+	defer cleanup()
 
 	// Mark task as running so the dispatcher doesn't double-pick it.
 	markCtx := workflow.WithActivityOptions(ctx, shortOpts)
@@ -64,7 +83,7 @@ func ReviewWorkflow(ctx workflow.Context, req ReviewRequest) error {
 	// === GET PR INFO ===
 	prCtx := workflow.WithActivityOptions(ctx, shortOpts)
 	var prInfo PRInfo
-	if err := workflow.ExecuteActivity(prCtx, a.GetPRInfoActivity, req.WorkDir, req.PRNumber).Get(ctx, &prInfo); err != nil {
+	if err := workflow.ExecuteActivity(prCtx, a.GetPRInfoActivity, baseWorkDir, req.PRNumber).Get(ctx, &prInfo); err != nil {
 		logger.Error("Failed to get PR info", "error", err)
 		return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
 			Reason:    CloseNeedsReview,
@@ -72,6 +91,24 @@ func ReviewWorkflow(ctx workflow.Context, req ReviewRequest) error {
 			PRNumber:  req.PRNumber,
 		})
 	}
+
+	// === WORKTREE SETUP (at PR head) ===
+	setupStartRef := strings.TrimSpace(prInfo.HeadSHA)
+	if setupStartRef == "" {
+		setupStartRef = "HEAD"
+	}
+	var worktreePath string
+	if err := workflow.ExecuteActivity(prCtx, a.SetupWorktreeFromRefActivity, baseWorkDir, req.TaskID, setupStartRef).Get(ctx, &worktreePath); err != nil {
+		logger.Error("Worktree setup failed for review recovery", "error", err)
+		return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
+			Reason:    CloseNeedsReview,
+			SubReason: "worktree_failed",
+			PRNumber:  prInfo.Number,
+			ReviewURL: prInfo.URL,
+		})
+	}
+	req.WorkDir = worktreePath
+	logger.Info("Worktree isolated for review recovery", "path", worktreePath, "start_ref", setupStartRef)
 
 	// === RESOLVE REVIEWER ===
 	var reviewerLogin string
@@ -212,8 +249,8 @@ func ReviewWorkflow(ctx workflow.Context, req ReviewRequest) error {
 			}
 
 			execCtx := workflow.WithActivityOptions(ctx, execOpts)
-			var execResult ExecResult
-			if err := workflow.ExecuteActivity(execCtx, a.ExecuteActivity, taskReq).Get(ctx, &execResult); err != nil {
+			taskReqAfterExec, _, err := executeWithProviderFallback(execCtx, taskReq)
+			if err != nil {
 				logger.Error("Re-execute failed after review changes", "error", err)
 				return closeAndNotify(ctx, shortOpts, req.TaskID, CloseDetail{
 					Reason:    CloseNeedsReview,
@@ -222,6 +259,8 @@ func ReviewWorkflow(ctx workflow.Context, req ReviewRequest) error {
 					ReviewURL: state.ReviewURL,
 				})
 			}
+			req.Agent = taskReqAfterExec.Agent
+			req.Model = taskReqAfterExec.Model
 
 			// Re-run DoD
 			var dodResult gitpkg.DoDResult

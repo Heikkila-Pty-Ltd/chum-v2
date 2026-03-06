@@ -3,6 +3,7 @@ package ast
 import (
 	"context"
 	"math"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -82,6 +83,10 @@ func TestFilterRelevantByEmbedding_FallbackOnBadURL(t *testing.T) {
 // TestFilterRelevantByEmbedding_Integration tests against a live ollama instance.
 // Skipped if ollama is not available.
 func TestFilterRelevantByEmbedding_Integration(t *testing.T) {
+	if os.Getenv("CHUM_AST_RUN_LIVE_EMBED_TESTS") != "1" {
+		t.Skip("set CHUM_AST_RUN_LIVE_EMBED_TESTS=1 to run live embedding integration tests")
+	}
+
 	ef := NewEmbedFilter()
 	ctx := context.Background()
 

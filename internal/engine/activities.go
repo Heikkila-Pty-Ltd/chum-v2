@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -53,6 +54,18 @@ func (a *Activities) SetupWorktreeActivity(ctx context.Context, baseDir, taskID 
 	return wtDir, nil
 }
 
+// SetupWorktreeFromRefActivity creates an isolated git worktree for a task
+// branch, starting from a specific ref (for example a PR head SHA).
+func (a *Activities) SetupWorktreeFromRefActivity(ctx context.Context, baseDir, taskID, startRef string) (string, error) {
+	logger := activity.GetLogger(ctx)
+	wtDir, err := gitpkg.SetupWorktreeAtRef(ctx, baseDir, taskID, startRef)
+	if err != nil {
+		return "", fmt.Errorf("setup worktree from ref: %w", err)
+	}
+	logger.Info("Worktree created from ref", "path", wtDir, "start_ref", startRef)
+	return wtDir, nil
+}
+
 // --- 2. ExecuteActivity ---
 
 // ExecuteActivity runs the LLM CLI to implement a task, then commits changes.
@@ -84,11 +97,32 @@ func (a *Activities) ExecuteActivity(ctx context.Context, req TaskRequest) (*Exe
 		buildCmd := projCfg.DoDChecks[0]
 		parts := strings.Fields(buildCmd)
 		if len(parts) > 0 {
-			cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
-			cmd.Dir = req.WorkDir
-			if out, err := cmd.CombinedOutput(); err != nil {
+			out, err := runCommandCombinedOutput(ctx, req.WorkDir, parts...)
+			if err != nil {
+				// Empty-output failures are commonly transient/cancellation artifacts.
+				// Retry once before failing hard.
+				if strings.TrimSpace(out) == "" && ctx.Err() == nil {
+					logger.Warn("Preflight baseline build failed with empty output; retrying once",
+						"TaskID", req.TaskID,
+						"Project", req.Project,
+						"Command", buildCmd,
+						"Error", err.Error(),
+					)
+					out, err = runCommandCombinedOutput(ctx, req.WorkDir, parts...)
+				}
+				if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					cancelErr := ctx.Err()
+					if cancelErr == nil {
+						cancelErr = err
+					}
+					return nil, fmt.Errorf("PREFLIGHT: baseline build cancelled while running %q: %w", buildCmd, cancelErr)
+				}
+				if strings.TrimSpace(out) == "" {
+					return nil, fmt.Errorf("PREFLIGHT: project doesn't build before coding — %s failed with no output: %v",
+						buildCmd, err)
+				}
 				return nil, fmt.Errorf("PREFLIGHT: project doesn't build before coding — %s failed: %s",
-					buildCmd, types.Truncate(string(out), 300))
+					buildCmd, types.Truncate(out, 300))
 			}
 			logger.Info("Preflight: baseline build OK")
 		}
@@ -135,6 +169,16 @@ Implement this task by modifying the necessary files. Do not explain, just code.
 		OutputTokens: result.OutputTokens,
 		CostUSD:      result.CostUSD,
 	}, nil
+}
+
+func runCommandCombinedOutput(ctx context.Context, workDir string, args ...string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("empty command args")
+	}
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd.Dir = workDir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 // --- 3. DoDCheckActivity ---
@@ -202,6 +246,23 @@ func (a *Activities) CloseTaskActivity(ctx context.Context, taskID, status strin
 // On completion, writes back status to beads (best-effort).
 func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID string, detail CloseDetail) error {
 	logger := activity.GetLogger(ctx)
+
+	// Preserve existing PR linkage on follow-up failures where newer close
+	// payloads omit PR metadata (e.g. exec_failed during resumed review).
+	if detail.PRNumber == 0 || strings.TrimSpace(detail.ReviewURL) == "" {
+		if current, err := a.DAG.GetTask(ctx, taskID); err == nil && strings.TrimSpace(current.ErrorLog) != "" {
+			var prev CloseDetail
+			if err := json.Unmarshal([]byte(current.ErrorLog), &prev); err == nil {
+				if detail.PRNumber == 0 && prev.PRNumber > 0 {
+					detail.PRNumber = prev.PRNumber
+				}
+				if strings.TrimSpace(detail.ReviewURL) == "" && strings.TrimSpace(prev.ReviewURL) != "" {
+					detail.ReviewURL = prev.ReviewURL
+				}
+			}
+		}
+	}
+
 	raw, err := json.Marshal(detail)
 	if err != nil {
 		return fmt.Errorf("marshal close detail: %w", err)
@@ -221,53 +282,84 @@ func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID str
 		return nil
 	}
 
+	mappedIssueID := ""
+	if bridgeDAG, ok := a.DAG.(*dag.DAG); ok {
+		if mapping, mapErr := bridgeDAG.GetBeadsMappingByTask(ctx, task.Project, taskID); mapErr == nil {
+			mappedIssueID = strings.TrimSpace(mapping.IssueID)
+		}
+	}
+
 	// S6-S8: When bridge mode is enabled, writebacks are projected via durable outbox.
 	if a.Config != nil && a.Config.BeadsBridge.Enabled && !a.Config.BeadsBridge.DryRun {
 		if bridgeDAG, ok := a.DAG.(*dag.DAG); ok {
-			if mapping, mapErr := bridgeDAG.GetBeadsMappingByTask(ctx, task.Project, taskID); mapErr == nil {
+			if mappedIssueID != "" {
 				if detail.Reason != CloseDecomposed {
-					if err := beadsbridge.EnqueueTaskTerminal(ctx, bridgeDAG, task.Project, mapping.IssueID, taskID,
+					if err := beadsbridge.EnqueueTaskTerminal(ctx, bridgeDAG, task.Project, mappedIssueID, taskID,
 						string(detail.Reason), detail.SubReason, map[string]any{
 							"category":   detail.Category,
 							"summary":    detail.Summary,
 							"review_url": detail.ReviewURL,
 							"pr_number":  detail.PRNumber,
 						}); err != nil {
-						logger.Warn("Bridge outbox enqueue failed", "taskID", taskID, "issueID", mapping.IssueID, "error", err)
+						logger.Warn("Bridge outbox enqueue failed", "taskID", taskID, "issueID", mappedIssueID, "error", err)
 					}
 				}
 				return nil
 			}
 		}
+		logger.Info("Beads writeback skipped: bridge mode requires mapped beads issue",
+			"taskID", taskID,
+			"project", task.Project,
+		)
+		return nil
 	}
 
 	bc, ok := a.BeadsClients[task.Project]
 	if !ok {
 		return nil
 	}
+	issueID := mappedIssueID
+	if issueID == "" && task.Metadata != nil {
+		issueID = strings.TrimSpace(task.Metadata["beads_issue_id"])
+	}
+	if issueID == "" {
+		issueID = taskID
+	}
+	// In non-bridge mode, avoid noisy writeback failures for DAG-only synthetic tasks.
+	if mappedIssueID == "" {
+		if _, showErr := bc.Show(ctx, issueID); showErr != nil {
+			logger.Info("Beads writeback skipped: task has no matching beads issue",
+				"taskID", taskID,
+				"project", task.Project,
+				"issueID", issueID,
+				"error", showErr,
+			)
+			return nil
+		}
+	}
 	switch detail.Reason {
 	case CloseCompleted:
 		reason := fmt.Sprintf("Completed by CHUM. PR #%d", detail.PRNumber)
-		if err := bc.Close(ctx, taskID, reason); err != nil {
-			logger.Warn("Beads writeback failed", "taskID", taskID, "error", err)
+		if err := bc.Close(ctx, issueID, reason); err != nil {
+			logger.Warn("Beads writeback failed", "taskID", taskID, "issueID", issueID, "error", err)
 		}
 	case CloseDecomposed:
-		if err := bc.Update(ctx, taskID, map[string]string{
+		if err := bc.Update(ctx, issueID, map[string]string{
 			"status": string(types.StatusDecomposed),
 		}); err != nil {
-			logger.Warn("Beads decomposed writeback failed", "taskID", taskID, "error", err)
+			logger.Warn("Beads decomposed writeback failed", "taskID", taskID, "issueID", issueID, "error", err)
 		}
 	case CloseDoDFailed:
-		if err := bc.Update(ctx, taskID, map[string]string{
+		if err := bc.Update(ctx, issueID, map[string]string{
 			"status": string(types.StatusDoDFailed),
 		}); err != nil {
-			logger.Warn("Beads dod_failed writeback failed", "taskID", taskID, "error", err)
+			logger.Warn("Beads dod_failed writeback failed", "taskID", taskID, "issueID", issueID, "error", err)
 		}
 	case CloseFailed:
-		if err := bc.Update(ctx, taskID, map[string]string{
+		if err := bc.Update(ctx, issueID, map[string]string{
 			"status": string(types.StatusFailed),
 		}); err != nil {
-			logger.Warn("Beads failed writeback failed", "taskID", taskID, "error", err)
+			logger.Warn("Beads failed writeback failed", "taskID", taskID, "issueID", issueID, "error", err)
 		}
 	}
 	return nil

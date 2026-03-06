@@ -140,6 +140,47 @@ func TestAgentWorkflow_SuccessPath_Completes(t *testing.T) {
 	}
 }
 
+func TestAgentWorkflow_NoCommitsPRCreate_ClosesCompleted(t *testing.T) {
+	t.Parallel()
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestWorkflowEnvironment()
+
+	var a *Activities
+	env.OnActivity(a.SetupWorktreeActivity, mock.Anything, "/repo", "task-no-commits").Return("/tmp/wt-task-no-commits", nil)
+	env.OnActivity(a.DecomposeActivity, mock.Anything, mock.Anything).Return(&types.DecompResult{Atomic: true}, nil)
+	env.OnActivity(a.ExecuteActivity, mock.Anything, mock.Anything).Return(&ExecResult{
+		ExitCode: 0,
+		Output:   "ok",
+	}, nil)
+	env.OnActivity(a.DoDCheckActivity, mock.Anything, "/tmp/wt-task-no-commits", "p").Return(&gitpkg.DoDResult{
+		Passed: true,
+	}, nil)
+	env.OnActivity(a.PushActivity, mock.Anything, "/tmp/wt-task-no-commits").Return(nil)
+	env.OnActivity(a.CreatePRInfoActivity, mock.Anything, "/tmp/wt-task-no-commits", mock.Anything).
+		Return((*PRInfo)(nil), errors.New("gh pr create: GraphQL: No commits between master and chum/task (createPullRequest)"))
+	env.OnActivity(a.CloseTaskWithDetailActivity, mock.Anything, "task-no-commits", mock.MatchedBy(func(detail CloseDetail) bool {
+		return detail.Reason == CloseCompleted && detail.SubReason == "no_changes"
+	})).Return(nil)
+	env.OnActivity(a.NotifyActivity, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.CleanupWorktreeActivity, mock.Anything, "/repo", "/tmp/wt-task-no-commits").Return(nil)
+
+	env.ExecuteWorkflow(AgentWorkflow, TaskRequest{
+		TaskID:  "task-no-commits",
+		Project: "p",
+		Prompt:  "do thing",
+		WorkDir: "/repo",
+		Agent:   "claude",
+	})
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("expected workflow completion")
+	}
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("unexpected workflow error: %v", err)
+	}
+}
+
 func TestCloseAndNotify_PropagatesCloseFailure(t *testing.T) {
 	t.Parallel()
 
@@ -332,5 +373,51 @@ func TestAgentWorkflow_MergeFailure(t *testing.T) {
 	}
 	if err := env.GetWorkflowError(); err != nil {
 		t.Fatalf("unexpected workflow error: %v", err)
+	}
+}
+
+func TestShouldFallbackExecutionError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "preflight", err: errors.New("PREFLIGHT: project doesn't build before coding"), want: false},
+		{name: "execute cli", err: errors.New("execute CLI: CLI gemini exited with code 1"), want: true},
+		{name: "agent exit", err: errors.New("agent exited with code 1"), want: true},
+		{name: "rate limited", err: errors.New("rate limited: gemini"), want: true},
+		{name: "other", err: errors.New("some other failure"), want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := shouldFallbackExecutionError(tt.err); got != tt.want {
+				t.Fatalf("shouldFallbackExecutionError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNextFallbackExecutionProvider(t *testing.T) {
+	t.Parallel()
+
+	agent, model, ok := nextFallbackExecutionProvider("gemini")
+	if !ok || agent != "codex" || model != "" {
+		t.Fatalf("gemini fallback = (%q,%q,%v), want (codex,\"\",true)", agent, model, ok)
+	}
+
+	agent, model, ok = nextFallbackExecutionProvider("codex")
+	if !ok || agent != "gemini" || model != "" {
+		t.Fatalf("codex fallback = (%q,%q,%v), want (gemini,\"\",true)", agent, model, ok)
+	}
+
+	_, _, ok = nextFallbackExecutionProvider("claude")
+	if ok {
+		t.Fatal("expected no fallback for claude")
 	}
 }

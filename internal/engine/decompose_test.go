@@ -182,3 +182,36 @@ func TestDecomposeActivity_LLMInvalidJSON(t *testing.T) {
 		t.Errorf("expected empty steps when Atomic=true, got %d steps", len(result.Steps))
 	}
 }
+
+func TestParseDecompJSON_ArrayShape(t *testing.T) {
+	jsonStr := `[{"title":"Step 1","description":"Do thing 1","acceptance":"Done","estimate_minutes":10}]`
+
+	got, err := parseDecompJSON(jsonStr)
+	if err != nil {
+		t.Fatalf("parseDecompJSON array: %v", err)
+	}
+	if got.Atomic {
+		t.Fatal("expected non-atomic result for non-empty array")
+	}
+	if len(got.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(got.Steps))
+	}
+	if got.Steps[0].Title != "Step 1" {
+		t.Fatalf("unexpected step title: %q", got.Steps[0].Title)
+	}
+}
+
+func TestParseDecompJSON_ObjectShape(t *testing.T) {
+	jsonStr := `{"steps":[{"title":"Step 1","description":"Do thing 1","acceptance":"Done","estimate_minutes":10}]}`
+
+	got, err := parseDecompJSON(jsonStr)
+	if err != nil {
+		t.Fatalf("parseDecompJSON object: %v", err)
+	}
+	if got.Atomic {
+		t.Fatal("expected non-atomic result for non-empty steps")
+	}
+	if len(got.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(got.Steps))
+	}
+}

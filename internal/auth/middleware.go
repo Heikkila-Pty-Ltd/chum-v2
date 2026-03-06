@@ -60,5 +60,8 @@ func extractToken(r *http.Request) string {
 func writeUnauthorized(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
-	json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"}); err != nil {
+		// Best-effort response; write failures commonly mean the client disconnected.
+		return
+	}
 }

@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"go.temporal.io/sdk/activity"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/admit"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beadsbridge"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
@@ -36,14 +39,10 @@ func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*t
 		return &types.DecompResult{Atomic: true}, nil
 	}
 
-	var decomp types.DecompResult
-	if err := json.Unmarshal([]byte(jsonStr), &decomp); err != nil {
+	decomp, err := parseDecompJSON(jsonStr)
+	if err != nil {
 		logger.Warn("Failed to parse decomposition JSON, treating as atomic", "error", err)
 		return &types.DecompResult{Atomic: true}, nil
-	}
-
-	if len(decomp.Steps) == 0 {
-		decomp.Atomic = true
 	}
 
 	logger.Info("Decomposition result", "Steps", len(decomp.Steps), "Atomic", decomp.Atomic)
@@ -57,21 +56,108 @@ func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*t
 func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, project string, steps []types.DecompStep) ([]string, error) {
 	logger := activity.GetLogger(ctx)
 
-	var tasks []dag.Task
+	bc, ok := a.BeadsClients[project]
+	if !ok || bc == nil {
+		return nil, fmt.Errorf("beads-first policy: no beads client configured for project %q", project)
+	}
+
+	parentIssueID := strings.TrimSpace(parentID)
+	bridgeDAG, canMap := a.DAG.(*dag.DAG)
+	if canMap {
+		if mapping, err := bridgeDAG.GetBeadsMappingByTask(ctx, project, parentID); err == nil && strings.TrimSpace(mapping.IssueID) != "" {
+			parentIssueID = strings.TrimSpace(mapping.IssueID)
+		}
+	}
+
+	type preparedSubtask struct {
+		issueID string
+		step    types.DecompStep
+	}
+	prepared := make([]preparedSubtask, 0, len(steps))
+	rollbackPrepared := func(reason string) {
+		for _, subtask := range prepared {
+			issueID := strings.TrimSpace(subtask.issueID)
+			if issueID == "" {
+				continue
+			}
+			closeErr := bc.Close(ctx, issueID, reason)
+			if closeErr != nil {
+				logger.Warn("Failed to roll back beads subtask", "issueID", issueID, "error", closeErr)
+			}
+		}
+	}
+	var prevIssueID string
 	for _, step := range steps {
+		issueID, err := bc.Create(ctx, beads.CreateParams{
+			Title:            step.Title,
+			Description:      step.Description,
+			IssueType:        "task",
+			Priority:         -1, // Use beads default priority unless planner explicitly changes it later.
+			ParentID:         parentIssueID,
+			Acceptance:       step.Acceptance,
+			EstimatedMinutes: step.Estimate,
+			Dependencies: func() []string {
+				if prevIssueID == "" {
+					return nil
+				}
+				return []string{prevIssueID}
+			}(),
+		})
+		if err != nil {
+			rollbackPrepared("Automatic rollback: beads subtask batch creation failed")
+			return nil, fmt.Errorf("create beads subtask for %q: %w", step.Title, err)
+		}
+		issueID = strings.TrimSpace(issueID)
+		if issueID == "" {
+			rollbackPrepared("Automatic rollback: beads returned empty subtask id")
+			return nil, fmt.Errorf("create beads subtask for %q: empty issue id", step.Title)
+		}
+		prepared = append(prepared, preparedSubtask{
+			issueID: issueID,
+			step:    step,
+		})
+		prevIssueID = issueID
+	}
+
+	var tasks []dag.Task
+	for _, subtask := range prepared {
 		tasks = append(tasks, dag.Task{
-			Title:           step.Title,
-			Description:     step.Description,
+			ID:              subtask.issueID,
+			Title:           subtask.step.Title,
+			Description:     subtask.step.Description,
 			ParentID:        parentID,
-			Acceptance:      step.Acceptance,
-			EstimateMinutes: step.Estimate,
+			Acceptance:      subtask.step.Acceptance,
+			EstimateMinutes: subtask.step.Estimate,
 			Project:         project,
+			Metadata: map[string]string{
+				"beads_issue_id": subtask.issueID,
+				"beads_bridge":   "true",
+			},
 		})
 	}
 
 	ids, err := a.DAG.CreateSubtasksAtomic(ctx, parentID, tasks)
 	if err != nil {
+		rollbackPrepared("Automatic rollback: DAG subtask creation failed")
 		return nil, fmt.Errorf("create subtasks for %s: %w", parentID, err)
+	}
+	if canMap {
+		for _, subtask := range prepared {
+			fingerprint := ""
+			if issue, showErr := bc.Show(ctx, subtask.issueID); showErr == nil {
+				fingerprint = beadsbridge.FingerprintIssue(issue)
+			}
+			if err := bridgeDAG.UpsertBeadsMapping(ctx, project, subtask.issueID, subtask.issueID, fingerprint); err != nil {
+				// DAG subtasks are already committed here; keep execution moving and
+				// rely on dispatch backfill (taskID==issueID) to repair mapping later.
+				logger.Warn("Persist beads mapping failed after subtask commit",
+					"project", project,
+					"taskID", subtask.issueID,
+					"issueID", subtask.issueID,
+					"error", err,
+				)
+			}
+		}
 	}
 	logger.Info("Created subtasks atomically", "Parent", parentID, "Count", len(ids), "IDs", ids)
 
@@ -119,4 +205,26 @@ Rules:
   - "Add feature and update docs and tests" → three separate steps
   - "Investigate and fix" → split into "Diagnose root cause" and "Apply fix"
 - Output ONLY the JSON object. No commentary, no markdown fences.`, taskPrompt, codeContext)
+}
+
+// parseDecompJSON accepts both canonical object form:
+// {"steps":[...]} and bare-array form: [{...}, {...}].
+func parseDecompJSON(jsonStr string) (types.DecompResult, error) {
+	var decomp types.DecompResult
+	if err := json.Unmarshal([]byte(jsonStr), &decomp); err == nil {
+		if len(decomp.Steps) == 0 {
+			decomp.Atomic = true
+		}
+		return decomp, nil
+	}
+
+	var steps []types.DecompStep
+	if err := json.Unmarshal([]byte(jsonStr), &steps); err == nil {
+		return types.DecompResult{
+			Steps:  steps,
+			Atomic: len(steps) == 0,
+		}, nil
+	}
+
+	return types.DecompResult{}, fmt.Errorf("unsupported decomposition JSON shape")
 }

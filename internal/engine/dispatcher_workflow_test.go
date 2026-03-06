@@ -19,6 +19,7 @@ func TestDispatcherWorkflow_NoCandidates(t *testing.T) {
 	var da *DispatchActivities
 	env.OnActivity(da.RecordDispatchStartActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	env.OnActivity(da.ScanCandidatesActivity, mock.Anything).Return([]DispatchCandidate{}, nil)
+	env.OnActivity(da.ScanOrphanedReviewsActivity, mock.Anything).Return([]ReviewRequest{}, nil)
 
 	dispatched := 0
 	env.OnWorkflow(AgentWorkflow, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
@@ -55,6 +56,7 @@ func TestDispatcherWorkflow_MarkTaskRunningFailureSkipsDispatch(t *testing.T) {
 			Agent:   "claude",
 		},
 	}, nil)
+	env.OnActivity(da.ScanOrphanedReviewsActivity, mock.Anything).Return([]ReviewRequest{}, nil)
 	env.OnActivity(da.MarkTaskRunningActivity, mock.Anything, "task-1").Return(errors.New("mark-failed"))
 
 	dispatched := 0
@@ -95,6 +97,7 @@ func TestDispatcherWorkflow_DispatchesCandidateWithExpectedRequest(t *testing.T)
 			MaxReviewRounds: 6,
 		},
 	}, nil)
+	env.OnActivity(da.ScanOrphanedReviewsActivity, mock.Anything).Return([]ReviewRequest{}, nil)
 	env.OnActivity(da.MarkTaskRunningActivity, mock.Anything, "task-1").Return(nil)
 
 	dispatched := 0
@@ -191,6 +194,7 @@ func TestDispatcherWorkflow_MultipleCandidates(t *testing.T) {
 	}
 
 	env.OnActivity(da.ScanCandidatesActivity, mock.Anything).Return(candidates, nil)
+	env.OnActivity(da.ScanOrphanedReviewsActivity, mock.Anything).Return([]ReviewRequest{}, nil)
 
 	// First mark succeeds
 	env.OnActivity(da.MarkTaskRunningActivity, mock.Anything, "task-1").Return(nil)
@@ -315,5 +319,55 @@ func TestDispatcherWorkflow_ScanFailure(t *testing.T) {
 	}
 	if dispatched != 0 {
 		t.Fatalf("expected no child workflows spawned when scan fails, got %d", dispatched)
+	}
+}
+
+func TestDispatcherWorkflow_NoCandidates_StillDispatchesOrphanReview(t *testing.T) {
+	t.Parallel()
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestWorkflowEnvironment()
+
+	var da *DispatchActivities
+	env.OnActivity(da.RecordDispatchStartActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	env.OnActivity(da.ScanCandidatesActivity, mock.Anything).Return([]DispatchCandidate{}, nil)
+	env.OnActivity(da.ScanOrphanedReviewsActivity, mock.Anything).Return([]ReviewRequest{
+		{
+			TaskID:   "hg-28870",
+			Project:  "hg",
+			WorkDir:  "/tmp/hg",
+			PRNumber: 39,
+			Agent:    "gemini",
+		},
+	}, nil)
+	env.OnActivity(da.MarkTaskRunningActivity, mock.Anything, "hg-28870").Return(nil)
+
+	reviewDispatched := 0
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		reviewDispatched++
+		req, ok := args.Get(1).(ReviewRequest)
+		if !ok {
+			t.Fatalf("expected ReviewRequest argument, got %T", args.Get(1))
+		}
+		if req.TaskID != "hg-28870" {
+			t.Fatalf("TaskID = %q, want hg-28870", req.TaskID)
+		}
+		if req.PRNumber != 39 {
+			t.Fatalf("PRNumber = %d, want 39", req.PRNumber)
+		}
+	}).Return(nil)
+
+	env.OnWorkflow(AgentWorkflow, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	env.ExecuteWorkflow(DispatcherWorkflow, struct{}{})
+
+	if !env.IsWorkflowCompleted() {
+		t.Fatal("expected workflow completion")
+	}
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("unexpected workflow error: %v", err)
+	}
+	if reviewDispatched != 1 {
+		t.Fatalf("expected orphan review dispatch, got %d", reviewDispatched)
 	}
 }

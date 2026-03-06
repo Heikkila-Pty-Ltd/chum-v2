@@ -2,7 +2,6 @@ package jarvis
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -67,15 +66,16 @@ func (a *API) Handler() http.Handler {
 }
 
 func (a *API) handleSubmit(w http.ResponseWriter, r *http.Request) {
-	if ingressBlocked(a.IngressPolicy, r) {
-		a.jsonError(w, "direct submit blocked by beads bridge ingress policy; route through `chum submit`", http.StatusForbidden)
-		return
-	}
-
 	var req WorkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		a.jsonError(w, "invalid request body", http.StatusBadRequest)
 		return
+	}
+	if ingressBlocked(a.IngressPolicy, r) {
+		if a.Engine == nil || !a.Engine.CanSubmitViaBeads(req.Project) {
+			a.jsonError(w, "direct submit blocked by beads bridge ingress policy; route through `chum submit`", http.StatusForbidden)
+			return
+		}
 	}
 
 	dispatch := r.URL.Query().Get("dispatch") == "true"
@@ -142,7 +142,9 @@ func (a *API) jsonOK(w http.ResponseWriter, data any) {
 func (a *API) jsonError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("%s", msg)})
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
+		a.Logger.Error("JSON encode failed", "error", err, "status_code", code)
+	}
 }
 
 func ingressBlocked(policy string, r *http.Request) bool {

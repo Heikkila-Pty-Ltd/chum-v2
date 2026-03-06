@@ -39,6 +39,52 @@ func TestParseReviewSignal_InvalidDefaultsToRequestChanges(t *testing.T) {
 	}
 }
 
+func TestParseReviewSignal_IgnoresCLIPreambleNoise(t *testing.T) {
+	t.Parallel()
+
+	out := "Loaded cached credentials.\nHook registry initialized with 0 hook entries\nREQUEST_CHANGES\nAdd tests."
+	signal, body, invalid := parseReviewSignal(out)
+	if invalid {
+		t.Fatal("expected valid signal with CLI preamble noise")
+	}
+	if signal != "REQUEST_CHANGES" {
+		t.Fatalf("signal = %q, want REQUEST_CHANGES", signal)
+	}
+	if body != "Add tests." {
+		t.Fatalf("body = %q, want reviewer rationale", body)
+	}
+}
+
+func TestParseReviewSignal_ParsesSignalPrefixLine(t *testing.T) {
+	t.Parallel()
+
+	signal, body, invalid := parseReviewSignal("Signal: APPROVE\nLooks good.")
+	if invalid {
+		t.Fatal("expected valid signal from prefixed line")
+	}
+	if signal != "APPROVE" {
+		t.Fatalf("signal = %q, want APPROVE", signal)
+	}
+	if body != "Looks good." {
+		t.Fatalf("body = %q, want reviewer rationale", body)
+	}
+}
+
+func TestParseReviewSignal_ParsesMarkdownPrefixedSignalLine(t *testing.T) {
+	t.Parallel()
+
+	signal, body, invalid := parseReviewSignal("### SIGNAL: APPROVE\nLooks good.")
+	if invalid {
+		t.Fatal("expected valid signal from markdown-prefixed line")
+	}
+	if signal != "APPROVE" {
+		t.Fatalf("signal = %q, want APPROVE", signal)
+	}
+	if body != "Looks good." {
+		t.Fatalf("body = %q, want reviewer rationale", body)
+	}
+}
+
 func TestDefaultReviewer(t *testing.T) {
 	t.Parallel()
 
@@ -328,6 +374,62 @@ func TestReviewStateToOutcome_Commented(t *testing.T) {
 	if outcome != ReviewNoActivity {
 		t.Fatalf("reviewStateToOutcome(COMMENTED) = %q, want %q", outcome, ReviewNoActivity)
 	}
+}
+
+func TestReviewToOutcome_CommentedFallbackMarker(t *testing.T) {
+	t.Parallel()
+
+	outcome := reviewToOutcome(ghReview{
+		State: "COMMENTED",
+		Body:  "fallback\n" + selfReviewRequestChangesFallbackMarker,
+	})
+	if outcome != ReviewChangesRequested {
+		t.Fatalf("reviewToOutcome(commented fallback) = %q, want %q", outcome, ReviewChangesRequested)
+	}
+}
+
+func TestReviewToOutcome_CommentedApproveFallbackMarker(t *testing.T) {
+	t.Parallel()
+
+	outcome := reviewToOutcome(ghReview{
+		State: "COMMENTED",
+		Body:  "fallback\n" + selfReviewApproveFallbackMarker,
+	})
+	if outcome != ReviewApproved {
+		t.Fatalf("reviewToOutcome(commented approve fallback) = %q, want %q", outcome, ReviewApproved)
+	}
+}
+
+func TestIsSelfRequestChangesError(t *testing.T) {
+	t.Parallel()
+
+	errMsg := "gh api repos/o/r/pulls/1/reviews -X POST --raw-field event=REQUEST_CHANGES: gh: Review Can not request changes on your own pull request (HTTP 422): exit status 1"
+	if !isSelfRequestChangesError(assertErr(errMsg)) {
+		t.Fatal("expected true for self request-changes 422")
+	}
+	if isSelfRequestChangesError(assertErr("gh: some other HTTP 422")) {
+		t.Fatal("expected false for unrelated error")
+	}
+}
+
+func TestIsSelfApproveError(t *testing.T) {
+	t.Parallel()
+
+	errMsg := "gh api repos/o/r/pulls/1/reviews -X POST --raw-field event=APPROVE: gh: Cannot approve your own pull request (HTTP 422): exit status 1"
+	if !isSelfApproveError(assertErr(errMsg)) {
+		t.Fatal("expected true for self approve 422")
+	}
+	if isSelfApproveError(assertErr("gh: some other HTTP 422")) {
+		t.Fatal("expected false for unrelated error")
+	}
+}
+
+type staticErr string
+
+func (e staticErr) Error() string { return string(e) }
+
+func assertErr(msg string) error {
+	return staticErr(msg)
 }
 
 func TestReviewStateToOutcome_EmptyString(t *testing.T) {

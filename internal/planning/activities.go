@@ -12,6 +12,7 @@ import (
 
 	astpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beadsbridge"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
@@ -384,22 +385,109 @@ Rules:
 func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, req PlanningRequest, steps []types.DecompStep) ([]string, error) {
 	logger := activity.GetLogger(ctx)
 
-	var tasks []dag.Task
+	bc := pa.beadsClient(req.Project)
+	if bc == nil {
+		return nil, fmt.Errorf("beads-first policy: no beads client configured for project %q", req.Project)
+	}
+
+	parentIssueID := strings.TrimSpace(req.GoalID)
+	bridgeDAG, canMap := pa.DAG.(*dag.DAG)
+	if canMap {
+		if mapping, err := bridgeDAG.GetBeadsMappingByTask(ctx, req.Project, req.GoalID); err == nil && strings.TrimSpace(mapping.IssueID) != "" {
+			parentIssueID = strings.TrimSpace(mapping.IssueID)
+		}
+	}
+
+	type preparedSubtask struct {
+		issueID string
+		step    types.DecompStep
+	}
+	prepared := make([]preparedSubtask, 0, len(steps))
+	rollbackPrepared := func(reason string) {
+		for _, subtask := range prepared {
+			issueID := strings.TrimSpace(subtask.issueID)
+			if issueID == "" {
+				continue
+			}
+			closeErr := bc.Close(ctx, issueID, reason)
+			if closeErr != nil {
+				logger.Warn("Failed to roll back beads subtask", "issueID", issueID, "error", closeErr)
+			}
+		}
+	}
+	var prevIssueID string
 	for _, step := range steps {
+		issueID, err := bc.Create(ctx, beads.CreateParams{
+			Title:            step.Title,
+			Description:      step.Description,
+			IssueType:        "task",
+			Priority:         -1,
+			ParentID:         parentIssueID,
+			Acceptance:       step.Acceptance,
+			EstimatedMinutes: step.Estimate,
+			Dependencies: func() []string {
+				if prevIssueID == "" {
+					return nil
+				}
+				return []string{prevIssueID}
+			}(),
+		})
+		if err != nil {
+			rollbackPrepared("Automatic rollback: beads subtask batch creation failed")
+			return nil, fmt.Errorf("create beads subtask for %q: %w", step.Title, err)
+		}
+		issueID = strings.TrimSpace(issueID)
+		if issueID == "" {
+			rollbackPrepared("Automatic rollback: beads returned empty subtask id")
+			return nil, fmt.Errorf("create beads subtask for %q: empty issue id", step.Title)
+		}
+		prepared = append(prepared, preparedSubtask{
+			issueID: issueID,
+			step:    step,
+		})
+		prevIssueID = issueID
+	}
+
+	var tasks []dag.Task
+	for _, subtask := range prepared {
 		tasks = append(tasks, dag.Task{
-			Title:           step.Title,
-			Description:     step.Description,
+			ID:              subtask.issueID,
+			Title:           subtask.step.Title,
+			Description:     subtask.step.Description,
 			ParentID:        req.GoalID,
-			Acceptance:      step.Acceptance,
-			EstimateMinutes: step.Estimate,
+			Acceptance:      subtask.step.Acceptance,
+			EstimateMinutes: subtask.step.Estimate,
 			Project:         req.Project,
 			Status:          string(types.StatusReady),
+			Metadata: map[string]string{
+				"beads_issue_id": subtask.issueID,
+				"beads_bridge":   "true",
+			},
 		})
 	}
 
 	ids, err := pa.DAG.CreateSubtasksAtomic(ctx, req.GoalID, tasks)
 	if err != nil {
+		rollbackPrepared("Automatic rollback: DAG subtask creation failed")
 		return nil, fmt.Errorf("create plan subtasks: %w", err)
+	}
+	if canMap {
+		for _, subtask := range prepared {
+			fingerprint := ""
+			if issue, showErr := bc.Show(ctx, subtask.issueID); showErr == nil {
+				fingerprint = beadsbridge.FingerprintIssue(issue)
+			}
+			if err := bridgeDAG.UpsertBeadsMapping(ctx, req.Project, subtask.issueID, subtask.issueID, fingerprint); err != nil {
+				// DAG subtasks are already committed here; keep execution moving and
+				// rely on dispatch backfill (taskID==issueID) to repair mapping later.
+				logger.Warn("Persist beads mapping failed after planning subtask commit",
+					"project", req.Project,
+					"taskID", subtask.issueID,
+					"issueID", subtask.issueID,
+					"error", err,
+				)
+			}
+		}
 	}
 	logger.Info("Created plan subtasks", "Parent", req.GoalID, "Count", len(ids))
 	return ids, nil

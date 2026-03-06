@@ -102,3 +102,54 @@ func TestBuildExecCommandShape(t *testing.T) {
 		t.Fatalf("exec command missing model flag: %v", cmd.Args)
 	}
 }
+
+func TestBuildPlanCommand_GeminiShape(t *testing.T) {
+	t.Parallel()
+
+	cmd := BuildPlanCommand(context.Background(), "gemini", "gemini-2.5-flash", "/tmp")
+	args := strings.Join(cmd.Args, " ")
+
+	if !strings.Contains(args, "--prompt  ") {
+		t.Fatalf("gemini plan command missing --prompt headless flag: %v", cmd.Args)
+	}
+	if !strings.Contains(args, "--approval-mode plan") {
+		t.Fatalf("gemini plan command missing plan approval mode: %v", cmd.Args)
+	}
+	if strings.Contains(args, "--print") {
+		t.Fatalf("gemini plan command must not use legacy --print: %v", cmd.Args)
+	}
+}
+
+func TestBuildPlanCommand_CodexShape(t *testing.T) {
+	t.Parallel()
+
+	cmd := BuildPlanCommand(context.Background(), "codex", "o4-mini", "/tmp")
+	args := strings.Join(cmd.Args, " ")
+
+	if !strings.Contains(args, " exec ") {
+		t.Fatalf("codex plan command missing exec subcommand: %v", cmd.Args)
+	}
+	if !strings.Contains(args, "--sandbox read-only") {
+		t.Fatalf("codex plan command missing read-only sandbox: %v", cmd.Args)
+	}
+	if strings.Contains(args, "--quiet") {
+		t.Fatalf("codex plan command must not use removed --quiet flag: %v", cmd.Args)
+	}
+}
+
+func TestBuildExecCommand_CodexShape(t *testing.T) {
+	t.Parallel()
+
+	cmd := BuildExecCommand(context.Background(), "codex", "o4-mini", "/tmp")
+	args := strings.Join(cmd.Args, " ")
+
+	if !strings.Contains(args, " exec ") {
+		t.Fatalf("codex exec command missing exec subcommand: %v", cmd.Args)
+	}
+	if !strings.Contains(args, "--full-auto") {
+		t.Fatalf("codex exec command missing --full-auto: %v", cmd.Args)
+	}
+	if strings.Contains(args, "--quiet") {
+		t.Fatalf("codex exec command must not use removed --quiet flag: %v", cmd.Args)
+	}
+}

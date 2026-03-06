@@ -2,6 +2,7 @@
 package git
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,12 +11,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // SetupWorktree creates an isolated git worktree for a task.
 // Handles stale branches/worktrees from previous failed runs.
 // Returns the absolute path to the worktree directory.
 func SetupWorktree(ctx context.Context, baseDir, taskID string) (string, error) {
+	return SetupWorktreeAtRef(ctx, baseDir, taskID, "")
+}
+
+// SetupWorktreeAtRef creates an isolated git worktree for a task branch.
+// When startRef is empty it uses the latest origin default branch.
+// When startRef is set (for example a PR head SHA), the new branch starts there.
+func SetupWorktreeAtRef(ctx context.Context, baseDir, taskID, startRef string) (string, error) {
 	branch := fmt.Sprintf("chum/%s", taskID)
 	wtDir := filepath.Join(os.TempDir(), "chum-worktrees", taskID)
 
@@ -31,40 +40,62 @@ func SetupWorktree(ctx context.Context, baseDir, taskID string) (string, error) 
 		os.RemoveAll(wtDir)
 	}
 
+	// If the target branch is still checked out in another worktree, remove that
+	// worktree first so branch deletion/recreation can succeed.
+	_ = removeBranchWorktrees(ctx, baseDir, branch, wtDir)
+
 	// Delete stale branch if it exists (leftover from previous run)
-	cmd := exec.CommandContext(ctx, "git", "branch", "-D", branch)
-	cmd.Dir = baseDir
-	_ = cmd.Run() // ignore error if branch doesn't exist
+	if out, err := runGitWithConfigLockRetry(ctx, baseDir, "branch", "-D", branch); err != nil {
+		msg := strings.ToLower(string(out))
+		// Branch missing is fine; any other error is actionable.
+		if !strings.Contains(msg, "not found") && !strings.Contains(msg, "not a valid branch name") {
+			return "", fmt.Errorf("delete stale branch %s: %s: %w", branch, string(out), err)
+		}
+	}
+
+	var cmd *exec.Cmd
 
 	// Prune any stale worktree entries
 	cmd = exec.CommandContext(ctx, "git", "worktree", "prune")
 	cmd.Dir = baseDir
 	_ = cmd.Run()
 
-	// Always start from latest origin default branch to avoid stale branches.
-	// Without this, agents branch from whatever HEAD the factory workspace
-	// had when it was last pulled — leading to PRs that accidentally revert
-	// commits made since then.
-	baseBranch, err := resolveDefaultBranch(ctx, baseDir)
-	if err != nil {
-		baseBranch = "master" // fallback; checkout below remains best-effort
-	}
-	cmd = exec.CommandContext(ctx, "git", "fetch", "origin", baseBranch)
-	cmd.Dir = baseDir
-	_ = cmd.Run() // best-effort; if offline we still branch from local HEAD
+	start := strings.TrimSpace(startRef)
+	if start == "" {
+		// Always start from latest origin default branch to avoid stale branches.
+		// Without this, agents branch from whatever HEAD the factory workspace
+		// had when it was last pulled — leading to PRs that accidentally revert
+		// commits made since then.
+		baseBranch, err := resolveDefaultBranch(ctx, baseDir)
+		if err != nil {
+			baseBranch = "master" // fallback; checkout below remains best-effort
+		}
+		cmd = exec.CommandContext(ctx, "git", "fetch", "origin", baseBranch)
+		cmd.Dir = baseDir
+		_ = cmd.Run() // best-effort; if offline we still branch from local HEAD
 
-	cmd = exec.CommandContext(ctx, "git", "checkout", "origin/"+baseBranch)
-	cmd.Dir = baseDir
-	_ = cmd.Run() // best-effort; detached HEAD is fine for worktree base
+		candidate := "origin/" + baseBranch
+		if gitRefExists(ctx, baseDir, candidate) {
+			start = candidate
+			cmd = exec.CommandContext(ctx, "git", "checkout", start)
+			cmd.Dir = baseDir
+			_ = cmd.Run() // best-effort; detached HEAD is fine for worktree base
+		} else {
+			start = "HEAD"
+		}
+	} else {
+		// Ensure requested ref is available locally when possible.
+		cmd = exec.CommandContext(ctx, "git", "fetch", "origin")
+		cmd.Dir = baseDir
+		_ = cmd.Run() // best-effort
+	}
 
 	// Create the worktree on a new branch.
 	// Use -c core.hooksPath=/dev/null to bypass any project hooks (e.g. beads)
 	// that may reference tools not installed in the execution environment.
-	cmd = exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null",
-		"worktree", "add", "-b", branch, wtDir, "HEAD")
-	cmd.Dir = baseDir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git worktree add: %s: %w", string(out), err)
+	if out, err := runGitWithConfigLockRetry(ctx, baseDir, "-c", "core.hooksPath=/dev/null",
+		"worktree", "add", "-b", branch, wtDir, start); err != nil {
+		return "", fmt.Errorf("git worktree add (start=%s): %s: %w", start, string(out), err)
 	}
 
 	// Configure the worktree: set author and disable hooks so the agent
@@ -80,6 +111,67 @@ func SetupWorktree(ctx context.Context, baseDir, taskID string) (string, error) 
 	}
 
 	return wtDir, nil
+}
+
+func removeBranchWorktrees(ctx context.Context, baseDir, branch, keepPath string) error {
+	cmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
+	cmd.Dir = baseDir
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("list worktrees: %w", err)
+	}
+
+	branchRef := "refs/heads/" + branch
+	scanner := bufio.NewScanner(strings.NewReader(string(out)))
+
+	var (
+		path string
+		ref  string
+	)
+	flush := func() error {
+		if path == "" {
+			return nil
+		}
+		defer func() {
+			path = ""
+			ref = ""
+		}()
+		if ref != branchRef {
+			return nil
+		}
+		if path == keepPath || path == baseDir {
+			return nil
+		}
+		rm := exec.CommandContext(ctx, "git", "worktree", "remove", "--force", path)
+		rm.Dir = baseDir
+		if rmOut, rmErr := rm.CombinedOutput(); rmErr != nil {
+			return fmt.Errorf("remove conflicting worktree %s for %s: %s: %w", path, branch, string(rmOut), rmErr)
+		}
+		return nil
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			if err := flush(); err != nil {
+				return err
+			}
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			path = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+		case strings.HasPrefix(line, "branch "):
+			ref = strings.TrimSpace(strings.TrimPrefix(line, "branch "))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("scan worktree list: %w", err)
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ErrOnProtectedBranch is returned when an operation is attempted on master/main.
@@ -116,9 +208,75 @@ func Push(ctx context.Context, workDir string) error {
 	cmd := exec.CommandContext(ctx, "git", "push", "-u", "origin", "HEAD")
 	cmd.Dir = workDir
 	if out, err := cmd.CombinedOutput(); err != nil {
+		if isNonFastForwardPushError(err, out) {
+			branch, branchErr := currentBranch(ctx, workDir)
+			if branchErr == nil && strings.HasPrefix(branch, "chum/") {
+				retry := exec.CommandContext(ctx, "git", "push", "--force-with-lease", "-u", "origin", "HEAD")
+				retry.Dir = workDir
+				if retryOut, retryErr := retry.CombinedOutput(); retryErr == nil {
+					return nil
+				} else {
+					return fmt.Errorf("git push (force-with-lease fallback): %s: %w", string(retryOut), retryErr)
+				}
+			}
+		}
 		return fmt.Errorf("git push: %s: %w", string(out), err)
 	}
 	return nil
+}
+
+func currentBranch(ctx context.Context, workDir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = workDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse --abbrev-ref HEAD: %s: %w", string(out), err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func isNonFastForwardPushError(err error, out []byte) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(string(out))
+	return strings.Contains(msg, "non-fast-forward") ||
+		strings.Contains(msg, "fetch first") ||
+		strings.Contains(msg, "rejected")
+}
+
+func runGitWithConfigLockRetry(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	const maxAttempts = 5
+	backoff := 120 * time.Millisecond
+	var (
+		out []byte
+		err error
+	)
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir = dir
+		out, err = cmd.CombinedOutput()
+		if err == nil {
+			return out, nil
+		}
+		if !isGitConfigLockError(out) || attempt == maxAttempts {
+			return out, err
+		}
+		select {
+		case <-ctx.Done():
+			return out, ctx.Err()
+		case <-time.After(backoff):
+			backoff *= 2
+		}
+	}
+	return out, err
+}
+
+func isGitConfigLockError(out []byte) bool {
+	msg := strings.ToLower(string(out))
+	return strings.Contains(msg, "could not lock config file") ||
+		strings.Contains(msg, ".git/config.lock")
 }
 
 // CommitAll stages all changes and creates a commit.
@@ -365,4 +523,10 @@ func resolveDefaultBranch(ctx context.Context, workDir string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("could not determine default branch from origin")
+}
+
+func gitRefExists(ctx context.Context, workDir, ref string) bool {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", "--quiet", ref)
+	cmd.Dir = workDir
+	return cmd.Run() == nil
 }

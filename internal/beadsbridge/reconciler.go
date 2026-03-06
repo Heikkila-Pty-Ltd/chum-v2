@@ -112,7 +112,12 @@ func ReconcileProject(ctx context.Context, d *dag.DAG, client beads.Store, proje
 		}
 
 		desired := mapIssueStatus(issue.Status)
-		if desired != "" && strings.TrimSpace(task.Status) != desired {
+		taskStatus := strings.TrimSpace(task.Status)
+		// Never overwrite CHUM-internal statuses that beads doesn't understand.
+		// These represent workflow states (decomposed, failed, needs_review, etc.)
+		// that should only be changed by CHUM's engine, not by beads sync.
+		chumInternal := isCHUMInternalStatus(taskStatus)
+		if desired != "" && taskStatus != desired && !chumInternal {
 			items = append(items, DriftItem{
 				Class:          DriftStatusMismatch,
 				IssueID:        issue.ID,

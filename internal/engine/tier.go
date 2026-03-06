@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"sort"
+	"strings"
+
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 )
 
@@ -79,16 +82,43 @@ func PickProviderForTier(cfg *config.Config, tier string) (cli, model, name stri
 }
 
 // PickProvider selects the first enabled provider starting from the given tier
-// and escalating up the chain. Returns (cli, model, tier) with a fallback of
-// ("claude", "", "fast") if nothing matches.
+// and escalating up the chain. If no provider is available in that chain, it
+// falls back to any enabled provider in deterministic order.
 func PickProvider(cfg *config.Config, startTier string) (cli, model, tier string) {
+	if cfg == nil {
+		return "", "", ""
+	}
 	for _, t := range escChain(startTier) {
 		c, m, _ := PickProviderForTier(cfg, t)
 		if c != "" {
 			return c, m, t
 		}
 	}
-	return "claude", "", "fast"
+	// Secondary fallback: try any enabled provider from all tiers.
+	for _, t := range TierOrder {
+		c, m, _ := PickProviderForTier(cfg, t)
+		if c != "" {
+			return c, m, t
+		}
+	}
+	// Last resort: any enabled provider not listed in tiers.
+	names := make([]string, 0, len(cfg.Providers))
+	for name := range cfg.Providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		p := cfg.Providers[name]
+		if !p.Enabled || strings.TrimSpace(p.CLI) == "" {
+			continue
+		}
+		resolvedTier := strings.ToLower(strings.TrimSpace(p.Tier))
+		if resolvedTier == "" {
+			resolvedTier = "balanced"
+		}
+		return p.CLI, p.Model, resolvedTier
+	}
+	return "", "", ""
 }
 
 // escChain returns the escalation chain starting from the given tier.

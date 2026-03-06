@@ -24,6 +24,7 @@ const (
 	StatusReady           Status = "ready"
 	StatusRunning         Status = "running"
 	StatusCompleted       Status = "completed"
+	StatusDone            Status = "done" // legacy synonym for completed
 	StatusFailed          Status = "failed"
 	StatusNeedsReview     Status = "needs_review"
 	StatusDecomposed      Status = "decomposed"
