@@ -3,7 +3,7 @@
 BINARY := chum
 GO := go
 
-.PHONY: build test vet fmt fmt-check quality check clean
+.PHONY: build test vet fmt fmt-check guardrails test-scripts quality check clean
 
 build: ## Build chum binary
 	$(GO) build -o $(BINARY) ./cmd/chum/
@@ -25,7 +25,14 @@ fmt-check: ## Fail if any Go files are not gofmt-formatted
 		exit 1; \
 	fi
 
-quality: fmt-check vet test build ## Run mandatory quality gates
+guardrails: ## Enforce repository guardrails
+	bash scripts/guardrails_check.sh
+
+test-scripts: ## Run shell-based guardrail tests
+	bash tests/guardrails_check_test.sh
+	bash tests/hygiene_check_test.sh
+
+quality: guardrails test-scripts fmt-check vet test build ## Run mandatory quality gates
 
 clean: ## Remove build artifacts
 	rm -f $(BINARY)

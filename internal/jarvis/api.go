@@ -7,6 +7,7 @@ import (
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
 )
 
@@ -20,7 +21,9 @@ type API struct {
 	Logger *slog.Logger
 	WebDir string // directory for static dashboard files; empty disables serving
 
-	IngressPolicy string // legacy | beads_first | beads_only
+	IngressPolicy        string                          // legacy | beads_first | beads_only
+	PlanningDefaultAgent string                          // default planner agent for dashboard starts
+	PlanningCfg          planning.PlanningCeremonyConfig // dashboard planning ceremony config
 }
 
 // Handler returns an http.Handler with all Jarvis API routes.
@@ -37,6 +40,9 @@ func (a *API) Handler() http.Handler {
 		mux.HandleFunc("GET /api/dashboard/graph/{project}", a.handleDashboardGraph)
 		mux.HandleFunc("GET /api/dashboard/tasks/{project}", a.handleDashboardTasks)
 		mux.HandleFunc("GET /api/dashboard/task/{taskID}", a.handleDashboardTask)
+		mux.HandleFunc("GET /api/dashboard/planning/{taskID}", a.handleDashboardPlanning)
+		mux.HandleFunc("POST /api/dashboard/planning/start", a.handleDashboardPlanningStart)
+		mux.HandleFunc("POST /api/dashboard/planning/{sessionID}/signal", a.handleDashboardPlanningSignal)
 		mux.HandleFunc("GET /api/dashboard/stats/{project}", a.handleDashboardStats)
 		mux.HandleFunc("GET /api/dashboard/timeline/{project}", a.handleDashboardTimeline)
 		mux.HandleFunc("GET /api/dashboard/tree/{project}", a.handleDashboardTree)

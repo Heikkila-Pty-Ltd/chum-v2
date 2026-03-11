@@ -1,7 +1,9 @@
 package jarvis
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,7 +14,11 @@ import (
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
+	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/sdk/client"
 )
 
 // suggestCache caches LLM suggestions to avoid redundant calls.
@@ -178,15 +184,282 @@ func (a *API) handleDashboardTask(w http.ResponseWriter, r *http.Request) {
 		lessons = []store.StoredLesson{}
 	}
 
+	planning, sessions := a.loadPlanningSnapshots(r.Context(), taskID)
+
 	a.jsonOK(w, map[string]any{
-		"task":         task,
-		"dependencies": deps,
-		"dependents":   dependents,
-		"targets":      targets,
-		"decisions":    decs,
-		"traces":       traces,
-		"lessons":      lessons,
+		"task":              task,
+		"dependencies":      deps,
+		"dependents":        dependents,
+		"targets":           targets,
+		"decisions":         decs,
+		"planning":          planning,
+		"planning_sessions": sessions,
+		"traces":            traces,
+		"lessons":           lessons,
 	})
+}
+
+func (a *API) handleDashboardPlanning(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskID")
+	if _, err := a.DAG.GetTask(r.Context(), taskID); err != nil {
+		a.jsonError(w, "task not found", http.StatusNotFound)
+		return
+	}
+
+	planning, sessions := a.loadPlanningSnapshots(r.Context(), taskID)
+	a.jsonOK(w, map[string]any{
+		"task_id":  taskID,
+		"planning": planning,
+		"sessions": sessions,
+	})
+}
+
+type planningStartRequest struct {
+	Project string `json:"project"`
+	GoalID  string `json:"goal_id"`
+	Agent   string `json:"agent"`
+}
+
+func (a *API) handleDashboardPlanningStart(w http.ResponseWriter, r *http.Request) {
+	if a.Engine == nil || a.Engine.temporal == nil {
+		a.jsonError(w, "planning control unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req planningStartRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	req.Project = strings.TrimSpace(req.Project)
+	req.GoalID = strings.TrimSpace(req.GoalID)
+	req.Agent = strings.TrimSpace(req.Agent)
+	if req.Project == "" || req.GoalID == "" {
+		a.jsonError(w, "project and goal_id are required", http.StatusBadRequest)
+		return
+	}
+
+	task, err := a.DAG.GetTask(r.Context(), req.GoalID)
+	if err != nil {
+		a.jsonError(w, "goal task not found", http.StatusNotFound)
+		return
+	}
+	if task.Project != "" && task.Project != req.Project {
+		a.jsonError(w, "goal task project does not match request", http.StatusBadRequest)
+		return
+	}
+
+	workDir := a.Engine.workDirs[req.Project]
+	if workDir == "" {
+		a.jsonError(w, "unknown project", http.StatusBadRequest)
+		return
+	}
+
+	agent := req.Agent
+	if agent == "" {
+		agent = a.PlanningDefaultAgent
+	}
+	if agent == "" {
+		agent = "claude"
+	}
+
+	workflowID := planningWorkflowID(req.Project, req.GoalID)
+	sessionID := fmt.Sprintf("%s-%d", workflowID, time.Now().UnixNano())
+	run, err := a.Engine.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
+		ID:                                       workflowID,
+		TaskQueue:                                a.Engine.taskQueue,
+		WorkflowIDConflictPolicy:                 enumspb.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
+		WorkflowExecutionErrorWhenAlreadyStarted: true,
+	}, planning.PlanningWorkflow, planning.PlanningRequest{
+		GoalID:     req.GoalID,
+		Project:    req.Project,
+		WorkDir:    workDir,
+		Agent:      agent,
+		Source:     "dashboard-control",
+		SessionID:  sessionID,
+		WorkflowID: workflowID,
+	}, a.PlanningCfg)
+	if err != nil {
+		var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
+		if errors.As(err, &alreadyStarted) {
+			latest := a.latestPlanningSnapshotForWorkflow(r.Context(), req.GoalID, workflowID)
+			if latest.SessionID != "" {
+				latest.WorkflowStatus, latest.WorkflowActive = a.describePlanningWorkflow(r.Context(), workflowID)
+			}
+			a.jsonOK(w, map[string]any{
+				"session_id":  latest.SessionID,
+				"workflow_id": workflowID,
+				"run_id":      alreadyStarted.RunId,
+				"started":     false,
+				"planning":    latest,
+			})
+			return
+		}
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	a.jsonOK(w, map[string]any{
+		"session_id":  sessionID,
+		"workflow_id": workflowID,
+		"run_id":      run.GetRunID(),
+		"started":     true,
+	})
+}
+
+type planningSignalRequest struct {
+	Action string `json:"action"`
+	Value  string `json:"value"`
+	Reason string `json:"reason"`
+}
+
+func (a *API) handleDashboardPlanningSignal(w http.ResponseWriter, r *http.Request) {
+	if a.Engine == nil || a.Engine.temporal == nil {
+		a.jsonError(w, "planning control unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	sessionID := strings.TrimSpace(r.PathValue("sessionID"))
+	if sessionID == "" {
+		a.jsonError(w, "session_id required", http.StatusBadRequest)
+		return
+	}
+
+	var req planningSignalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	req.Action = strings.ToLower(strings.TrimSpace(req.Action))
+	req.Value = strings.TrimSpace(req.Value)
+	req.Reason = strings.TrimSpace(req.Reason)
+
+	signalName, payload, err := translatePlanningSignal(req)
+	if err != nil {
+		a.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := a.Engine.temporal.SignalWorkflow(r.Context(), sessionID, "", signalName, payload); err != nil {
+		a.jsonError(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	a.jsonOK(w, map[string]any{
+		"session_id": sessionID,
+		"action":     req.Action,
+		"status":     "ok",
+	})
+}
+
+func (a *API) loadPlanningSnapshots(ctx context.Context, taskID string) (any, []dag.PlanningSnapshot) {
+	latest, err := a.DAG.GetLatestPlanningSnapshotForTask(ctx, taskID)
+	if err != nil {
+		latest = dag.PlanningSnapshot{}
+	}
+	latest = a.decoratePlanningSnapshot(latest)
+	if controlID := planningControlID(latest); controlID != "" {
+		latest.WorkflowStatus, latest.WorkflowActive = a.describePlanningWorkflow(ctx, controlID)
+	}
+
+	sessions, err := a.DAG.ListPlanningSnapshotsForTask(ctx, taskID)
+	if err != nil || sessions == nil {
+		sessions = []dag.PlanningSnapshot{}
+	}
+	for i := range sessions {
+		sessions[i] = a.decoratePlanningSnapshot(sessions[i])
+	}
+
+	if latest.SessionID == "" {
+		return nil, sessions
+	}
+	return latest, sessions
+}
+
+func planningWorkflowID(project, goalID string) string {
+	return fmt.Sprintf("planning-%s-%s", project, goalID)
+}
+
+func planningControlID(snapshot dag.PlanningSnapshot) string {
+	if strings.TrimSpace(snapshot.WorkflowID) != "" {
+		return strings.TrimSpace(snapshot.WorkflowID)
+	}
+	return strings.TrimSpace(snapshot.SessionID)
+}
+
+func (a *API) decoratePlanningSnapshot(snapshot dag.PlanningSnapshot) dag.PlanningSnapshot {
+	if snapshot.SessionID == "" {
+		return snapshot
+	}
+	if strings.TrimSpace(snapshot.WorkflowID) == "" && snapshot.Source == "dashboard-control" && snapshot.Project != "" && snapshot.GoalID != "" {
+		snapshot.WorkflowID = planningWorkflowID(snapshot.Project, snapshot.GoalID)
+	}
+	if strings.TrimSpace(snapshot.WorkflowID) == "" {
+		snapshot.WorkflowID = snapshot.SessionID
+	}
+	return snapshot
+}
+
+func (a *API) latestPlanningSnapshotForWorkflow(ctx context.Context, taskID, workflowID string) dag.PlanningSnapshot {
+	latest, err := a.DAG.GetLatestPlanningSnapshotForTask(ctx, taskID)
+	if err != nil {
+		return dag.PlanningSnapshot{}
+	}
+	latest = a.decoratePlanningSnapshot(latest)
+	if planningControlID(latest) == workflowID {
+		return latest
+	}
+	return dag.PlanningSnapshot{}
+}
+
+func (a *API) describePlanningWorkflow(ctx context.Context, sessionID string) (string, bool) {
+	if a.Engine == nil || a.Engine.temporal == nil || strings.TrimSpace(sessionID) == "" {
+		return "", false
+	}
+	desc, err := a.Engine.temporal.DescribeWorkflowExecution(ctx, sessionID, "")
+	if err != nil || desc == nil || desc.WorkflowExecutionInfo == nil {
+		return "", false
+	}
+	status := strings.ToLower(desc.WorkflowExecutionInfo.Status.String())
+	switch desc.WorkflowExecutionInfo.Status {
+	case enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING:
+		return status, true
+	default:
+		return status, false
+	}
+}
+
+func translatePlanningSignal(req planningSignalRequest) (string, string, error) {
+	switch req.Action {
+	case "select":
+		if req.Value == "" {
+			return "", "", fmt.Errorf("select requires value")
+		}
+		return planning.SignalNameSelect, req.Value, nil
+	case "dig":
+		if req.Value == "" {
+			return "", "", fmt.Errorf("dig requires value")
+		}
+		if req.Reason != "" {
+			return planning.SignalNameDig, req.Value + "|" + req.Reason, nil
+		}
+		return planning.SignalNameDig, req.Value, nil
+	case "answer":
+		if req.Value == "" {
+			return "", "", fmt.Errorf("answer requires value")
+		}
+		return planning.SignalNameQuestion, req.Value, nil
+	case "go":
+		return planning.SignalNameGreenlight, "GO", nil
+	case "approve":
+		return planning.SignalNameApproveDecomp, "APPROVED", nil
+	case "realign":
+		return planning.SignalNameGreenlight, "REALIGN", nil
+	case "stop":
+		return planning.SignalNameCancel, req.Reason, nil
+	default:
+		return "", "", fmt.Errorf("unknown planning action %q", req.Action)
+	}
 }
 
 func (a *API) handleDashboardStats(w http.ResponseWriter, r *http.Request) {

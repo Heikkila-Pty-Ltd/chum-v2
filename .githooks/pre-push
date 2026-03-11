@@ -2,6 +2,13 @@
 set -euo pipefail
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
+
+# Git sets local repository env vars for hooks; clear them so nested git
+# commands in tests operate on their own temporary repos.
+while IFS= read -r env_name; do
+  unset "$env_name"
+done < <(git rev-parse --local-env-vars)
+
 bash scripts/hygiene_check.sh
 bash scripts/review_guard.sh
 bash scripts/validate_repo.sh

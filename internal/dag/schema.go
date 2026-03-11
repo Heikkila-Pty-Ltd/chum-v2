@@ -68,6 +68,18 @@ const decisionAlternativesTableSchema = `CREATE TABLE IF NOT EXISTS decision_alt
 	FOREIGN KEY (decision_id) REFERENCES decisions(id) ON DELETE CASCADE
 );`
 
+const planningSnapshotsTableSchema = `CREATE TABLE IF NOT EXISTS planning_snapshots (
+	session_id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	project TEXT NOT NULL DEFAULT '',
+	phase TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT '',
+	snapshot_json TEXT NOT NULL DEFAULT '{}',
+	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	updated_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);`
+
 const systemStateTableSchema = `CREATE TABLE IF NOT EXISTS system_state (
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL DEFAULT '',
@@ -76,6 +88,7 @@ const systemStateTableSchema = `CREATE TABLE IF NOT EXISTS system_state (
 
 const indexDecisionsTaskID = `CREATE INDEX IF NOT EXISTS idx_decisions_task_id ON decisions(task_id);`
 const indexAlternativesDecisionID = `CREATE INDEX IF NOT EXISTS idx_alternatives_decision_id ON decision_alternatives(decision_id);`
+const indexPlanningSnapshotsTaskUpdated = `CREATE INDEX IF NOT EXISTS idx_planning_snapshots_task_updated ON planning_snapshots(task_id, updated_at DESC);`
 
 const beadsSyncMapTableSchema = `CREATE TABLE IF NOT EXISTS beads_sync_map (
 	project TEXT NOT NULL,
@@ -145,9 +158,11 @@ func (d *DAG) EnsureSchema(ctx context.Context) error {
 		taskTargetsSchema,
 		decisionsTableSchema,
 		decisionAlternativesTableSchema,
+		planningSnapshotsTableSchema,
 		systemStateTableSchema,
 		indexDecisionsTaskID,
 		indexAlternativesDecisionID,
+		indexPlanningSnapshotsTaskUpdated,
 		beadsSyncMapTableSchema,
 		beadsSyncOutboxTableSchema,
 		beadsSyncCursorTableSchema,

@@ -14,5 +14,7 @@ jobs:
           fetch-depth: 0
       - name: Run hygiene check
         run: bash scripts/hygiene_check.sh --ci
+      - name: Run guardrails check
+        run: bash scripts/guardrails_check.sh
       - name: Run review guard
         run: bash scripts/review_guard.sh --ci
