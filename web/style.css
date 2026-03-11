@@ -1582,3 +1582,354 @@ html, body {
 
   .stats-grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* ============================================================
+   Jarvis Knowledge Base View
+   ============================================================ */
+
+.jv-page { padding: var(--sp-4) var(--sp-5); }
+
+/* Action Required Banner */
+.jv-actions {
+  background: var(--surface-2);
+  border: 1px solid rgba(185, 58, 58, 0.35);
+  border-radius: 6px;
+  padding: var(--sp-3) var(--sp-4);
+  margin-bottom: var(--sp-5);
+}
+
+.jv-actions-header {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--status-failed);
+  margin-bottom: var(--sp-3);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.jv-actions-count {
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(185, 58, 58, 0.3);
+  color: #e06060;
+  padding: 1px 7px;
+  border-radius: 8px;
+}
+
+.jv-actions-clear {
+  font-size: 12px;
+  color: var(--status-completed);
+  padding: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-4);
+  background: rgba(61, 154, 95, 0.08);
+  border: 1px solid rgba(61, 154, 95, 0.2);
+  border-radius: 6px;
+}
+
+.jv-action {
+  display: flex;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border-radius: 4px;
+  margin-bottom: var(--sp-2);
+}
+.jv-action:last-child { margin-bottom: 0; }
+
+.jv-action-high { background: rgba(185, 58, 58, 0.08); }
+.jv-action-med  { background: rgba(194, 122, 42, 0.08); }
+
+.jv-action-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+
+.jv-action-body { flex: 1; min-width: 0; }
+
+.jv-action-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.jv-action-detail {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.jv-action-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: var(--sp-1);
+}
+
+.jv-resolve-row {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  align-items: center;
+}
+
+.jv-resolve-input {
+  flex: 1;
+  background: var(--surface-1);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: 12px;
+  padding: 4px 8px;
+  outline: none;
+}
+.jv-resolve-input:focus {
+  border-color: var(--accent-dim);
+}
+.jv-resolve-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.jv-resolve-btn {
+  background: var(--surface-3);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  color: var(--status-completed);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--duration-fast);
+}
+.jv-resolve-btn:hover {
+  background: var(--surface-4);
+}
+.jv-resolve-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Blocked goal card highlight */
+.jv-goal-blocked-card {
+  border-color: rgba(185, 58, 58, 0.3);
+}
+
+.jv-section {
+  margin-bottom: var(--sp-5);
+}
+
+.jv-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--sp-3);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.jv-section-count {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  background: var(--surface-3);
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+/* Agent State */
+.jv-state-grid {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: var(--sp-1) var(--sp-3);
+  font-size: 12px;
+}
+
+.jv-state-key {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.jv-state-val {
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.jv-toggle {
+  font-size: 11px;
+  color: var(--accent-dim);
+  cursor: pointer;
+  margin-top: var(--sp-2);
+}
+.jv-toggle:hover { color: var(--accent); }
+
+.jv-collapsible { display: none; margin-top: var(--sp-2); }
+.jv-collapsible.jv-visible { display: block; }
+
+/* Goals */
+.jv-goals { display: flex; flex-direction: column; gap: var(--sp-3); }
+
+.jv-goal-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.jv-goal-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+
+.jv-pri {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.jv-pri-high { background: rgba(185, 58, 58, 0.25); color: #e06060; }
+.jv-pri-mid  { background: rgba(201, 168, 76, 0.2); color: var(--accent); }
+.jv-pri-low  { background: var(--surface-3); color: var(--text-tertiary); }
+
+.jv-goal-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+}
+
+.jv-goal-status {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.jv-status-active { background: rgba(61, 154, 95, 0.2); color: var(--status-completed); }
+.jv-status-paused { background: rgba(92, 95, 105, 0.3); color: var(--text-tertiary); }
+
+.jv-goal-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: var(--sp-2);
+  line-height: 1.4;
+}
+
+.jv-goal-progress-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-1);
+}
+
+.jv-goal-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--surface-4);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.jv-goal-bar-fill {
+  height: 100%;
+  background: var(--status-completed);
+  border-radius: 2px;
+  transition: width var(--duration-normal) var(--ease-out);
+}
+
+.jv-goal-pct {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  width: 32px;
+  text-align: right;
+}
+
+.jv-goal-blocked {
+  font-size: 11px;
+  color: var(--status-failed);
+  margin-top: var(--sp-1);
+}
+
+.jv-goal-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: var(--sp-1);
+}
+
+/* Facts */
+.jv-fact-group { margin-bottom: var(--sp-3); }
+
+.jv-fact-cat {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-dim);
+  text-transform: lowercase;
+  margin-bottom: var(--sp-2);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.jv-fact-list { display: flex; flex-direction: column; gap: var(--sp-1); }
+
+.jv-fact {
+  display: flex;
+  gap: var(--sp-2);
+  font-size: 12px;
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid var(--border-subtle);
+}
+
+.jv-fact-subject {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  min-width: 120px;
+  flex-shrink: 0;
+}
+
+.jv-fact-text { color: var(--text-secondary); word-break: break-word; }
+
+/* Initiatives */
+.jv-initiatives { display: flex; flex-direction: column; gap: var(--sp-1); }
+
+.jv-initiative {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: 12px;
+  padding: var(--sp-1) var(--sp-2);
+  border-left: 2px solid var(--border-subtle);
+}
+
+.jv-out {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.jv-out-success { background: rgba(61, 154, 95, 0.2); color: var(--status-completed); }
+.jv-out-failure { background: rgba(185, 58, 58, 0.2); color: var(--status-failed); }
+.jv-out-partial { background: rgba(194, 122, 42, 0.2); color: var(--status-dod-failed); }
+.jv-out-pending { background: var(--surface-3); color: var(--text-tertiary); }
+
+.jv-init-summary { color: var(--text-secondary); flex: 1; min-width: 0; }
+
+.jv-init-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}

@@ -18,6 +18,7 @@ dolt_data_dir = ".beads/dolt/beads_chum"
 dolt_host = "127.0.0.1"
 dolt_port = 3307
 jarvis_port = 9780
+jarvis_kb_path = "/home/ubuntu/.picoclaw/bots/jarvis/jarvis.db"
 
 [beads_bridge]
 enabled = true

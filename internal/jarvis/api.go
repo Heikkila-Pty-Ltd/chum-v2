@@ -1,6 +1,7 @@
 package jarvis
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -24,6 +25,9 @@ type API struct {
 	IngressPolicy        string                          // legacy | beads_first | beads_only
 	PlanningDefaultAgent string                          // default planner agent for dashboard starts
 	PlanningCfg          planning.PlanningCeremonyConfig // dashboard planning ceremony config
+
+	JarvisKBPath string  // path to Jarvis knowledge base SQLite (read-only)
+	jarvisDB     *sql.DB // cached connection to Jarvis KB; opened on first use
 }
 
 // Handler returns an http.Handler with all Jarvis API routes.
@@ -61,6 +65,17 @@ func (a *API) Handler() http.Handler {
 	}
 	if a.LLM != nil {
 		mux.HandleFunc("GET /api/dashboard/suggest/{taskID}", a.handleDashboardSuggest)
+	}
+
+	// Jarvis knowledge base endpoints (read-only).
+	if a.JarvisKBPath != "" {
+		mux.HandleFunc("GET /api/dashboard/jarvis/actions", a.handleJarvisActions)
+		mux.HandleFunc("POST /api/dashboard/jarvis/actions/resolve", a.handleJarvisResolve)
+		mux.HandleFunc("GET /api/dashboard/jarvis/summary", a.handleJarvisSummary)
+		mux.HandleFunc("GET /api/dashboard/jarvis/goals", a.handleJarvisGoals)
+		mux.HandleFunc("GET /api/dashboard/jarvis/facts", a.handleJarvisFacts)
+		mux.HandleFunc("GET /api/dashboard/jarvis/initiatives", a.handleJarvisInitiatives)
+		mux.HandleFunc("GET /api/dashboard/jarvis/state", a.handleJarvisState)
 	}
 
 	// Static file serving for dashboard UI.

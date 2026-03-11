@@ -103,7 +103,8 @@ type General struct {
 	DoltHost                string   `toml:"dolt_host"`
 	DoltPort                int      `toml:"dolt_port"`
 
-	JarvisPort int `toml:"jarvis_port"` // HTTP API port for Jarvis integration (0 = disabled)
+	JarvisPort   int    `toml:"jarvis_port"`    // HTTP API port for Jarvis integration (0 = disabled)
+	JarvisKBPath string `toml:"jarvis_kb_path"` // SQLite path for Jarvis knowledge base (read-only)
 
 	TracesDBPath string `toml:"traces_db_path"` // SQLite path for execution traces + perf (default: chum-traces.db)
 
