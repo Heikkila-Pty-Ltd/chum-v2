@@ -24,6 +24,7 @@ func main() {
 	port := "9780"
 	webDir := "web"
 	configPath := "chum.toml"
+	jarvisDB := ""
 
 	for i, arg := range os.Args {
 		switch arg {
@@ -42,6 +43,10 @@ func main() {
 		case "--web":
 			if i+1 < len(os.Args) {
 				webDir = os.Args[i+1]
+			}
+		case "--jarvis-db":
+			if i+1 < len(os.Args) {
+				jarvisDB = os.Args[i+1]
 			}
 		}
 	}
@@ -94,8 +99,13 @@ func main() {
 		}
 		eng.ConfigureBeadsIngress(cfg.BeadsBridge.IngressPolicy, cfg.BeadsBridge.CanaryLabel, beadsClients)
 	}
+	// Resolve Jarvis KB path: CLI flag > config > default.
+	if jarvisDB == "" && cfg != nil && cfg.General.JarvisKBPath != "" {
+		jarvisDB = cfg.General.JarvisKBPath
+	}
+
 	runner := llm.CLIRunner{}
-	api := &jarvis.API{Engine: eng, DAG: d, Store: s, LLM: runner, Logger: logger, WebDir: webDir}
+	api := &jarvis.API{Engine: eng, DAG: d, Store: s, LLM: runner, Logger: logger, WebDir: webDir, JarvisKBPath: jarvisDB}
 
 	addr := fmt.Sprintf("0.0.0.0:%s", port)
 	ln, err := net.Listen("tcp", addr)

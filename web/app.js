@@ -35,6 +35,13 @@ const App = (() => {
     timeline: (p)        => API.get(`/api/dashboard/timeline/${p}`),
     overviewGrouped: (p) => API.get(`/api/dashboard/overview-grouped/${p}`),
     retry: (taskId) => API.post(`/api/dashboard/task/${taskId}/retry`),
+    jarvisActions: ()    => API.get('/api/dashboard/jarvis/actions'),
+    jarvisResolve: (body) => API.post('/api/dashboard/jarvis/actions/resolve', body),
+    jarvisSummary: ()    => API.get('/api/dashboard/jarvis/summary'),
+    jarvisGoals: ()      => API.get('/api/dashboard/jarvis/goals'),
+    jarvisFacts: (c)     => API.get(`/api/dashboard/jarvis/facts${c ? '?category=' + c : ''}`),
+    jarvisInitiatives: () => API.get('/api/dashboard/jarvis/initiatives'),
+    jarvisState: ()      => API.get('/api/dashboard/jarvis/state'),
   };
 
   // --- Status Colors (read from CSS custom properties) ---
@@ -500,6 +507,7 @@ const App = (() => {
       else if (e.key === '4') navigate('tasks');
       else if (e.key === '5') navigate('timeline');
       else if (e.key === '6') navigate('stats');
+      else if (e.key === '7') navigate('jarvis');
       else if (e.key === 'Escape') closePanel();
     });
   }
