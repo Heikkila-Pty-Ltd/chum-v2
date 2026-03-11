@@ -508,6 +508,7 @@ const App = (() => {
       else if (e.key === '5') navigate('timeline');
       else if (e.key === '6') navigate('stats');
       else if (e.key === '7') navigate('jarvis');
+      else if (e.key === '8') navigate('plans');
       else if (e.key === 'Escape') closePanel();
     });
   }

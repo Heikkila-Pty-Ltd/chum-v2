@@ -1,0 +1,409 @@
+/* ============================================================
+   Plans — Grooming Workspace
+   Chat-first layout for plan grooming sessions.
+   ============================================================ */
+
+/* --- Shell: sidebar + main --- */
+.plans-shell {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  height: calc(100vh - 52px);
+  overflow: hidden;
+}
+
+/* --- Sidebar --- */
+.plans-sidebar {
+  background: var(--surface-1);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.plans-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.plans-sidebar-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.plans-new-btn {
+  background: none;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.plans-new-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-dim);
+}
+
+.plans-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-2) 0;
+}
+
+.plans-list-item {
+  padding: var(--sp-2) var(--sp-4);
+  cursor: pointer;
+  transition: background var(--duration-fast);
+  border-left: 2px solid transparent;
+}
+
+.plans-list-item:hover {
+  background: var(--surface-2);
+}
+
+.plans-list-item.active {
+  background: var(--surface-2);
+  border-left-color: var(--accent);
+}
+
+.plans-list-item-title {
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plans-list-item-meta {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  margin-top: 2px;
+}
+
+.plans-list-empty {
+  padding: var(--sp-5) var(--sp-4);
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+/* --- Main area --- */
+.plans-main {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-0);
+}
+
+/* Status bar */
+.plans-status-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  min-height: 36px;
+}
+
+.plans-status-indicator {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+
+.plans-status-indicator[data-status="draft"] {
+  color: var(--text-tertiary);
+  background: var(--surface-3);
+}
+
+.plans-status-indicator[data-status="grooming"] {
+  color: var(--accent);
+  background: rgba(201, 168, 76, 0.12);
+}
+
+.plans-status-indicator[data-status="ready"] {
+  color: var(--status-completed);
+  background: rgba(61, 154, 95, 0.12);
+}
+
+.plans-status-indicator[data-status="materialized"] {
+  color: var(--status-decomposed);
+  background: rgba(139, 108, 193, 0.12);
+}
+
+.plans-status-title {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- Chat thread --- */
+.plans-chat {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-4) var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.plans-chat-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+/* Message bubbles */
+.plans-msg {
+  max-width: 720px;
+  line-height: 1.6;
+}
+
+.plans-msg-user {
+  align-self: flex-end;
+  background: var(--surface-3);
+  color: var(--text-primary);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: 8px 8px 2px 8px;
+  font-size: 13px;
+}
+
+.plans-msg-assistant {
+  align-self: flex-start;
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: var(--sp-2) 0;
+}
+
+.plans-msg-assistant p {
+  margin-bottom: var(--sp-2);
+}
+
+.plans-msg-assistant pre {
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: var(--sp-3);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  margin: var(--sp-2) 0;
+}
+
+.plans-msg-assistant code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--surface-2);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+.plans-msg-assistant pre code {
+  background: none;
+  padding: 0;
+}
+
+.plans-msg-assistant ul, .plans-msg-assistant ol {
+  padding-left: var(--sp-5);
+  margin-bottom: var(--sp-2);
+}
+
+.plans-msg-assistant li {
+  margin-bottom: var(--sp-1);
+}
+
+.plans-msg-assistant h1, .plans-msg-assistant h2, .plans-msg-assistant h3 {
+  margin: var(--sp-3) 0 var(--sp-2);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.plans-msg-assistant h1 { font-size: 16px; }
+.plans-msg-assistant h2 { font-size: 14px; }
+.plans-msg-assistant h3 { font-size: 13px; }
+
+.plans-msg-assistant strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.plans-msg-assistant table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: var(--sp-2) 0;
+  font-size: 12px;
+}
+
+.plans-msg-assistant th, .plans-msg-assistant td {
+  border: 1px solid var(--border-default);
+  padding: var(--sp-1) var(--sp-2);
+  text-align: left;
+}
+
+.plans-msg-assistant th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+
+/* Streaming indicator */
+.plans-msg-streaming::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 14px;
+  background: var(--accent);
+  margin-left: 2px;
+  animation: plans-cursor-blink 0.8s step-end infinite;
+  vertical-align: text-bottom;
+}
+
+@keyframes plans-cursor-blink {
+  50% { opacity: 0; }
+}
+
+/* Role labels */
+.plans-msg-role {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--sp-1);
+}
+
+/* --- Composer (action bar) --- */
+.plans-composer {
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  padding: var(--sp-3) var(--sp-4);
+  display: flex;
+  gap: var(--sp-2);
+  align-items: flex-end;
+}
+
+.plans-composer-input {
+  flex: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: 13px;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: 4px;
+  resize: none;
+  min-height: 36px;
+  max-height: 120px;
+  line-height: 1.5;
+}
+
+.plans-composer-input:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+}
+
+.plans-composer-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.plans-composer-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.plans-send-btn {
+  background: var(--accent);
+  color: var(--text-inverse);
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-display);
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity var(--duration-fast);
+  white-space: nowrap;
+}
+
+.plans-send-btn:hover {
+  opacity: 0.9;
+}
+
+.plans-send-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Quick actions row */
+.plans-quick-actions {
+  display: flex;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-4) var(--sp-2);
+  background: var(--surface-1);
+}
+
+.plans-quick-btn {
+  background: none;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 3px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+
+.plans-quick-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-dim);
+}
+
+.plans-quick-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* --- Empty/welcome state --- */
+.plans-welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  color: var(--text-tertiary);
+  padding: var(--sp-7);
+}
+
+.plans-welcome-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.plans-welcome-hint {
+  font-size: 12px;
+  max-width: 400px;
+  text-align: center;
+  line-height: 1.6;
+}

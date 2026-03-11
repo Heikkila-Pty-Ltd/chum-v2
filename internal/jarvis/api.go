@@ -65,6 +65,12 @@ func (a *API) Handler() http.Handler {
 	}
 	if a.LLM != nil {
 		mux.HandleFunc("GET /api/dashboard/suggest/{taskID}", a.handleDashboardSuggest)
+
+		// Plan grooming workspace endpoints.
+		mux.HandleFunc("GET /api/dashboard/plans/{project}", a.handlePlanList)
+		mux.HandleFunc("GET /api/dashboard/plan/{id}", a.handlePlanGet)
+		mux.HandleFunc("POST /api/dashboard/plans", a.handlePlanCreate)
+		mux.HandleFunc("POST /api/dashboard/plan/{id}/groom", a.handlePlanGroom)
 	}
 
 	// Jarvis knowledge base endpoints (read-only).

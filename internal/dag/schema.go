@@ -145,6 +145,24 @@ const indexBeadsSyncOutboxStateNext = `CREATE INDEX IF NOT EXISTS idx_beads_sync
 const indexBeadsSyncAuditProjectCreated = `CREATE INDEX IF NOT EXISTS idx_beads_sync_audit_project_created ON beads_sync_audit(project, created_at DESC);`
 const indexBeadsSyncAuditIssue = `CREATE INDEX IF NOT EXISTS idx_beads_sync_audit_issue ON beads_sync_audit(project, issue_id, created_at DESC);`
 
+const planDocsTableSchema = `CREATE TABLE IF NOT EXISTS plan_docs (
+	id TEXT PRIMARY KEY,
+	project TEXT NOT NULL DEFAULT '',
+	title TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'draft'
+		CHECK (status IN ('draft', 'grooming', 'ready', 'materialized')),
+	spec_json TEXT NOT NULL DEFAULT '{}'
+		CHECK (json_valid(spec_json)),
+	conversation TEXT NOT NULL DEFAULT '[]'
+		CHECK (json_valid(conversation)),
+	draft_tasks TEXT NOT NULL DEFAULT '[]'
+		CHECK (json_valid(draft_tasks)),
+	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+	updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);`
+
+const indexPlanDocsProject = `CREATE INDEX IF NOT EXISTS idx_plan_docs_project ON plan_docs(project, updated_at DESC);`
+
 const taskColumns = `id, title, description, status, priority, type, assignee, labels,
 	estimate_minutes, parent_id, acceptance, project, error_log, metadata,
 	actual_duration_sec, iterations_used, created_at, updated_at`
@@ -171,6 +189,8 @@ func (d *DAG) EnsureSchema(ctx context.Context) error {
 		indexBeadsSyncOutboxStateNext,
 		indexBeadsSyncAuditProjectCreated,
 		indexBeadsSyncAuditIssue,
+		planDocsTableSchema,
+		indexPlanDocsProject,
 	} {
 		if _, err := d.db.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("ensure schema: %w", err)
