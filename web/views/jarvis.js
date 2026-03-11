@@ -263,12 +263,11 @@
         btn.disabled = true;
         btn.textContent = '\u2026';
 
-        // For recurring failures, dismiss client-side.
-        if (type === 'recurring_failure') {
-          dismiss(detail);
-        }
-
         App.API.jarvisResolve({ type, goal_id: goalId, detail, comment }).then(() => {
+          // Dismiss recurring failures client-side only after server confirms.
+          if (type === 'recurring_failure') {
+            dismiss(detail);
+          }
           // Animate the card out then refresh.
           const card = btn.closest('.jv-action');
           if (card) {

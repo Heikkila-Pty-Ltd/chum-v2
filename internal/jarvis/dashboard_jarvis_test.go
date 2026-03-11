@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -111,8 +110,7 @@ func setupJarvisTestDB(t *testing.T) string {
 func jarvisTestAPI(t *testing.T) *API {
 	t.Helper()
 	dbPath := setupJarvisTestDB(t)
-	// Reset the sync.Once so each test gets a fresh connection.
-	jarvisDBOnce = sync.Once{}
+	// Each test gets a fresh API with nil jarvisDB, so openJarvisDB will init.
 	return &API{
 		JarvisKBPath: dbPath,
 		Logger:       testLogger(),

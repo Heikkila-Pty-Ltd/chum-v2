@@ -11,33 +11,29 @@ import (
 	_ "modernc.org/sqlite" // register sqlite driver
 )
 
-var jarvisDBOnce sync.Once
+var jarvisDBMu sync.Mutex
 
-// openJarvisDB returns the cached read-only connection to the Jarvis KB.
+// openJarvisDB returns the cached connection to the Jarvis KB, retrying on transient failures.
 func (a *API) openJarvisDB() (*sql.DB, error) {
-	var initErr error
-	jarvisDBOnce.Do(func() {
-		dsn := a.JarvisKBPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
-		db, err := sql.Open("sqlite", dsn)
-		if err != nil {
-			initErr = fmt.Errorf("open jarvis KB: %w", err)
-			return
-		}
-		db.SetMaxOpenConns(2)
-		if err := db.Ping(); err != nil {
-			db.Close()
-			initErr = fmt.Errorf("ping jarvis KB: %w", err)
-			return
-		}
-		a.jarvisDB = db
-	})
-	if initErr != nil {
-		return nil, initErr
+	jarvisDBMu.Lock()
+	defer jarvisDBMu.Unlock()
+
+	if a.jarvisDB != nil {
+		return a.jarvisDB, nil
 	}
-	if a.jarvisDB == nil {
-		return nil, fmt.Errorf("jarvis KB not initialized")
+
+	dsn := a.JarvisKBPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open jarvis KB: %w", err)
 	}
-	return a.jarvisDB, nil
+	db.SetMaxOpenConns(2)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping jarvis KB: %w", err)
+	}
+	a.jarvisDB = db
+	return db, nil
 }
 
 // --- /api/dashboard/jarvis/actions ---
