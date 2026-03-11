@@ -75,6 +75,7 @@ type ceremony struct {
 	planSpec         *types.PlanSpec
 	history          []types.PlanningPhaseEntry
 	researchRound    int
+	snapshotVersion  workflow.Version
 
 	// Disconnected context for notifications after session timeout.
 	notifyBaseCtx workflow.Context
@@ -92,6 +93,10 @@ func newCeremony(ctx workflow.Context, req PlanningRequest, cfg PlanningCeremony
 	logger.Info("PlanningWorkflow started",
 		"GoalID", req.GoalID, "Project", req.Project, "SessionID", req.SessionID)
 
+	if strings.TrimSpace(req.WorkflowID) == "" {
+		req.WorkflowID = req.SessionID
+	}
+
 	// Apply defaults for unset config values (safety nets for Temporal replay).
 	if cfg.MaxResearchRounds <= 0 {
 		cfg.MaxResearchRounds = 3
@@ -107,9 +112,10 @@ func newCeremony(ctx workflow.Context, req PlanningRequest, cfg PlanningCeremony
 	}
 
 	c := &ceremony{
-		req:           req,
-		cfg:           cfg,
-		researchRound: 1,
+		req:             req,
+		cfg:             cfg,
+		researchRound:   1,
+		snapshotVersion: workflow.GetVersion(ctx, "planning-snapshots-v1", workflow.DefaultVersion, 1),
 		shortOpts: workflow.ActivityOptions{
 			StartToCloseTimeout: 2 * time.Minute,
 			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
@@ -601,6 +607,10 @@ func (c *ceremony) handoff(ctx workflow.Context) (*PlanningResult, error) {
 }
 
 func (c *ceremony) persistSnapshot(ctx workflow.Context, phase Phase, status, note string, mutations ...func(*types.PlanningSnapshot)) {
+	if c.snapshotVersion == workflow.DefaultVersion {
+		return
+	}
+
 	c.history = append(c.history, types.PlanningPhaseEntry{
 		Phase:     string(phase),
 		Status:    status,
@@ -610,6 +620,7 @@ func (c *ceremony) persistSnapshot(ctx workflow.Context, phase Phase, status, no
 
 	snapshot := types.PlanningSnapshot{
 		SessionID:    c.req.SessionID,
+		WorkflowID:   c.req.WorkflowID,
 		GoalID:       c.req.GoalID,
 		Project:      c.req.Project,
 		Source:       c.req.Source,

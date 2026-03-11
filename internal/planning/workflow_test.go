@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 )
 
 var defaultCfg = PlanningCeremonyConfig{
@@ -168,6 +169,53 @@ func TestPlanningWorkflow_HandoffUsesValidatedPlanSpecSteps(t *testing.T) {
 			return len(steps) == 1 && steps[0].Title == "Validated step" && steps[0].Acceptance == "Validated acceptance"
 		}),
 	).Return([]string{"sub-1"}, nil).Once()
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalNameSelect, "1")
+	}, time.Second*1)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalNameGreenlight, "GO")
+	}, time.Second*2)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalNameApproveDecomp, "APPROVED")
+	}, time.Second*3)
+
+	env.ExecuteWorkflow(PlanningWorkflow, baseRequest(), defaultCfg)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+}
+
+func TestPlanningWorkflow_SkipsSnapshotsForDefaultVersion(t *testing.T) {
+	t.Parallel()
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestWorkflowEnvironment()
+
+	var pa *PlanningActivities
+
+	goal := ClarifiedGoal{
+		Intent: "Preserve replay compatibility",
+		Raw:    "version gate snapshots",
+	}
+	approaches := []ResearchedApproach{
+		{ID: "approach-1", Title: "Gate snapshots", Description: "Skip new activity on old histories", Tradeoffs: "No persisted snapshot on old runs", Confidence: 0.9, Rank: 1, Status: "exploring"},
+	}
+	steps := []types.DecompStep{
+		{Title: "Guard snapshot writes", Description: "Use GetVersion", Acceptance: "Old histories replay cleanly", Estimate: 10},
+	}
+
+	env.OnGetVersion("planning-snapshots-v1", workflow.DefaultVersion, workflow.Version(1)).Return(workflow.DefaultVersion)
+	env.OnActivity(pa.ClarifyGoalActivity, mock.Anything, mock.Anything).Return(&goal, nil)
+	env.OnActivity(pa.ResearchApproachesActivity, mock.Anything, mock.Anything, mock.Anything).Return(approaches, nil)
+	env.OnActivity(pa.GoalCheckActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(approaches, nil)
+	env.OnActivity(pa.StoreApproachesActivity, mock.Anything, mock.Anything, mock.Anything).Return(approaches, nil)
+	env.OnActivity(pa.NotifyChatActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(pa.DecomposeApproachActivity, mock.Anything, mock.Anything, mock.Anything).Return(steps, nil)
+	spec := defaultPlanSpec()
+	env.OnActivity(pa.BuildPlanSpecActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&spec, nil)
+	env.OnActivity(pa.RecordPlanningDecisionActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("dec-1", nil)
+	env.OnActivity(pa.CreatePlanSubtasksActivity, mock.Anything, mock.Anything, mock.Anything).Return([]string{"sub-1"}, nil)
 
 	env.RegisterDelayedCallback(func() {
 		env.SignalWorkflow(SignalNameSelect, "1")

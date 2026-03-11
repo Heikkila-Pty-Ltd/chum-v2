@@ -14,6 +14,9 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 	"github.com/stretchr/testify/mock"
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
+	workflowpb "go.temporal.io/api/workflow/v1"
+	workflowservice "go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 	temporalmocks "go.temporal.io/sdk/mocks"
 )
@@ -286,8 +289,13 @@ func TestDashboardPlanningStart(t *testing.T) {
 	}
 
 	tc := temporalmocks.NewClient(t)
-	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(stubWorkflowRun{id: "planning-chum-1", runID: "run-1"}, nil).Once()
+	tc.On("ExecuteWorkflow", mock.Anything, mock.MatchedBy(func(opts client.StartWorkflowOptions) bool {
+		return opts.ID == "planning-chum-goal-1" &&
+			opts.TaskQueue == "test-queue" &&
+			opts.WorkflowIDConflictPolicy == enumspb.WORKFLOW_ID_CONFLICT_POLICY_FAIL &&
+			opts.WorkflowExecutionErrorWhenAlreadyStarted
+	}), mock.Anything, mock.Anything, mock.Anything).
+		Return(stubWorkflowRun{id: "planning-chum-goal-1", runID: "run-1"}, nil).Once()
 
 	e := NewEngine(d, tc, "test-queue", map[string]string{"chum": "/tmp/chum"}, testLogger())
 	api := &API{
@@ -308,8 +316,9 @@ func TestDashboardPlanningStart(t *testing.T) {
 	}
 
 	var result struct {
-		SessionID string `json:"session_id"`
-		Started   bool   `json:"started"`
+		SessionID  string `json:"session_id"`
+		WorkflowID string `json:"workflow_id"`
+		Started    bool   `json:"started"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -317,8 +326,86 @@ func TestDashboardPlanningStart(t *testing.T) {
 	if !result.Started {
 		t.Fatal("expected started=true")
 	}
-	if !strings.HasPrefix(result.SessionID, "planning-chum-") {
+	if !strings.HasPrefix(result.SessionID, "planning-chum-goal-1-") {
 		t.Fatalf("unexpected session id %q", result.SessionID)
+	}
+	if result.WorkflowID != "planning-chum-goal-1" {
+		t.Fatalf("workflow_id = %q, want planning-chum-goal-1", result.WorkflowID)
+	}
+}
+
+func TestDashboardPlanningStartReusesRunningWorkflowID(t *testing.T) {
+	d := testDAG(t)
+	ctx := context.Background()
+	if _, err := d.CreateTask(ctx, dag.Task{ID: "goal-1", Title: "Goal", Project: "chum", Status: "ready"}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := d.UpsertPlanningSnapshot(ctx, dag.PlanningSnapshot{
+		SessionID:  "planning-chum-goal-1-123",
+		WorkflowID: "planning-chum-goal-1",
+		GoalID:     "goal-1",
+		Project:    "chum",
+		Source:     "dashboard-control",
+		Phase:      "interactive",
+		Status:     "awaiting_selection",
+	}); err != nil {
+		t.Fatalf("UpsertPlanningSnapshot: %v", err)
+	}
+
+	tc := temporalmocks.NewClient(t)
+	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, serviceerror.NewWorkflowExecutionAlreadyStarted("already running", "req-1", "run-existing")).Once()
+	tc.On("DescribeWorkflowExecution", mock.Anything, "planning-chum-goal-1", "").
+		Return(&workflowservice.DescribeWorkflowExecutionResponse{
+			WorkflowExecutionInfo: &workflowpb.WorkflowExecutionInfo{
+				Status: enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING,
+			},
+		}, nil).Once()
+
+	e := NewEngine(d, tc, "test-queue", map[string]string{"chum": "/tmp/chum"}, testLogger())
+	api := &API{
+		Engine:      e,
+		DAG:         d,
+		Logger:      testLogger(),
+		PlanningCfg: planning.PlanningCeremonyConfig{MaxCycles: 3},
+	}
+
+	body := strings.NewReader(`{"project":"chum","goal_id":"goal-1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/dashboard/planning/start", body)
+	w := httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	var result struct {
+		SessionID  string `json:"session_id"`
+		WorkflowID string `json:"workflow_id"`
+		RunID      string `json:"run_id"`
+		Started    bool   `json:"started"`
+		Planning   struct {
+			SessionID  string `json:"session_id"`
+			WorkflowID string `json:"workflow_id"`
+		} `json:"planning"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result.Started {
+		t.Fatal("expected started=false")
+	}
+	if result.SessionID != "planning-chum-goal-1-123" {
+		t.Fatalf("session_id = %q, want planning-chum-goal-1-123", result.SessionID)
+	}
+	if result.WorkflowID != "planning-chum-goal-1" {
+		t.Fatalf("workflow_id = %q, want planning-chum-goal-1", result.WorkflowID)
+	}
+	if result.RunID != "run-existing" {
+		t.Fatalf("run_id = %q, want run-existing", result.RunID)
+	}
+	if result.Planning.WorkflowID != "planning-chum-goal-1" {
+		t.Fatalf("planning.workflow_id = %q, want planning-chum-goal-1", result.Planning.WorkflowID)
 	}
 }
 

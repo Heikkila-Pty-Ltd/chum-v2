@@ -110,7 +110,7 @@ const App = (() => {
   }
 
   function renderPlanningControls(task, planning) {
-    const sessionId = planning && planning.session_id ? planning.session_id : '';
+    const sessionId = planning && (planning.workflow_id || planning.session_id) ? (planning.workflow_id || planning.session_id) : '';
     return `
       <div class="panel-section planning-console" data-task-id="${escapeHtml(task.id)}" data-project="${escapeHtml(task.project || '')}" data-session-id="${escapeHtml(sessionId)}">
         <div class="panel-section-label">Planning Console</div>
@@ -434,8 +434,8 @@ const App = (() => {
           goal_id: taskId,
           agent,
         });
-        if (resp.session_id) {
-          container.dataset.sessionId = resp.session_id;
+        if (resp.workflow_id || resp.session_id) {
+          container.dataset.sessionId = resp.workflow_id || resp.session_id;
         }
       }, 'Starting planning session…'));
     }

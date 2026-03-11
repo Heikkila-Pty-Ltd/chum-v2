@@ -11,14 +11,15 @@ import (
 
 // PlanningRequest is the input to the PlanningWorkflow.
 type PlanningRequest struct {
-	GoalID    string `json:"goal_id"`    // beads issue ID for the goal
-	Project   string `json:"project"`    // project name from config
-	WorkDir   string `json:"work_dir"`   // project workspace root
-	Agent     string `json:"agent"`      // CLI name (claude, gemini, codex)
-	Model     string `json:"model"`      // optional model override
-	RoomID    string `json:"room_id"`    // Matrix room for push notifications
-	Source    string `json:"source"`     // who triggered (matrix-control, cli)
-	SessionID string `json:"session_id"` // workflow-assigned unique ID
+	GoalID     string `json:"goal_id"`               // beads issue ID for the goal
+	Project    string `json:"project"`               // project name from config
+	WorkDir    string `json:"work_dir"`              // project workspace root
+	Agent      string `json:"agent"`                 // CLI name (claude, gemini, codex)
+	Model      string `json:"model"`                 // optional model override
+	RoomID     string `json:"room_id"`               // Matrix room for push notifications
+	Source     string `json:"source"`                // who triggered (matrix-control, cli)
+	SessionID  string `json:"session_id"`            // workflow-assigned unique ID
+	WorkflowID string `json:"workflow_id,omitempty"` // Temporal workflow ID used for control/signals
 }
 
 // PlanningCeremonyConfig holds ceremony-level knobs passed to the workflow.

@@ -3,6 +3,7 @@ package jarvis
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 )
 
@@ -253,19 +255,6 @@ func (a *API) handleDashboardPlanningStart(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if latest, err := a.DAG.GetLatestPlanningSnapshotForTask(r.Context(), req.GoalID); err == nil && strings.TrimSpace(latest.SessionID) != "" {
-		if status, active := a.describePlanningWorkflow(r.Context(), latest.SessionID); active {
-			latest.WorkflowStatus = status
-			latest.WorkflowActive = true
-			a.jsonOK(w, map[string]any{
-				"session_id": latest.SessionID,
-				"started":    false,
-				"planning":   latest,
-			})
-			return
-		}
-	}
-
 	agent := req.Agent
 	if agent == "" {
 		agent = a.PlanningDefaultAgent
@@ -274,27 +263,47 @@ func (a *API) handleDashboardPlanningStart(w http.ResponseWriter, r *http.Reques
 		agent = "claude"
 	}
 
-	sessionID := fmt.Sprintf("planning-%s-%d", req.Project, time.Now().UnixNano())
+	workflowID := planningWorkflowID(req.Project, req.GoalID)
+	sessionID := fmt.Sprintf("%s-%d", workflowID, time.Now().UnixNano())
 	run, err := a.Engine.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
-		ID:        sessionID,
-		TaskQueue: a.Engine.taskQueue,
+		ID:                                       workflowID,
+		TaskQueue:                                a.Engine.taskQueue,
+		WorkflowIDConflictPolicy:                 enumspb.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
+		WorkflowExecutionErrorWhenAlreadyStarted: true,
 	}, planning.PlanningWorkflow, planning.PlanningRequest{
-		GoalID:    req.GoalID,
-		Project:   req.Project,
-		WorkDir:   workDir,
-		Agent:     agent,
-		Source:    "dashboard-control",
-		SessionID: sessionID,
+		GoalID:     req.GoalID,
+		Project:    req.Project,
+		WorkDir:    workDir,
+		Agent:      agent,
+		Source:     "dashboard-control",
+		SessionID:  sessionID,
+		WorkflowID: workflowID,
 	}, a.PlanningCfg)
 	if err != nil {
+		var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
+		if errors.As(err, &alreadyStarted) {
+			latest := a.latestPlanningSnapshotForWorkflow(r.Context(), req.GoalID, workflowID)
+			if latest.SessionID != "" {
+				latest.WorkflowStatus, latest.WorkflowActive = a.describePlanningWorkflow(r.Context(), workflowID)
+			}
+			a.jsonOK(w, map[string]any{
+				"session_id":  latest.SessionID,
+				"workflow_id": workflowID,
+				"run_id":      alreadyStarted.RunId,
+				"started":     false,
+				"planning":    latest,
+			})
+			return
+		}
 		a.jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	a.jsonOK(w, map[string]any{
-		"session_id": sessionID,
-		"run_id":     run.GetRunID(),
-		"started":    true,
+		"session_id":  sessionID,
+		"workflow_id": workflowID,
+		"run_id":      run.GetRunID(),
+		"started":     true,
 	})
 }
 
@@ -348,19 +357,59 @@ func (a *API) loadPlanningSnapshots(ctx context.Context, taskID string) (any, []
 	if err != nil {
 		latest = dag.PlanningSnapshot{}
 	}
-	if latest.SessionID != "" {
-		latest.WorkflowStatus, latest.WorkflowActive = a.describePlanningWorkflow(ctx, latest.SessionID)
+	latest = a.decoratePlanningSnapshot(latest)
+	if controlID := planningControlID(latest); controlID != "" {
+		latest.WorkflowStatus, latest.WorkflowActive = a.describePlanningWorkflow(ctx, controlID)
 	}
 
 	sessions, err := a.DAG.ListPlanningSnapshotsForTask(ctx, taskID)
 	if err != nil || sessions == nil {
 		sessions = []dag.PlanningSnapshot{}
 	}
+	for i := range sessions {
+		sessions[i] = a.decoratePlanningSnapshot(sessions[i])
+	}
 
 	if latest.SessionID == "" {
 		return nil, sessions
 	}
 	return latest, sessions
+}
+
+func planningWorkflowID(project, goalID string) string {
+	return fmt.Sprintf("planning-%s-%s", project, goalID)
+}
+
+func planningControlID(snapshot dag.PlanningSnapshot) string {
+	if strings.TrimSpace(snapshot.WorkflowID) != "" {
+		return strings.TrimSpace(snapshot.WorkflowID)
+	}
+	return strings.TrimSpace(snapshot.SessionID)
+}
+
+func (a *API) decoratePlanningSnapshot(snapshot dag.PlanningSnapshot) dag.PlanningSnapshot {
+	if snapshot.SessionID == "" {
+		return snapshot
+	}
+	if strings.TrimSpace(snapshot.WorkflowID) == "" && snapshot.Source == "dashboard-control" && snapshot.Project != "" && snapshot.GoalID != "" {
+		snapshot.WorkflowID = planningWorkflowID(snapshot.Project, snapshot.GoalID)
+	}
+	if strings.TrimSpace(snapshot.WorkflowID) == "" {
+		snapshot.WorkflowID = snapshot.SessionID
+	}
+	return snapshot
+}
+
+func (a *API) latestPlanningSnapshotForWorkflow(ctx context.Context, taskID, workflowID string) dag.PlanningSnapshot {
+	latest, err := a.DAG.GetLatestPlanningSnapshotForTask(ctx, taskID)
+	if err != nil {
+		return dag.PlanningSnapshot{}
+	}
+	latest = a.decoratePlanningSnapshot(latest)
+	if planningControlID(latest) == workflowID {
+		return latest
+	}
+	return dag.PlanningSnapshot{}
 }
 
 func (a *API) describePlanningWorkflow(ctx context.Context, sessionID string) (string, bool) {

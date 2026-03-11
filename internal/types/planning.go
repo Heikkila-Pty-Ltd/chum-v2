@@ -47,6 +47,7 @@ type PlanningPhaseEntry struct {
 // PlanningSnapshot stores the current planning state and its phase history.
 type PlanningSnapshot struct {
 	SessionID        string               `json:"session_id"`
+	WorkflowID       string               `json:"workflow_id,omitempty"`
 	GoalID           string               `json:"goal_id"`
 	Project          string               `json:"project"`
 	Source           string               `json:"source"`
