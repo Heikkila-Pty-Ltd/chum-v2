@@ -119,6 +119,72 @@ func TestPlanningWorkflow_HappyPath(t *testing.T) {
 	require.False(t, result.Cancelled)
 }
 
+func TestPlanningWorkflow_HandoffUsesValidatedPlanSpecSteps(t *testing.T) {
+	t.Parallel()
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestWorkflowEnvironment()
+
+	var pa *PlanningActivities
+
+	goal := ClarifiedGoal{
+		Intent: "Use validated plan steps",
+		Raw:    "validated steps",
+	}
+	approaches := []ResearchedApproach{
+		{ID: "approach-1", Title: "Validated path", Description: "Use plan contract", Tradeoffs: "None", Confidence: 0.9, Rank: 1, Status: "exploring"},
+	}
+	decompSteps := []types.DecompStep{
+		{Title: "Too large step", Description: "Original decompose output", Acceptance: "Old acceptance", Estimate: 15},
+	}
+	validatedSteps := []types.DecompStep{
+		{Title: "Validated step", Description: "PlanSpec-corrected step", Acceptance: "Validated acceptance", Estimate: 10},
+	}
+
+	env.OnActivity(pa.ClarifyGoalActivity, mock.Anything, mock.Anything).Return(&goal, nil)
+	env.OnActivity(pa.ResearchApproachesActivity, mock.Anything, mock.Anything, mock.Anything).Return(approaches, nil)
+	env.OnActivity(pa.GoalCheckActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(approaches, nil)
+	env.OnActivity(pa.StoreApproachesActivity, mock.Anything, mock.Anything, mock.Anything).Return(approaches, nil)
+	env.OnActivity(pa.NotifyChatActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(pa.StorePlanningSnapshotActivity, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(pa.DecomposeApproachActivity, mock.Anything, mock.Anything, mock.Anything).Return(decompSteps, nil)
+	env.OnActivity(pa.BuildPlanSpecActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&types.PlanSpec{
+		ProblemStatement:   "Mismatch between reviewed and executed steps",
+		DesiredOutcome:     "Handoff uses validated steps",
+		ExpectedPROutcome:  "Create subtasks from PlanSpec",
+		Summary:            "Use corrected steps from the plan contract.",
+		ChosenApproach:     types.PlanningApproach{Title: "Validated path"},
+		NonGoals:           []string{"Changing decomposition order"},
+		Risks:              []string{"Stale steps"},
+		ValidationStrategy: []string{"Workflow test"},
+		Steps:              validatedSteps,
+	}, nil)
+	env.OnActivity(pa.RecordPlanningDecisionActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("dec-1", nil)
+	env.OnActivity(
+		pa.CreatePlanSubtasksActivity,
+		mock.Anything,
+		mock.Anything,
+		mock.MatchedBy(func(steps []types.DecompStep) bool {
+			return len(steps) == 1 && steps[0].Title == "Validated step" && steps[0].Acceptance == "Validated acceptance"
+		}),
+	).Return([]string{"sub-1"}, nil).Once()
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalNameSelect, "1")
+	}, time.Second*1)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalNameGreenlight, "GO")
+	}, time.Second*2)
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalNameApproveDecomp, "APPROVED")
+	}, time.Second*3)
+
+	env.ExecuteWorkflow(PlanningWorkflow, baseRequest(), defaultCfg)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+}
+
 // TestPlanningWorkflow_CancelDuringResearch verifies cancellation during autonomous phases.
 func TestPlanningWorkflow_CancelDuringResearch(t *testing.T) {
 	t.Parallel()

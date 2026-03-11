@@ -367,6 +367,7 @@ Rules:
 - Each step must be independently implementable and testable
 - Steps should be ordered by dependency (first step has no deps)
 - Maximum 5 steps
+- Each step must fit within a 15 minute execution budget
 - Each step needs clear acceptance criteria
 - Output ONLY the JSON object.`, approach.Title, approach.Description, codeContext)
 

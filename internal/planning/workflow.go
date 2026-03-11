@@ -494,6 +494,7 @@ func (c *ceremony) decompose(ctx workflow.Context) error {
 		c.notify(fmt.Sprintf("Plan contract failed validation: %s\nReturning to approach selection.", err))
 		return fmt.Errorf("plan spec build failed")
 	}
+	c.steps = append([]types.DecompStep{}, planSpec.Steps...)
 	c.planSpec = &planSpec
 
 	decompSummary := formatDecompSummary(c.selectedApproach.Title, c.steps)

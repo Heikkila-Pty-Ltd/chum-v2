@@ -27,6 +27,7 @@ type planningStubBeadsStore struct {
 type planningStubRunner struct {
 	planResult *llm.CLIResult
 	planErr    error
+	lastPrompt string
 }
 
 func (r planningStubRunner) Plan(context.Context, string, string, string, string) (*llm.CLIResult, error) {
@@ -261,5 +262,48 @@ func TestBuildPlanSpecActivity_FillsSharedFields(t *testing.T) {
 	}
 	if len(spec.Steps) != 1 {
 		t.Fatalf("expected 1 step, got %d", len(spec.Steps))
+	}
+}
+
+type planningCaptureRunner struct {
+	planningStubRunner
+}
+
+func (r *planningCaptureRunner) Plan(_ context.Context, _ string, _ string, _ string, prompt string) (*llm.CLIResult, error) {
+	r.lastPrompt = prompt
+	return r.planResult, r.planErr
+}
+
+func (r *planningCaptureRunner) Exec(context.Context, string, string, string, string) (*llm.CLIResult, error) {
+	return nil, nil
+}
+
+func TestDecomposeApproachActivity_PromptIncludesFifteenMinuteCap(t *testing.T) {
+	t.Parallel()
+
+	runner := &planningCaptureRunner{
+		planningStubRunner: planningStubRunner{
+			planResult: &llm.CLIResult{
+				Output: `{"steps":[{"title":"Step one","description":"Do it","acceptance":"Done","estimate_minutes":10}]}`,
+			},
+		},
+	}
+	pa := &PlanningActivities{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		LLM:    runner,
+	}
+
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(pa.DecomposeApproachActivity)
+	_, err := env.ExecuteActivity(pa.DecomposeApproachActivity, PlanningRequest{Agent: "codex"}, ResearchedApproach{
+		Title:       "Break work down",
+		Description: "Need atomic tasks",
+	})
+	if err != nil {
+		t.Fatalf("DecomposeApproachActivity: %v", err)
+	}
+	if !strings.Contains(runner.lastPrompt, "15 minute execution budget") {
+		t.Fatalf("expected prompt to include 15 minute cap, got:\n%s", runner.lastPrompt)
 	}
 }
