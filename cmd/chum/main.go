@@ -102,11 +102,36 @@ func main() {
 			if cfg.BeadsBridge.Enabled {
 				eng.ConfigureBeadsIngress(cfg.BeadsBridge.IngressPolicy, cfg.BeadsBridge.CanaryLabel, beadsClients)
 			}
+			defaultPlanningAgent := "claude"
+			providerNames := make([]string, 0, len(cfg.Providers))
+			for name := range cfg.Providers {
+				providerNames = append(providerNames, name)
+			}
+			sort.Strings(providerNames)
+			for _, name := range providerNames {
+				prov := cfg.Providers[name]
+				if prov.Enabled && prov.CLI != "" {
+					defaultPlanningAgent = prov.CLI
+					break
+				}
+			}
 			policy := "legacy"
 			if cfg.BeadsBridge.Enabled {
 				policy = cfg.BeadsBridge.IngressPolicy
 			}
-			api := &jarvis.API{Engine: eng, DAG: d, Logger: logger, IngressPolicy: policy}
+			api := &jarvis.API{
+				Engine:               eng,
+				DAG:                  d,
+				Logger:               logger,
+				IngressPolicy:        policy,
+				PlanningDefaultAgent: defaultPlanningAgent,
+				PlanningCfg: planning.PlanningCeremonyConfig{
+					MaxResearchRounds: cfg.Planning.MaxResearchRounds,
+					SignalTimeout:     cfg.Planning.SignalTimeout.Duration,
+					SessionTimeout:    cfg.Planning.SessionTimeout.Duration,
+					MaxCycles:         cfg.Planning.MaxCycles,
+				},
+			}
 
 			addr := fmt.Sprintf("127.0.0.1:%d", port)
 			ln, err := net.Listen("tcp", addr)

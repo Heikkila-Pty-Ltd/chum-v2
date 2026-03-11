@@ -258,6 +258,61 @@ html, body {
   color: var(--text-primary);
 }
 
+.planning-console {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.planning-console-row {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.planning-input {
+  flex: 1 1 120px;
+  min-width: 0;
+  background: var(--surface-3);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  padding: 7px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.planning-button {
+  background: var(--accent);
+  color: var(--text-inverse);
+  border: none;
+  border-radius: 4px;
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.planning-button:hover {
+  background: #d8b55a;
+}
+
+.planning-button-subtle {
+  background: var(--surface-4);
+  color: var(--text-primary);
+}
+
+.planning-button-subtle:hover {
+  background: #363c48;
+}
+
+.planning-console-feedback {
+  margin-top: var(--sp-2);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 /* --- Panel Content --- */
 .panel-task-id {
   font-family: var(--font-mono);

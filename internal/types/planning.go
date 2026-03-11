@@ -61,6 +61,8 @@ type PlanningSnapshot struct {
 	PlanSpec         *PlanSpec            `json:"plan_spec,omitempty"`
 	SubtaskIDs       []string             `json:"subtask_ids"`
 	History          []PlanningPhaseEntry `json:"history"`
+	WorkflowStatus   string               `json:"workflow_status,omitempty"`
+	WorkflowActive   bool                 `json:"workflow_active,omitempty"`
 	CreatedAt        time.Time            `json:"created_at,omitempty"`
 	UpdatedAt        time.Time            `json:"updated_at,omitempty"`
 }

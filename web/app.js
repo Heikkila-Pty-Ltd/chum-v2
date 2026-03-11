@@ -28,6 +28,9 @@ const App = (() => {
     graph: (p)           => API.get(`/api/dashboard/graph/${p}`),
     tasks: (p, s)        => API.get(`/api/dashboard/tasks/${p}${s ? '?status=' + s : ''}`),
     task: (id)           => API.get(`/api/dashboard/task/${id}`),
+    planning: (id)       => API.get(`/api/dashboard/planning/${id}`),
+    planningStart: (body) => API.post('/api/dashboard/planning/start', body),
+    planningSignal: (sessionId, body) => API.post(`/api/dashboard/planning/${sessionId}/signal`, body),
     stats: (p)           => API.get(`/api/dashboard/stats/${p}`),
     timeline: (p)        => API.get(`/api/dashboard/timeline/${p}`),
     overviewGrouped: (p) => API.get(`/api/dashboard/overview-grouped/${p}`),
@@ -106,30 +109,67 @@ const App = (() => {
     return `<ul class="panel-dep-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
   }
 
-  function renderPlanningSection(planning, sessions) {
-    if (!planning || !planning.session_id) return '';
+  function renderPlanningControls(task, planning) {
+    const sessionId = planning && planning.session_id ? planning.session_id : '';
+    return `
+      <div class="panel-section planning-console" data-task-id="${escapeHtml(task.id)}" data-project="${escapeHtml(task.project || '')}" data-session-id="${escapeHtml(sessionId)}">
+        <div class="panel-section-label">Planning Console</div>
+        <div class="planning-console-row">
+          <input class="planning-input" data-plan-agent type="text" placeholder="agent (optional)" />
+          <button class="planning-button" data-plan-start type="button">${sessionId ? 'Restart' : 'Start'} planning</button>
+        </div>
+        <div class="planning-console-row">
+          <input class="planning-input" data-plan-select-value type="text" placeholder="approach id" />
+          <button class="planning-button" data-plan-action="select" type="button">Select</button>
+          <button class="planning-button" data-plan-action="go" type="button">Go</button>
+          <button class="planning-button" data-plan-action="approve" type="button">Approve</button>
+        </div>
+        <div class="planning-console-row">
+          <input class="planning-input" data-plan-dig-value type="text" placeholder="approach id" />
+          <input class="planning-input" data-plan-dig-reason type="text" placeholder="dig feedback" />
+          <button class="planning-button" data-plan-action="dig" type="button">Dig</button>
+        </div>
+        <div class="planning-console-row">
+          <input class="planning-input" data-plan-answer type="text" placeholder="ask a question or answer a prompt" />
+          <button class="planning-button" data-plan-action="answer" type="button">Send</button>
+        </div>
+        <div class="planning-console-row">
+          <button class="planning-button planning-button-subtle" data-plan-action="realign" type="button">Realign</button>
+          <button class="planning-button planning-button-subtle" data-plan-action="stop" type="button">Stop</button>
+        </div>
+        <div class="planning-console-feedback" data-plan-feedback>Use this panel to drive the ceremony without Matrix.</div>
+      </div>
+    `;
+  }
 
-    const history = planning.history || [];
-    const spec = planning.plan_spec || null;
-    const selected = planning.selected_approach || null;
-    const sessionCount = sessions && sessions.length ? sessions.length : 1;
+  function renderPlanningSection(task, planning, sessions) {
+    const currentPlanning = planning || {};
+    const history = currentPlanning.history || [];
+    const spec = currentPlanning.plan_spec || null;
+    const selected = currentPlanning.selected_approach || null;
+    const sessionCount = sessions && sessions.length ? sessions.length : (planning && planning.session_id ? 1 : 0);
 
     let html = `
       <div class="panel-section">
-        <div class="panel-section-label">Planning (${sessionCount} session${sessionCount === 1 ? '' : 's'})</div>
+        <div class="panel-section-label">Planning${sessionCount ? ` (${sessionCount} session${sessionCount === 1 ? '' : 's'})` : ''}</div>
         <div class="panel-description">
-          <strong>${escapeHtml(planning.phase || 'unknown')}</strong> · ${escapeHtml(planning.status || 'unknown')}
-          ${planning.updated_at ? ` · updated ${escapeHtml(timeAgo(planning.updated_at))}` : ''}
+          ${planning && planning.session_id
+            ? `<strong>${escapeHtml(currentPlanning.phase || 'unknown')}</strong> · ${escapeHtml(currentPlanning.status || 'unknown')}
+               ${currentPlanning.workflow_status ? ` · workflow ${escapeHtml(currentPlanning.workflow_status)}` : ''}
+               ${currentPlanning.updated_at ? ` · updated ${escapeHtml(timeAgo(currentPlanning.updated_at))}` : ''}`
+            : 'No planning session recorded yet.'}
         </div>
       </div>
     `;
 
-    if (planning.goal && planning.goal.intent) {
+    html += renderPlanningControls(task, currentPlanning);
+
+    if (currentPlanning.goal && currentPlanning.goal.intent) {
       html += `
         <div class="panel-section">
           <div class="panel-section-label">Clarified Goal</div>
-          <div class="panel-description">${escapeHtml(planning.goal.intent)}</div>
-          ${planning.goal.why ? `<div class="panel-description" style="margin-top:6px;color:var(--text-secondary)">Why: ${escapeHtml(planning.goal.why)}</div>` : ''}
+          <div class="panel-description">${escapeHtml(currentPlanning.goal.intent)}</div>
+          ${currentPlanning.goal.why ? `<div class="panel-description" style="margin-top:6px;color:var(--text-secondary)">Why: ${escapeHtml(currentPlanning.goal.why)}</div>` : ''}
         </div>
       `;
     }
@@ -243,6 +283,8 @@ const App = (() => {
           openPanel(a.dataset.taskId);
         });
       });
+
+      bindPlanningControls(content, taskId, data);
     }).catch(err => {
       content.innerHTML = `<div class="empty-state">Failed to load task<div class="empty-state-hint">${escapeHtml(err.message)}</div></div>`;
     });
@@ -351,9 +393,76 @@ const App = (() => {
       `;
     }
 
-    html += renderPlanningSection(data.planning, data.planning_sessions);
+    html += renderPlanningSection(t, data.planning, data.planning_sessions);
 
     return html;
+  }
+
+  function setPlanningFeedback(container, message, isError) {
+    const target = container.querySelector('[data-plan-feedback]');
+    if (!target) return;
+    target.textContent = message;
+    target.style.color = isError ? 'var(--status-failed)' : 'var(--text-secondary)';
+  }
+
+  function bindPlanningControls(content, taskId, data) {
+    const container = content.querySelector('.planning-console');
+    if (!container) return;
+
+    const project = container.dataset.project || data.task.project || currentProject;
+    const getSessionId = () => container.dataset.sessionId || '';
+
+    const refreshPanel = () => openPanel(taskId);
+
+    const withAction = async (fn, pendingMessage) => {
+      setPlanningFeedback(container, pendingMessage, false);
+      try {
+        await fn();
+        setPlanningFeedback(container, 'Planning command sent. Reloading panel…', false);
+        setTimeout(refreshPanel, 400);
+      } catch (err) {
+        setPlanningFeedback(container, err.message || 'Planning command failed', true);
+      }
+    };
+
+    const startButton = container.querySelector('[data-plan-start]');
+    if (startButton) {
+      startButton.addEventListener('click', () => withAction(async () => {
+        const agent = (container.querySelector('[data-plan-agent]')?.value || '').trim();
+        const resp = await API.planningStart({
+          project,
+          goal_id: taskId,
+          agent,
+        });
+        if (resp.session_id) {
+          container.dataset.sessionId = resp.session_id;
+        }
+      }, 'Starting planning session…'));
+    }
+
+    container.querySelectorAll('[data-plan-action]').forEach(btn => {
+      btn.addEventListener('click', () => withAction(async () => {
+        const action = btn.dataset.planAction;
+        let value = '';
+        let reason = '';
+
+        if (action === 'select') {
+          value = (container.querySelector('[data-plan-select-value]')?.value || '').trim();
+        } else if (action === 'dig') {
+          value = (container.querySelector('[data-plan-dig-value]')?.value || '').trim();
+          reason = (container.querySelector('[data-plan-dig-reason]')?.value || '').trim();
+        } else if (action === 'answer') {
+          value = (container.querySelector('[data-plan-answer]')?.value || '').trim();
+        }
+
+        const sessionId = getSessionId();
+        if (!sessionId) {
+          throw new Error('No planning session yet. Start one first.');
+        }
+
+        await API.planningSignal(sessionId, { action, value, reason });
+      }, `Sending ${btn.dataset.planAction}…`));
+    });
   }
 
   // --- Auto Refresh ---

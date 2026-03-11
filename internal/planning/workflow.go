@@ -198,6 +198,7 @@ func (c *ceremony) runAutonomousPhases(ctx workflow.Context) error {
 
 	// Phase 1: Goal Clarification
 	logger.Info("Phase: goal clarification")
+	c.persistSnapshot(ctx, PhaseGoalClarification, "running", "Clarifying the goal.")
 	goalCtx := workflow.WithActivityOptions(ctx, c.researchOpts)
 	if err := workflow.ExecuteActivity(goalCtx, c.pa.ClarifyGoalActivity, c.req).Get(ctx, &c.goal); err != nil {
 		logger.Error("Goal clarification failed", "error", err)
@@ -212,6 +213,7 @@ func (c *ceremony) runAutonomousPhases(ctx workflow.Context) error {
 
 	// Phase 2: Research Round 1
 	logger.Info("Phase: research round 1")
+	c.persistSnapshot(ctx, PhaseResearch, "running", "Researching implementation approaches.")
 	researchCtx := workflow.WithActivityOptions(ctx, c.researchOpts)
 	if err := workflow.ExecuteActivity(researchCtx, c.pa.ResearchApproachesActivity, c.req, c.goal).Get(ctx, &c.approaches); err != nil {
 		logger.Error("Research failed", "error", err)

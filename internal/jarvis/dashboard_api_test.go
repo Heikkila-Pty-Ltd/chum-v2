@@ -10,12 +10,25 @@ import (
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/engine"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 	"github.com/stretchr/testify/mock"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 	temporalmocks "go.temporal.io/sdk/mocks"
 )
+
+type stubWorkflowRun struct {
+	id    string
+	runID string
+}
+
+func (s stubWorkflowRun) GetID() string                          { return s.id }
+func (s stubWorkflowRun) GetRunID() string                       { return s.runID }
+func (s stubWorkflowRun) Get(context.Context, interface{}) error { return nil }
+func (s stubWorkflowRun) GetWithOptions(context.Context, interface{}, client.WorkflowRunGetOptions) error {
+	return nil
+}
 
 func testDashboardAPI(t *testing.T) (*API, *dag.DAG) {
 	t.Helper()
@@ -262,6 +275,68 @@ func TestDashboardPlanningEndpoint(t *testing.T) {
 	}
 	if len(result.Sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(result.Sessions))
+	}
+}
+
+func TestDashboardPlanningStart(t *testing.T) {
+	d := testDAG(t)
+	ctx := context.Background()
+	if _, err := d.CreateTask(ctx, dag.Task{ID: "goal-1", Title: "Goal", Project: "chum", Status: "ready"}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	tc := temporalmocks.NewClient(t)
+	tc.On("ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(stubWorkflowRun{id: "planning-chum-1", runID: "run-1"}, nil).Once()
+
+	e := NewEngine(d, tc, "test-queue", map[string]string{"chum": "/tmp/chum"}, testLogger())
+	api := &API{
+		Engine:               e,
+		DAG:                  d,
+		Logger:               testLogger(),
+		PlanningDefaultAgent: "codex",
+		PlanningCfg:          planning.PlanningCeremonyConfig{MaxCycles: 3},
+	}
+
+	body := strings.NewReader(`{"project":"chum","goal_id":"goal-1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/dashboard/planning/start", body)
+	w := httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	var result struct {
+		SessionID string `json:"session_id"`
+		Started   bool   `json:"started"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !result.Started {
+		t.Fatal("expected started=true")
+	}
+	if !strings.HasPrefix(result.SessionID, "planning-chum-") {
+		t.Fatalf("unexpected session id %q", result.SessionID)
+	}
+}
+
+func TestDashboardPlanningSignal(t *testing.T) {
+	d := testDAG(t)
+	tc := temporalmocks.NewClient(t)
+	tc.On("SignalWorkflow", mock.Anything, "planning-chum-1", "", planning.SignalNameSelect, "2").Return(nil).Once()
+
+	e := NewEngine(d, tc, "test-queue", map[string]string{"chum": "/tmp/chum"}, testLogger())
+	api := &API{Engine: e, DAG: d, Logger: testLogger()}
+
+	body := strings.NewReader(`{"action":"select","value":"2"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/dashboard/planning/planning-chum-1/signal", body)
+	w := httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
 	}
 }
 

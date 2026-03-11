@@ -13,7 +13,10 @@ import (
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
+	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/sdk/client"
 )
 
 // suggestCache caches LLM suggestions to avoid redundant calls.
@@ -209,10 +212,144 @@ func (a *API) handleDashboardPlanning(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type planningStartRequest struct {
+	Project string `json:"project"`
+	GoalID  string `json:"goal_id"`
+	Agent   string `json:"agent"`
+}
+
+func (a *API) handleDashboardPlanningStart(w http.ResponseWriter, r *http.Request) {
+	if a.Engine == nil || a.Engine.temporal == nil {
+		a.jsonError(w, "planning control unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req planningStartRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	req.Project = strings.TrimSpace(req.Project)
+	req.GoalID = strings.TrimSpace(req.GoalID)
+	req.Agent = strings.TrimSpace(req.Agent)
+	if req.Project == "" || req.GoalID == "" {
+		a.jsonError(w, "project and goal_id are required", http.StatusBadRequest)
+		return
+	}
+
+	task, err := a.DAG.GetTask(r.Context(), req.GoalID)
+	if err != nil {
+		a.jsonError(w, "goal task not found", http.StatusNotFound)
+		return
+	}
+	if task.Project != "" && task.Project != req.Project {
+		a.jsonError(w, "goal task project does not match request", http.StatusBadRequest)
+		return
+	}
+
+	workDir := a.Engine.workDirs[req.Project]
+	if workDir == "" {
+		a.jsonError(w, "unknown project", http.StatusBadRequest)
+		return
+	}
+
+	if latest, err := a.DAG.GetLatestPlanningSnapshotForTask(r.Context(), req.GoalID); err == nil && strings.TrimSpace(latest.SessionID) != "" {
+		if status, active := a.describePlanningWorkflow(r.Context(), latest.SessionID); active {
+			latest.WorkflowStatus = status
+			latest.WorkflowActive = true
+			a.jsonOK(w, map[string]any{
+				"session_id": latest.SessionID,
+				"started":    false,
+				"planning":   latest,
+			})
+			return
+		}
+	}
+
+	agent := req.Agent
+	if agent == "" {
+		agent = a.PlanningDefaultAgent
+	}
+	if agent == "" {
+		agent = "claude"
+	}
+
+	sessionID := fmt.Sprintf("planning-%s-%d", req.Project, time.Now().UnixNano())
+	run, err := a.Engine.temporal.ExecuteWorkflow(r.Context(), client.StartWorkflowOptions{
+		ID:        sessionID,
+		TaskQueue: a.Engine.taskQueue,
+	}, planning.PlanningWorkflow, planning.PlanningRequest{
+		GoalID:    req.GoalID,
+		Project:   req.Project,
+		WorkDir:   workDir,
+		Agent:     agent,
+		Source:    "dashboard-control",
+		SessionID: sessionID,
+	}, a.PlanningCfg)
+	if err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	a.jsonOK(w, map[string]any{
+		"session_id": sessionID,
+		"run_id":     run.GetRunID(),
+		"started":    true,
+	})
+}
+
+type planningSignalRequest struct {
+	Action string `json:"action"`
+	Value  string `json:"value"`
+	Reason string `json:"reason"`
+}
+
+func (a *API) handleDashboardPlanningSignal(w http.ResponseWriter, r *http.Request) {
+	if a.Engine == nil || a.Engine.temporal == nil {
+		a.jsonError(w, "planning control unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	sessionID := strings.TrimSpace(r.PathValue("sessionID"))
+	if sessionID == "" {
+		a.jsonError(w, "session_id required", http.StatusBadRequest)
+		return
+	}
+
+	var req planningSignalRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	req.Action = strings.ToLower(strings.TrimSpace(req.Action))
+	req.Value = strings.TrimSpace(req.Value)
+	req.Reason = strings.TrimSpace(req.Reason)
+
+	signalName, payload, err := translatePlanningSignal(req)
+	if err != nil {
+		a.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := a.Engine.temporal.SignalWorkflow(r.Context(), sessionID, "", signalName, payload); err != nil {
+		a.jsonError(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	a.jsonOK(w, map[string]any{
+		"session_id": sessionID,
+		"action":     req.Action,
+		"status":     "ok",
+	})
+}
+
 func (a *API) loadPlanningSnapshots(ctx context.Context, taskID string) (any, []dag.PlanningSnapshot) {
 	latest, err := a.DAG.GetLatestPlanningSnapshotForTask(ctx, taskID)
 	if err != nil {
 		latest = dag.PlanningSnapshot{}
+	}
+	if latest.SessionID != "" {
+		latest.WorkflowStatus, latest.WorkflowActive = a.describePlanningWorkflow(ctx, latest.SessionID)
 	}
 
 	sessions, err := a.DAG.ListPlanningSnapshotsForTask(ctx, taskID)
@@ -224,6 +361,56 @@ func (a *API) loadPlanningSnapshots(ctx context.Context, taskID string) (any, []
 		return nil, sessions
 	}
 	return latest, sessions
+}
+
+func (a *API) describePlanningWorkflow(ctx context.Context, sessionID string) (string, bool) {
+	if a.Engine == nil || a.Engine.temporal == nil || strings.TrimSpace(sessionID) == "" {
+		return "", false
+	}
+	desc, err := a.Engine.temporal.DescribeWorkflowExecution(ctx, sessionID, "")
+	if err != nil || desc == nil || desc.WorkflowExecutionInfo == nil {
+		return "", false
+	}
+	status := strings.ToLower(desc.WorkflowExecutionInfo.Status.String())
+	switch desc.WorkflowExecutionInfo.Status {
+	case enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING:
+		return status, true
+	default:
+		return status, false
+	}
+}
+
+func translatePlanningSignal(req planningSignalRequest) (string, string, error) {
+	switch req.Action {
+	case "select":
+		if req.Value == "" {
+			return "", "", fmt.Errorf("select requires value")
+		}
+		return planning.SignalNameSelect, req.Value, nil
+	case "dig":
+		if req.Value == "" {
+			return "", "", fmt.Errorf("dig requires value")
+		}
+		if req.Reason != "" {
+			return planning.SignalNameDig, req.Value + "|" + req.Reason, nil
+		}
+		return planning.SignalNameDig, req.Value, nil
+	case "answer":
+		if req.Value == "" {
+			return "", "", fmt.Errorf("answer requires value")
+		}
+		return planning.SignalNameQuestion, req.Value, nil
+	case "go":
+		return planning.SignalNameGreenlight, "GO", nil
+	case "approve":
+		return planning.SignalNameApproveDecomp, "APPROVED", nil
+	case "realign":
+		return planning.SignalNameGreenlight, "REALIGN", nil
+	case "stop":
+		return planning.SignalNameCancel, req.Reason, nil
+	default:
+		return "", "", fmt.Errorf("unknown planning action %q", req.Action)
+	}
 }
 
 func (a *API) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
