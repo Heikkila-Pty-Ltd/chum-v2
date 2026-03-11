@@ -24,12 +24,21 @@ import (
 type PlanningActivities struct {
 	DAG          dag.TaskStore
 	Decisions    dag.DecisionStore
+	Planning     dag.PlanningStore
 	Config       *config.Config
 	Logger       *slog.Logger
 	AST          *astpkg.Parser
 	BeadsClients map[string]beads.Store
 	ChatSend     notify.ChatSender
 	LLM          llm.Runner
+}
+
+// StorePlanningSnapshotActivity persists the latest planning snapshot for operator visibility.
+func (pa *PlanningActivities) StorePlanningSnapshotActivity(ctx context.Context, snapshot types.PlanningSnapshot) error {
+	if pa.Planning == nil {
+		return nil
+	}
+	return pa.Planning.UpsertPlanningSnapshot(ctx, snapshot)
 }
 
 // ClarifyGoalActivity runs an LLM to extract intent, constraints, and rationale from the task.
@@ -381,9 +390,86 @@ Rules:
 	return decomp.Steps, nil
 }
 
+// BuildPlanSpecActivity turns the selected approach and decomposition into a binding plan artifact.
+func (pa *PlanningActivities) BuildPlanSpecActivity(ctx context.Context, req PlanningRequest, goal ClarifiedGoal, approach ResearchedApproach, steps []types.DecompStep) (*types.PlanSpec, error) {
+	codeContext := pa.buildCodebaseContextForTask(ctx, req.WorkDir, goal.Intent)
+	stepsJSON, err := json.Marshal(steps)
+	if err != nil {
+		return nil, fmt.Errorf("marshal steps: %w", err)
+	}
+
+	prompt := fmt.Sprintf(`You are converting an approved planning direction into an execution contract.
+
+GOAL:
+Intent: %s
+Why: %s
+Constraints: %s
+Raw: %s
+
+SELECTED APPROACH:
+Title: %s
+Description: %s
+Tradeoffs: %s
+Confidence: %.2f
+
+DECOMPOSED STEPS:
+%s
+
+CODEBASE:
+%s
+
+OUTPUT CONTRACT (strict JSON):
+{
+  "problem_statement": "clear statement of the problem being solved",
+  "desired_outcome": "what success looks like when this lands",
+  "expected_pr_outcome": "what the PR should contain and prove",
+  "summary": "one short paragraph tying the plan together",
+  "assumptions": ["assumption 1"],
+  "non_goals": ["explicitly out of scope item"],
+  "risks": ["meaningful risk"],
+  "validation_strategy": ["specific test or verification step"],
+  "steps": [{"title":"...", "description":"...", "acceptance":"...", "estimate_minutes":10}]
+}
+
+Rules:
+- Reuse the decomposed steps exactly unless a step is invalid; do not invent a different execution plan.
+- Non-goals and risks must be concrete, not generic filler.
+- Validation strategy must describe how the change will be tested or verified.
+- Expected PR outcome must describe the code/test delta a reviewer should expect.
+- Output ONLY the JSON object. No commentary.`, goal.Intent, goal.Why, strings.Join(goal.Constraints, ", "), goal.Raw, approach.Title, approach.Description, approach.Tradeoffs, approach.Confidence, string(stepsJSON), codeContext)
+
+	result, err := pa.LLM.Plan(ctx, req.Agent, req.Model, req.WorkDir, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("build plan spec CLI: %w", err)
+	}
+
+	jsonStr := llm.ExtractJSON(result.Output)
+	if jsonStr == "" {
+		return nil, fmt.Errorf("plan spec produced no JSON")
+	}
+
+	var spec types.PlanSpec
+	if err := json.Unmarshal([]byte(jsonStr), &spec); err != nil {
+		return nil, fmt.Errorf("parse plan spec: %w", err)
+	}
+	spec.Goal = toPlanningGoal(goal)
+	spec.ChosenApproach = toPlanningApproach(approach)
+	if len(spec.Steps) == 0 {
+		spec.Steps = append(spec.Steps, steps...)
+	}
+
+	if err := validatePlanSpec(spec); err != nil {
+		return nil, err
+	}
+	return &spec, nil
+}
+
 // CreatePlanSubtasksActivity creates DAG tasks from planning decomposition steps.
 func (pa *PlanningActivities) CreatePlanSubtasksActivity(ctx context.Context, req PlanningRequest, steps []types.DecompStep) ([]string, error) {
 	logger := activity.GetLogger(ctx)
+	if err := validateDecompSteps(steps); err != nil {
+		return nil, err
+	}
 
 	requiresBeads := pa.Config != nil &&
 		pa.Config.BeadsBridge.Enabled &&
@@ -587,6 +673,85 @@ func (pa *PlanningActivities) beadsClient(project string) beads.Store {
 func planningIngressRequiresBeads(policy string) bool {
 	p := strings.ToLower(strings.TrimSpace(policy))
 	return p != "" && p != "legacy"
+}
+
+func toPlanningGoal(goal ClarifiedGoal) types.PlanningGoal {
+	return types.PlanningGoal{
+		Intent:      goal.Intent,
+		Constraints: append([]string{}, goal.Constraints...),
+		Why:         goal.Why,
+		Raw:         goal.Raw,
+	}
+}
+
+func toPlanningApproach(approach ResearchedApproach) types.PlanningApproach {
+	return types.PlanningApproach{
+		ID:          approach.ID,
+		Title:       approach.Title,
+		Description: approach.Description,
+		Tradeoffs:   approach.Tradeoffs,
+		Confidence:  approach.Confidence,
+		Rank:        approach.Rank,
+		Status:      approach.Status,
+	}
+}
+
+func validatePlanSpec(spec types.PlanSpec) error {
+	switch {
+	case strings.TrimSpace(spec.ProblemStatement) == "":
+		return fmt.Errorf("plan spec invalid: missing problem statement")
+	case strings.TrimSpace(spec.DesiredOutcome) == "":
+		return fmt.Errorf("plan spec invalid: missing desired outcome")
+	case strings.TrimSpace(spec.ExpectedPROutcome) == "":
+		return fmt.Errorf("plan spec invalid: missing expected PR outcome")
+	case strings.TrimSpace(spec.Summary) == "":
+		return fmt.Errorf("plan spec invalid: missing summary")
+	case strings.TrimSpace(spec.ChosenApproach.Title) == "":
+		return fmt.Errorf("plan spec invalid: missing chosen approach")
+	case len(spec.NonGoals) == 0:
+		return fmt.Errorf("plan spec invalid: at least one non-goal is required")
+	case len(spec.Risks) == 0:
+		return fmt.Errorf("plan spec invalid: at least one risk is required")
+	case len(spec.ValidationStrategy) == 0:
+		return fmt.Errorf("plan spec invalid: validation strategy is required")
+	case len(spec.Steps) == 0:
+		return fmt.Errorf("plan spec invalid: at least one execution step is required")
+	}
+
+	for i, step := range spec.Steps {
+		if err := validateDecompStep(step, i+1, "plan spec invalid"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDecompSteps(steps []types.DecompStep) error {
+	if len(steps) == 0 {
+		return fmt.Errorf("plan spec invalid: at least one execution step is required")
+	}
+	for i, step := range steps {
+		if err := validateDecompStep(step, i+1, "subtask creation blocked"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateDecompStep(step types.DecompStep, index int, prefix string) error {
+	switch {
+	case strings.TrimSpace(step.Title) == "":
+		return fmt.Errorf("%s: step %d missing title", prefix, index)
+	case strings.TrimSpace(step.Description) == "":
+		return fmt.Errorf("%s: step %d missing description", prefix, index)
+	case strings.TrimSpace(step.Acceptance) == "":
+		return fmt.Errorf("%s: step %d missing acceptance", prefix, index)
+	case step.Estimate <= 0:
+		return fmt.Errorf("%s: step %d missing estimate", prefix, index)
+	case step.Estimate > 15:
+		return fmt.Errorf("%s: step %d exceeds 15 minute cap", prefix, index)
+	}
+	return nil
 }
 
 func (pa *PlanningActivities) buildCodebaseContext(ctx context.Context, workDir string) string {

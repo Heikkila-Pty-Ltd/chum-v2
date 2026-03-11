@@ -72,6 +72,8 @@ type ceremony struct {
 	approaches       []ResearchedApproach
 	selectedApproach *ResearchedApproach
 	steps            []types.DecompStep
+	planSpec         *types.PlanSpec
+	history          []types.PlanningPhaseEntry
 	researchRound    int
 
 	// Disconnected context for notifications after session timeout.
@@ -182,6 +184,7 @@ func (c *ceremony) drainCancel(ctx workflow.Context) bool {
 func (c *ceremony) cancelledResult() *PlanningResult {
 	return &PlanningResult{
 		GoalID:           c.req.GoalID,
+		PlanSpec:         c.planSpec,
 		Cancelled:        true,
 		CancelReason:     c.cancelReason,
 		Approaches:       c.approaches,
@@ -198,6 +201,8 @@ func (c *ceremony) runAutonomousPhases(ctx workflow.Context) error {
 	goalCtx := workflow.WithActivityOptions(ctx, c.researchOpts)
 	if err := workflow.ExecuteActivity(goalCtx, c.pa.ClarifyGoalActivity, c.req).Get(ctx, &c.goal); err != nil {
 		logger.Error("Goal clarification failed", "error", err)
+		c.cancelReason = "goal_clarification_failed"
+		c.persistSnapshot(ctx, PhaseGoalClarification, "failed", "Goal clarification failed.")
 		c.notify(fmt.Sprintf("Goal clarification failed for %s: %s", c.req.GoalID, err))
 		return phaseError{&PlanningResult{GoalID: c.req.GoalID, Cancelled: true, CancelReason: "goal_clarification_failed"}}
 	}
@@ -210,6 +215,8 @@ func (c *ceremony) runAutonomousPhases(ctx workflow.Context) error {
 	researchCtx := workflow.WithActivityOptions(ctx, c.researchOpts)
 	if err := workflow.ExecuteActivity(researchCtx, c.pa.ResearchApproachesActivity, c.req, c.goal).Get(ctx, &c.approaches); err != nil {
 		logger.Error("Research failed", "error", err)
+		c.cancelReason = "research_failed"
+		c.persistSnapshot(ctx, PhaseResearch, "failed", "Research failed before approaches were produced.")
 		c.notify(fmt.Sprintf("Research failed for %s: %s", c.req.GoalID, err))
 		return phaseError{&PlanningResult{GoalID: c.req.GoalID, Cancelled: true, CancelReason: "research_failed"}}
 	}
@@ -227,6 +234,8 @@ func (c *ceremony) runAutonomousPhases(ctx workflow.Context) error {
 		return phaseError{c.cancelledResult()}
 	}
 
+	c.persistSnapshot(ctx, PhaseGoalCheck, "ready_for_review", "Initial research completed.")
+
 	return nil
 }
 
@@ -242,6 +251,7 @@ func (c *ceremony) storeAndPresent(ctx workflow.Context) {
 
 	summary := formatApproachesSummary(c.req.SessionID, c.goal, c.approaches)
 	c.notify(summary)
+	c.persistSnapshot(ctx, PhasePushApproaches, "awaiting_selection", "Approaches presented for review.")
 
 	// NOTE: we intentionally do NOT drain signals here. Any signals that
 	// arrived during autonomous phases (1-4) represent valid user intent
@@ -287,6 +297,7 @@ func (c *ceremony) runInteractiveCycles(ctx workflow.Context) error {
 	}
 
 	if !handoffReady {
+		c.persistSnapshot(ctx, PhaseCancelled, "max_cycles_reached", "Planning stopped after the maximum number of cycles.")
 		c.notify("Maximum ceremony cycles reached. Planning session ending.")
 		return phaseError{&PlanningResult{GoalID: c.req.GoalID, Approaches: c.approaches, SelectedApproach: c.selectedApproach}}
 	}
@@ -324,6 +335,7 @@ func (c *ceremony) interactiveSelect(ctx workflow.Context, cycle int) error {
 					c.selectedApproach = &picked
 					found = true
 					logger.Info("Approach selected", "ID", c.approaches[i].ID, "Title", c.approaches[i].Title)
+					c.persistSnapshot(ctx, PhaseInteractive, "approach_selected", "An approach has been selected for decomposition.")
 					c.notify(fmt.Sprintf("Selected approach %d: %s\nSend `/plan go` to greenlight decomposition, or `/plan dig %s` for deeper research.",
 						c.approaches[i].Rank, c.approaches[i].Title, c.approaches[i].ID))
 					break
@@ -409,7 +421,9 @@ func (c *ceremony) interactiveSelect(ctx workflow.Context, cycle int) error {
 			if decision == "REALIGN" {
 				logger.Info("User requested realignment")
 				c.selectedApproach = nil
+				c.planSpec = nil
 				c.researchRound = 0
+				c.persistSnapshot(ctx, PhaseInteractive, "needs_realign", "User requested realignment before decomposition.")
 				c.notify("Realigning. Selection cleared — use `/plan dig <id>` to research further, then `/plan select <id>` and `/plan go`.")
 				return
 			}
@@ -464,11 +478,24 @@ func (c *ceremony) decompose(ctx workflow.Context) error {
 	decompCtx := workflow.WithActivityOptions(ctx, c.researchOpts)
 	if err := workflow.ExecuteActivity(decompCtx, c.pa.DecomposeApproachActivity, c.req, *c.selectedApproach).Get(ctx, &c.steps); err != nil {
 		logger.Error("Decomposition failed", "error", err)
+		c.planSpec = nil
+		c.persistSnapshot(ctx, PhaseDecompose, "failed", "Decomposition failed and returned to selection.")
 		c.notify(fmt.Sprintf("Decomposition failed: %s\nReturning to approach selection. Use `/plan go` to retry or `/plan select <id>` to pick a different approach.", err))
 		return fmt.Errorf("decomposition failed")
 	}
 
+	var planSpec types.PlanSpec
+	if err := workflow.ExecuteActivity(decompCtx, c.pa.BuildPlanSpecActivity, c.req, c.goal, *c.selectedApproach, c.steps).Get(ctx, &planSpec); err != nil {
+		logger.Error("Plan spec build failed", "error", err)
+		c.planSpec = nil
+		c.persistSnapshot(ctx, PhaseDecompose, "failed", "PlanSpec validation failed and blocked handoff.")
+		c.notify(fmt.Sprintf("Plan contract failed validation: %s\nReturning to approach selection.", err))
+		return fmt.Errorf("plan spec build failed")
+	}
+	c.planSpec = &planSpec
+
 	decompSummary := formatDecompSummary(c.selectedApproach.Title, c.steps)
+	c.persistSnapshot(ctx, PhaseApproveDecomp, "awaiting_approval", "Decomposition and PlanSpec are ready for approval.")
 	c.notify(decompSummary + "\n\nSend `/plan approve` to create subtasks or `/plan realign` to go back.")
 	return nil
 }
@@ -502,6 +529,8 @@ func (c *ceremony) approveDecomp(ctx workflow.Context) (bool, error) {
 				approved = true
 			} else {
 				rejected = true
+				c.planSpec = nil
+				c.persistSnapshot(ctx, PhaseApproveDecomp, "rejected", "User rejected the current decomposition.")
 			}
 		})
 
@@ -541,14 +570,20 @@ func (c *ceremony) handoff(ctx workflow.Context) (*PlanningResult, error) {
 		// Non-fatal — continue with handoff even if decision recording fails.
 	}
 
+	c.persistSnapshot(ctx, PhaseHandoff, "creating_subtasks", "Decision recorded; creating subtasks.")
 	handoffCtx := workflow.WithActivityOptions(ctx, c.shortOpts)
 	var subtaskIDs []string
 	if err := workflow.ExecuteActivity(handoffCtx, c.pa.CreatePlanSubtasksActivity, c.req, c.steps).Get(ctx, &subtaskIDs); err != nil {
 		logger.Error("Failed to create subtasks", "error", err)
+		c.persistSnapshot(ctx, PhaseHandoff, "failed", "Subtask creation failed.")
 		c.notify(fmt.Sprintf("Failed to create subtasks: %s", err))
-		return &PlanningResult{GoalID: c.req.GoalID, Approaches: c.approaches, SelectedApproach: c.selectedApproach, DecisionID: decisionID, Cancelled: true, CancelReason: "subtask_creation_failed"}, nil
+		return &PlanningResult{GoalID: c.req.GoalID, Approaches: c.approaches, SelectedApproach: c.selectedApproach, DecisionID: decisionID, PlanSpec: c.planSpec, Cancelled: true, CancelReason: "subtask_creation_failed"}, nil
 	}
 
+	c.persistSnapshot(ctx, PhaseCompleted, "completed", "Planning approved and subtasks created.", func(snapshot *types.PlanningSnapshot) {
+		snapshot.DecisionID = decisionID
+		snapshot.SubtaskIDs = append([]string{}, subtaskIDs...)
+	})
 	c.notify(fmt.Sprintf("Planning complete. %d subtasks created for approach: %s\nSubtask IDs: %s",
 		len(subtaskIDs), c.selectedApproach.Title, strings.Join(subtaskIDs, ", ")))
 
@@ -558,7 +593,49 @@ func (c *ceremony) handoff(ctx workflow.Context) (*PlanningResult, error) {
 		SubtaskIDs:       subtaskIDs,
 		Approaches:       c.approaches,
 		DecisionID:       decisionID,
+		PlanSpec:         c.planSpec,
 	}, nil
+}
+
+func (c *ceremony) persistSnapshot(ctx workflow.Context, phase Phase, status, note string, mutations ...func(*types.PlanningSnapshot)) {
+	c.history = append(c.history, types.PlanningPhaseEntry{
+		Phase:     string(phase),
+		Status:    status,
+		Note:      note,
+		Timestamp: workflow.Now(ctx).Unix(),
+	})
+
+	snapshot := types.PlanningSnapshot{
+		SessionID:    c.req.SessionID,
+		GoalID:       c.req.GoalID,
+		Project:      c.req.Project,
+		Source:       c.req.Source,
+		Phase:        string(phase),
+		Status:       status,
+		CancelReason: c.cancelReason,
+		Goal:         toPlanningGoal(c.goal),
+		Approaches:   make([]types.PlanningApproach, 0, len(c.approaches)),
+		Steps:        append([]types.DecompStep{}, c.steps...),
+		SubtaskIDs:   []string{},
+		History:      append([]types.PlanningPhaseEntry{}, c.history...),
+	}
+	if c.planSpec != nil {
+		specCopy := *c.planSpec
+		snapshot.PlanSpec = &specCopy
+	}
+	if c.selectedApproach != nil {
+		selected := toPlanningApproach(*c.selectedApproach)
+		snapshot.SelectedApproach = &selected
+	}
+	for _, approach := range c.approaches {
+		snapshot.Approaches = append(snapshot.Approaches, toPlanningApproach(approach))
+	}
+	for _, mutate := range mutations {
+		mutate(&snapshot)
+	}
+
+	storeCtx := workflow.WithActivityOptions(ctx, c.shortOpts)
+	_ = workflow.ExecuteActivity(storeCtx, c.pa.StorePlanningSnapshotActivity, snapshot).Get(storeCtx, nil)
 }
 
 // --- Formatting helpers ---

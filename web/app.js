@@ -101,6 +101,95 @@ const App = (() => {
     return s.length > n ? s.slice(0, n) + '\u2026' : s;
   }
 
+  function renderTextList(items) {
+    if (!items || items.length === 0) return '';
+    return `<ul class="panel-dep-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
+  }
+
+  function renderPlanningSection(planning, sessions) {
+    if (!planning || !planning.session_id) return '';
+
+    const history = planning.history || [];
+    const spec = planning.plan_spec || null;
+    const selected = planning.selected_approach || null;
+    const sessionCount = sessions && sessions.length ? sessions.length : 1;
+
+    let html = `
+      <div class="panel-section">
+        <div class="panel-section-label">Planning (${sessionCount} session${sessionCount === 1 ? '' : 's'})</div>
+        <div class="panel-description">
+          <strong>${escapeHtml(planning.phase || 'unknown')}</strong> · ${escapeHtml(planning.status || 'unknown')}
+          ${planning.updated_at ? ` · updated ${escapeHtml(timeAgo(planning.updated_at))}` : ''}
+        </div>
+      </div>
+    `;
+
+    if (planning.goal && planning.goal.intent) {
+      html += `
+        <div class="panel-section">
+          <div class="panel-section-label">Clarified Goal</div>
+          <div class="panel-description">${escapeHtml(planning.goal.intent)}</div>
+          ${planning.goal.why ? `<div class="panel-description" style="margin-top:6px;color:var(--text-secondary)">Why: ${escapeHtml(planning.goal.why)}</div>` : ''}
+        </div>
+      `;
+    }
+
+    if (selected) {
+      html += `
+        <div class="panel-section">
+          <div class="panel-section-label">Chosen Approach</div>
+          <div class="panel-description"><strong>${escapeHtml(selected.title)}</strong></div>
+          <div class="panel-description">${escapeHtml(selected.description || '')}</div>
+          ${selected.tradeoffs ? `<div class="panel-description" style="margin-top:6px;color:var(--text-secondary)">Tradeoffs: ${escapeHtml(selected.tradeoffs)}</div>` : ''}
+        </div>
+      `;
+    }
+
+    if (spec) {
+      html += `
+        <div class="panel-section">
+          <div class="panel-section-label">Plan Contract</div>
+          <div class="panel-description">${escapeHtml(spec.summary || '')}</div>
+          ${spec.expected_pr_outcome ? `<div class="panel-description" style="margin-top:6px;color:var(--text-secondary)">PR outcome: ${escapeHtml(spec.expected_pr_outcome)}</div>` : ''}
+        </div>
+      `;
+
+      if (spec.validation_strategy && spec.validation_strategy.length > 0) {
+        html += `
+          <div class="panel-section">
+            <div class="panel-section-label">Validation Strategy</div>
+            ${renderTextList(spec.validation_strategy)}
+          </div>
+        `;
+      }
+
+      if (spec.risks && spec.risks.length > 0) {
+        html += `
+          <div class="panel-section">
+            <div class="panel-section-label">Risks</div>
+            ${renderTextList(spec.risks)}
+          </div>
+        `;
+      }
+    }
+
+    if (history.length > 0) {
+      html += `
+        <div class="panel-section">
+          <div class="panel-section-label">Phase History</div>
+          ${history.map(entry => `
+            <div style="font-size:11px;color:var(--text-secondary);padding:2px 0">
+              <strong>${escapeHtml(entry.phase)}</strong> · ${escapeHtml(entry.status)}
+              ${entry.note ? ` · ${escapeHtml(entry.note)}` : ''}
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    return html;
+  }
+
   // --- Router ---
   const views = {};
 
@@ -261,6 +350,8 @@ const App = (() => {
         </div>
       `;
     }
+
+    html += renderPlanningSection(data.planning, data.planning_sessions);
 
     return html;
   }

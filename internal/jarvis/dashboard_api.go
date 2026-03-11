@@ -1,6 +1,7 @@
 package jarvis
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -178,15 +179,51 @@ func (a *API) handleDashboardTask(w http.ResponseWriter, r *http.Request) {
 		lessons = []store.StoredLesson{}
 	}
 
+	planning, sessions := a.loadPlanningSnapshots(r.Context(), taskID)
+
 	a.jsonOK(w, map[string]any{
-		"task":         task,
-		"dependencies": deps,
-		"dependents":   dependents,
-		"targets":      targets,
-		"decisions":    decs,
-		"traces":       traces,
-		"lessons":      lessons,
+		"task":              task,
+		"dependencies":      deps,
+		"dependents":        dependents,
+		"targets":           targets,
+		"decisions":         decs,
+		"planning":          planning,
+		"planning_sessions": sessions,
+		"traces":            traces,
+		"lessons":           lessons,
 	})
+}
+
+func (a *API) handleDashboardPlanning(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskID")
+	if _, err := a.DAG.GetTask(r.Context(), taskID); err != nil {
+		a.jsonError(w, "task not found", http.StatusNotFound)
+		return
+	}
+
+	planning, sessions := a.loadPlanningSnapshots(r.Context(), taskID)
+	a.jsonOK(w, map[string]any{
+		"task_id":  taskID,
+		"planning": planning,
+		"sessions": sessions,
+	})
+}
+
+func (a *API) loadPlanningSnapshots(ctx context.Context, taskID string) (any, []dag.PlanningSnapshot) {
+	latest, err := a.DAG.GetLatestPlanningSnapshotForTask(ctx, taskID)
+	if err != nil {
+		latest = dag.PlanningSnapshot{}
+	}
+
+	sessions, err := a.DAG.ListPlanningSnapshotsForTask(ctx, taskID)
+	if err != nil || sessions == nil {
+		sessions = []dag.PlanningSnapshot{}
+	}
+
+	if latest.SessionID == "" {
+		return nil, sessions
+	}
+	return latest, sessions
 }
 
 func (a *API) handleDashboardStats(w http.ResponseWriter, r *http.Request) {

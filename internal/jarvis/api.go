@@ -37,6 +37,7 @@ func (a *API) Handler() http.Handler {
 		mux.HandleFunc("GET /api/dashboard/graph/{project}", a.handleDashboardGraph)
 		mux.HandleFunc("GET /api/dashboard/tasks/{project}", a.handleDashboardTasks)
 		mux.HandleFunc("GET /api/dashboard/task/{taskID}", a.handleDashboardTask)
+		mux.HandleFunc("GET /api/dashboard/planning/{taskID}", a.handleDashboardPlanning)
 		mux.HandleFunc("GET /api/dashboard/stats/{project}", a.handleDashboardStats)
 		mux.HandleFunc("GET /api/dashboard/timeline/{project}", a.handleDashboardTimeline)
 		mux.HandleFunc("GET /api/dashboard/tree/{project}", a.handleDashboardTree)

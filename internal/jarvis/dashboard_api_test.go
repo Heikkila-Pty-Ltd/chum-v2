@@ -10,6 +10,7 @@ import (
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/engine"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 	"github.com/stretchr/testify/mock"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
@@ -162,6 +163,26 @@ func TestDashboardTaskDetail(t *testing.T) {
 	ctx := context.Background()
 
 	id, _ := d.CreateTask(ctx, dag.Task{Title: "Detail test", Project: "chum", Status: "ready"})
+	if err := d.UpsertPlanningSnapshot(ctx, dag.PlanningSnapshot{
+		SessionID: "plan-1",
+		GoalID:    id,
+		Project:   "chum",
+		Phase:     "approve_decomposition",
+		Status:    "awaiting_approval",
+		PlanSpec: &types.PlanSpec{
+			ProblemStatement:   "Planning is opaque",
+			DesiredOutcome:     "Show the plan",
+			ExpectedPROutcome:  "Add dashboard planning visibility",
+			Summary:            "Persist and expose a plan spec.",
+			ChosenApproach:     types.PlanningApproach{Title: "Persist snapshot"},
+			NonGoals:           []string{"Rewrite the planner"},
+			Risks:              []string{"API drift"},
+			ValidationStrategy: []string{"Dashboard API test"},
+			Steps:              []types.DecompStep{{Title: "Add API", Description: "Expose planning", Acceptance: "Endpoint returns planning", Estimate: 10}},
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlanningSnapshot: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/task/"+id, nil)
 	w := httptest.NewRecorder()
@@ -177,6 +198,10 @@ func TestDashboardTaskDetail(t *testing.T) {
 		Dependents   []string `json:"dependents"`
 		Targets      []any    `json:"targets"`
 		Decisions    []any    `json:"decisions"`
+		Planning     *struct {
+			SessionID string `json:"session_id"`
+		} `json:"planning"`
+		PlanningSessions []any `json:"planning_sessions"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -186,6 +211,57 @@ func TestDashboardTaskDetail(t *testing.T) {
 	}
 	if result.Dependencies == nil {
 		t.Error("dependencies should be empty array, not null")
+	}
+	if result.Planning == nil || result.Planning.SessionID != "plan-1" {
+		t.Fatalf("expected planning snapshot in task detail, got %+v", result.Planning)
+	}
+	if len(result.PlanningSessions) != 1 {
+		t.Fatalf("expected 1 planning session, got %d", len(result.PlanningSessions))
+	}
+}
+
+func TestDashboardPlanningEndpoint(t *testing.T) {
+	api, d := testDashboardAPI(t)
+	ctx := context.Background()
+
+	id, _ := d.CreateTask(ctx, dag.Task{Title: "Planning endpoint", Project: "chum", Status: "ready"})
+	if err := d.UpsertPlanningSnapshot(ctx, dag.PlanningSnapshot{
+		SessionID: "plan-2",
+		GoalID:    id,
+		Project:   "chum",
+		Phase:     "completed",
+		Status:    "completed",
+		History:   []types.PlanningPhaseEntry{{Phase: "completed", Status: "completed", Note: "done"}},
+	}); err != nil {
+		t.Fatalf("UpsertPlanningSnapshot: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/dashboard/planning/"+id, nil)
+	w := httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	var result struct {
+		TaskID   string `json:"task_id"`
+		Planning *struct {
+			SessionID string `json:"session_id"`
+		} `json:"planning"`
+		Sessions []any `json:"sessions"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result.TaskID != id {
+		t.Fatalf("task_id = %q, want %q", result.TaskID, id)
+	}
+	if result.Planning == nil || result.Planning.SessionID != "plan-2" {
+		t.Fatalf("expected latest planning snapshot, got %+v", result.Planning)
+	}
+	if len(result.Sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(result.Sessions))
 	}
 }
 

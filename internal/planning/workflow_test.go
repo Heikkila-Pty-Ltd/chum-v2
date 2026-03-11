@@ -29,6 +29,28 @@ func baseRequest() PlanningRequest {
 	}
 }
 
+func defaultPlanSpec() types.PlanSpec {
+	return types.PlanSpec{
+		ProblemStatement:   "Planning is opaque",
+		DesiredOutcome:     "A reviewable plan",
+		ExpectedPROutcome:  "Add plan storage and API output",
+		Summary:            "Persist and surface a validated plan before execution.",
+		ChosenApproach:     types.PlanningApproach{Title: "Persist PlanSpec"},
+		NonGoals:           []string{"Rewriting the entire planner"},
+		Risks:              []string{"Schema drift"},
+		ValidationStrategy: []string{"Run focused workflow and API tests"},
+		Steps:              []types.DecompStep{{Title: "Persist plan", Description: "Store snapshot", Acceptance: "Readable via API", Estimate: 10}},
+	}
+}
+
+func mockPlanningPersistence(env *testsuite.TestWorkflowEnvironment, pa *PlanningActivities, includePlanSpec bool) {
+	env.OnActivity(pa.StorePlanningSnapshotActivity, mock.Anything, mock.Anything).Return(nil)
+	if includePlanSpec {
+		spec := defaultPlanSpec()
+		env.OnActivity(pa.BuildPlanSpecActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&spec, nil)
+	}
+}
+
 // TestPlanningWorkflow_HappyPath exercises the full ceremony:
 // clarify → research → goal check → present → select → greenlight → decompose → approve → handoff.
 func TestPlanningWorkflow_HappyPath(t *testing.T) {
@@ -60,6 +82,7 @@ func TestPlanningWorkflow_HappyPath(t *testing.T) {
 	env.OnActivity(pa.StoreApproachesActivity, mock.Anything, mock.Anything, mock.Anything).Return(approaches, nil)
 	env.OnActivity(pa.NotifyChatActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(pa.DecomposeApproachActivity, mock.Anything, mock.Anything, mock.Anything).Return(steps, nil)
+	mockPlanningPersistence(env, pa, true)
 	env.OnActivity(pa.RecordPlanningDecisionActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("dec-1", nil)
 	env.OnActivity(pa.RecordPlanningDecisionActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("dec-1", nil)
 	env.OnActivity(pa.CreatePlanSubtasksActivity, mock.Anything, mock.Anything, mock.Anything).Return([]string{"sub-1", "sub-2"}, nil)
@@ -92,6 +115,7 @@ func TestPlanningWorkflow_HappyPath(t *testing.T) {
 	require.Len(t, result.SubtaskIDs, 2)
 	require.Equal(t, []string{"sub-1", "sub-2"}, result.SubtaskIDs)
 	require.Equal(t, "dec-1", result.DecisionID)
+	require.NotNil(t, result.PlanSpec)
 	require.False(t, result.Cancelled)
 }
 
@@ -114,6 +138,7 @@ func TestPlanningWorkflow_CancelDuringResearch(t *testing.T) {
 	env.OnActivity(pa.GoalCheckActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(approaches, nil)
 	env.OnActivity(pa.StoreApproachesActivity, mock.Anything, mock.Anything, mock.Anything).Return(approaches, nil)
 	env.OnActivity(pa.NotifyChatActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockPlanningPersistence(env, pa, false)
 
 	// Cancel before interactive phase starts
 	env.RegisterDelayedCallback(func() {
@@ -142,6 +167,7 @@ func TestPlanningWorkflow_GoalClarificationFailure(t *testing.T) {
 
 	env.OnActivity(pa.ClarifyGoalActivity, mock.Anything, mock.Anything).Return((*ClarifiedGoal)(nil), errMock("goal clarification exploded"))
 	env.OnActivity(pa.NotifyChatActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockPlanningPersistence(env, pa, false)
 
 	env.ExecuteWorkflow(PlanningWorkflow, baseRequest(), defaultCfg)
 
@@ -179,6 +205,7 @@ func TestPlanningWorkflow_DecompRejected_ReturnsToSelection(t *testing.T) {
 	env.OnActivity(pa.StoreApproachesActivity, mock.Anything, mock.Anything, mock.Anything).Return(approaches, nil)
 	env.OnActivity(pa.NotifyChatActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(pa.DecomposeApproachActivity, mock.Anything, mock.Anything, mock.Anything).Return(steps, nil)
+	mockPlanningPersistence(env, pa, true)
 	env.OnActivity(pa.RecordPlanningDecisionActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("dec-1", nil)
 	env.OnActivity(pa.CreatePlanSubtasksActivity, mock.Anything, mock.Anything, mock.Anything).Return([]string{"sub-1"}, nil)
 
@@ -250,6 +277,7 @@ func TestPlanningWorkflow_DeeperResearch(t *testing.T) {
 	env.OnActivity(pa.DeeperResearchActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(&updatedApproach, nil)
 	env.OnActivity(pa.NotifyChatActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(pa.DecomposeApproachActivity, mock.Anything, mock.Anything, mock.Anything).Return(steps, nil)
+	mockPlanningPersistence(env, pa, true)
 	env.OnActivity(pa.RecordPlanningDecisionActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("dec-1", nil)
 	env.OnActivity(pa.CreatePlanSubtasksActivity, mock.Anything, mock.Anything, mock.Anything).Return([]string{"sub-1"}, nil)
 
@@ -306,6 +334,7 @@ func TestPlanningWorkflow_QuestionAnswer(t *testing.T) {
 	env.OnActivity(pa.AnswerQuestionActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("Redis is better for this use case because...", nil)
 	env.OnActivity(pa.NotifyChatActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(pa.DecomposeApproachActivity, mock.Anything, mock.Anything, mock.Anything).Return(steps, nil)
+	mockPlanningPersistence(env, pa, true)
 	env.OnActivity(pa.RecordPlanningDecisionActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("dec-1", nil)
 	env.OnActivity(pa.CreatePlanSubtasksActivity, mock.Anything, mock.Anything, mock.Anything).Return([]string{"sub-1"}, nil)
 
@@ -362,6 +391,7 @@ func TestPlanningWorkflow_NoRoomID(t *testing.T) {
 	env.OnActivity(pa.GoalCheckActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(approaches, nil)
 	env.OnActivity(pa.StoreApproachesActivity, mock.Anything, mock.Anything, mock.Anything).Return(approaches, nil)
 	env.OnActivity(pa.DecomposeApproachActivity, mock.Anything, mock.Anything, mock.Anything).Return(steps, nil)
+	mockPlanningPersistence(env, pa, true)
 	env.OnActivity(pa.RecordPlanningDecisionActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("dec-1", nil)
 	env.OnActivity(pa.CreatePlanSubtasksActivity, mock.Anything, mock.Anything, mock.Anything).Return([]string{"sub-1"}, nil)
 	// NotifyChatActivity should NOT be called since RoomID is empty
@@ -413,6 +443,7 @@ func TestPlanningWorkflow_Realign(t *testing.T) {
 	env.OnActivity(pa.StoreApproachesActivity, mock.Anything, mock.Anything, mock.Anything).Return(approaches, nil)
 	env.OnActivity(pa.NotifyChatActivity, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(pa.DecomposeApproachActivity, mock.Anything, mock.Anything, mock.Anything).Return(steps, nil)
+	mockPlanningPersistence(env, pa, true)
 	env.OnActivity(pa.RecordPlanningDecisionActivity, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("dec-1", nil)
 	env.OnActivity(pa.CreatePlanSubtasksActivity, mock.Anything, mock.Anything, mock.Anything).Return([]string{"sub-1"}, nil)
 

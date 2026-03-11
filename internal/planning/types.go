@@ -5,6 +5,8 @@ package planning
 
 import (
 	"time"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
 
 // PlanningRequest is the input to the PlanningWorkflow.
@@ -60,6 +62,7 @@ type PlanningResult struct {
 	SelectedApproach *ResearchedApproach  `json:"selected_approach"`
 	SubtaskIDs       []string             `json:"subtask_ids"`
 	DecisionID       string               `json:"decision_id,omitempty"`
+	PlanSpec         *types.PlanSpec      `json:"plan_spec,omitempty"`
 	Cancelled        bool                 `json:"cancelled"`
 	CancelReason     string               `json:"cancel_reason"`
 	Approaches       []ResearchedApproach `json:"approaches"`

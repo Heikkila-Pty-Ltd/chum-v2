@@ -179,6 +179,7 @@ func registerPlanningWorkflows(w worker.Worker, d *dag.DAG, cfg *config.Config,
 	pa := &planning.PlanningActivities{
 		DAG:          d,
 		Decisions:    d,
+		Planning:     d,
 		Config:       cfg,
 		Logger:       logger,
 		AST:          parser,
@@ -193,8 +194,10 @@ func registerPlanningWorkflows(w worker.Worker, d *dag.DAG, cfg *config.Config,
 	w.RegisterActivity(pa.DeeperResearchActivity)
 	w.RegisterActivity(pa.AnswerQuestionActivity)
 	w.RegisterActivity(pa.DecomposeApproachActivity)
+	w.RegisterActivity(pa.BuildPlanSpecActivity)
 	w.RegisterActivity(pa.CreatePlanSubtasksActivity)
 	w.RegisterActivity(pa.RecordPlanningDecisionActivity)
+	w.RegisterActivity(pa.StorePlanningSnapshotActivity)
 	w.RegisterActivity(pa.NotifyChatActivity)
 }
 

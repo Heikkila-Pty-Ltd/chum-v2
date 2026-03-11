@@ -44,6 +44,15 @@ type DecisionStore interface {
 	UpdateAlternativeUCT(ctx context.Context, id string, score float64, visits int, reward float64) error
 }
 
-// Verify *DAG satisfies TaskStore and DecisionStore at compile time.
+// PlanningStore persists reviewable planning artifacts and phase snapshots.
+type PlanningStore interface {
+	UpsertPlanningSnapshot(ctx context.Context, snapshot PlanningSnapshot) error
+	GetPlanningSnapshot(ctx context.Context, sessionID string) (PlanningSnapshot, error)
+	GetLatestPlanningSnapshotForTask(ctx context.Context, taskID string) (PlanningSnapshot, error)
+	ListPlanningSnapshotsForTask(ctx context.Context, taskID string) ([]PlanningSnapshot, error)
+}
+
+// Verify *DAG satisfies TaskStore, DecisionStore, and PlanningStore at compile time.
 var _ TaskStore = (*DAG)(nil)
 var _ DecisionStore = (*DAG)(nil)
+var _ PlanningStore = (*DAG)(nil)

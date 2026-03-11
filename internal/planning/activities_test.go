@@ -11,6 +11,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 	"go.temporal.io/sdk/testsuite"
 
@@ -21,6 +22,19 @@ type planningStubBeadsStore struct {
 	createIDs   []string
 	createCalls int
 	closeCalls  int
+}
+
+type planningStubRunner struct {
+	planResult *llm.CLIResult
+	planErr    error
+}
+
+func (r planningStubRunner) Plan(context.Context, string, string, string, string) (*llm.CLIResult, error) {
+	return r.planResult, r.planErr
+}
+
+func (planningStubRunner) Exec(context.Context, string, string, string, string) (*llm.CLIResult, error) {
+	return nil, nil
 }
 
 func (s *planningStubBeadsStore) List(_ context.Context, _ int) ([]beads.Issue, error) {
@@ -188,5 +202,64 @@ func TestCreatePlanSubtasksActivity_LegacyIngressFallsBackToDAGOnlySubtasks(t *t
 		if _, err := d.GetBeadsMappingByTask(ctx, "proj", id); err == nil || !dag.IsNoRows(err) {
 			t.Fatalf("expected no beads mapping for legacy planning subtask %s, got err=%v", id, err)
 		}
+	}
+}
+
+func TestBuildPlanSpecActivity_RejectsIncompleteContract(t *testing.T) {
+	t.Parallel()
+
+	pa := &PlanningActivities{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		LLM: planningStubRunner{
+			planResult: &llm.CLIResult{
+				Output: `{"problem_statement":"Improve planning","desired_outcome":"Visible planning","summary":"Too vague","non_goals":[],"risks":[],"validation_strategy":[],"steps":[{"title":"One","description":"Do it","acceptance":"Done","estimate_minutes":20}]}`,
+			},
+		},
+	}
+
+	_, err := pa.BuildPlanSpecActivity(context.Background(), PlanningRequest{Agent: "codex"}, ClarifiedGoal{
+		Intent: "Improve planning visibility",
+	}, ResearchedApproach{
+		ID: "a-1", Title: "Persist snapshots", Description: "Store plan state",
+	}, []types.DecompStep{{Title: "Persist", Description: "Store snapshot", Acceptance: "Saved", Estimate: 10}})
+	if err == nil {
+		t.Fatal("expected invalid plan spec to fail")
+	}
+	if !strings.Contains(err.Error(), "plan spec invalid") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildPlanSpecActivity_FillsSharedFields(t *testing.T) {
+	t.Parallel()
+
+	pa := &PlanningActivities{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		LLM: planningStubRunner{
+			planResult: &llm.CLIResult{
+				Output: `{"problem_statement":"Planning is opaque","desired_outcome":"A visible contract","expected_pr_outcome":"Adds DB storage and API output","summary":"Persist a binding plan artifact before execution.","assumptions":["The goal task already exists"],"non_goals":["Redesigning Temporal"],"risks":["Schema drift"],"validation_strategy":["Run focused go tests"],"steps":[{"title":"Persist snapshot","description":"Add storage","acceptance":"Snapshot can be read back","estimate_minutes":10}]}`,
+			},
+		},
+	}
+
+	spec, err := pa.BuildPlanSpecActivity(context.Background(), PlanningRequest{Agent: "codex"}, ClarifiedGoal{
+		Intent:      "Improve planning visibility",
+		Constraints: []string{"Use existing DAG DB"},
+		Why:         "Operators need reviewable plans",
+		Raw:         "make planning visible",
+	}, ResearchedApproach{
+		ID: "a-1", Title: "Persist snapshots", Description: "Store plan state", Tradeoffs: "More schema",
+	}, []types.DecompStep{{Title: "Persist snapshot", Description: "Add storage", Acceptance: "Readable", Estimate: 10}})
+	if err != nil {
+		t.Fatalf("BuildPlanSpecActivity: %v", err)
+	}
+	if spec.Goal.Intent != "Improve planning visibility" {
+		t.Fatalf("Goal.Intent = %q", spec.Goal.Intent)
+	}
+	if spec.ChosenApproach.Title != "Persist snapshots" {
+		t.Fatalf("ChosenApproach.Title = %q", spec.ChosenApproach.Title)
+	}
+	if len(spec.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(spec.Steps))
 	}
 }
