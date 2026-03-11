@@ -3,24 +3,36 @@ package llm
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"strings"
+	"os/exec"
 )
 
 // StreamChunk represents a piece of streaming LLM output.
 type StreamChunk struct {
-	Text string // incremental text line
+	Text string // incremental text token
 	Done bool   // true on final chunk
 }
 
-// RunCLIStream executes an LLM CLI in plan mode, streaming stdout line-by-line
-// to the provided channel. The channel is closed when the CLI exits.
-// Uses --print flag which streams to stdout. We read line-by-line and relay.
+// streamEvent represents a JSON line from --output-format stream-json.
+type streamEvent struct {
+	Type  string `json:"type"`
+	Event *struct {
+		Type  string `json:"type"`
+		Delta *struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"delta"`
+	} `json:"event"`
+}
+
+// RunCLIStream executes an LLM CLI in plan mode, streaming token-by-token
+// via --output-format stream-json --include-partial-messages.
 func RunCLIStream(ctx context.Context, agent, model, workDir, prompt string) (<-chan StreamChunk, error) {
-	cmd := BuildPlanCommand(ctx, agent, model, workDir)
-	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE")
+	cmd := buildStreamCommand(ctx, agent, model, workDir)
+	cmd.Env = filterEnv(filterEnv(os.Environ(), "CLAUDECODE"), "CLAUDE_CODE_ENTRYPOINT")
 
 	// Write prompt to temp file and pipe via stdin.
 	tmpFile, err := os.CreateTemp("", "chum-prompt-*.txt")
@@ -64,20 +76,27 @@ func RunCLIStream(ctx context.Context, agent, model, workDir, prompt string) (<-
 		defer stdinFile.Close()
 
 		scanner := bufio.NewScanner(stdout)
-		// Increase buffer for long lines from LLM output.
-		scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
+		// Increase buffer for long JSON lines.
+		scanner.Buffer(make([]byte, 0, 64*1024), 512*1024)
 
 		for scanner.Scan() {
-			line := scanner.Text()
-			// Skip Claude JSON envelope lines (--output-format json wraps the output).
-			if isClaudeEnvelope(line) {
+			line := scanner.Bytes()
+
+			var ev streamEvent
+			if json.Unmarshal(line, &ev) != nil {
 				continue
 			}
-			select {
-			case ch <- StreamChunk{Text: line}:
-			case <-ctx.Done():
-				_ = cmd.Process.Kill()
-				return
+
+			// Extract text deltas from content_block_delta events.
+			if ev.Type == "stream_event" && ev.Event != nil &&
+				ev.Event.Type == "content_block_delta" &&
+				ev.Event.Delta != nil && ev.Event.Delta.Type == "text_delta" {
+				select {
+				case ch <- StreamChunk{Text: ev.Event.Delta.Text}:
+				case <-ctx.Done():
+					_ = cmd.Process.Kill()
+					return
+				}
 			}
 		}
 
@@ -88,8 +107,19 @@ func RunCLIStream(ctx context.Context, agent, model, workDir, prompt string) (<-
 	return ch, nil
 }
 
-// isClaudeEnvelope checks if a line is a Claude CLI JSON envelope wrapper.
-func isClaudeEnvelope(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	return strings.HasPrefix(trimmed, `{"type":"result"`)
+// buildStreamCommand creates a CLI command for token-level streaming.
+func buildStreamCommand(ctx context.Context, agent, model, workDir string) *exec.Cmd {
+	args := []string{
+		"--print",
+		"--output-format", "stream-json",
+		"--verbose",
+		"--include-partial-messages",
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	binary := normalizeCLIName(agent)
+	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Dir = workDir
+	return cmd
 }

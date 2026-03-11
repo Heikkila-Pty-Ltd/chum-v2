@@ -175,7 +175,7 @@ func (a *API) handlePlanGroom(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	// 6. Stream LLM response.
-	chunks, err := llm.RunCLIStream(r.Context(), "claude", "claude-sonnet-4-5-20250514", ".", prompt)
+	chunks, err := llm.RunCLIStream(r.Context(), "claude", "", ".", prompt)
 	if err != nil {
 		fmt.Fprintf(w, "event: error\ndata: %s\n\n", mustJSON(map[string]string{"error": err.Error()}))
 		flusher.Flush()
@@ -202,8 +202,7 @@ func (a *API) handlePlanGroom(w http.ResponseWriter, r *http.Request) {
 				goto done
 			}
 			fullText.WriteString(chunk.Text)
-			fullText.WriteString("\n")
-			fmt.Fprintf(w, "event: chunk\ndata: %s\n\n", mustJSON(map[string]string{"text": chunk.Text + "\n"}))
+			fmt.Fprintf(w, "event: chunk\ndata: %s\n\n", mustJSON(map[string]string{"text": chunk.Text}))
 			flusher.Flush()
 		}
 	}

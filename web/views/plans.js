@@ -41,7 +41,9 @@
     </div>`;
 
     bindShellEvents(viewport, project);
-    loadPlanList(project);
+    loadPlanList(project).then(() => {
+      if (activePlanId) openPlan(activePlanId);
+    });
   }
 
   function bindShellEvents(viewport, project) {
