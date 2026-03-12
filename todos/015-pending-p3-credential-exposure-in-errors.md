@@ -23,3 +23,10 @@ Sanitize command output before including in error messages. Strip known credenti
 - [ ] Error messages do not contain raw command output verbatim
 - [ ] Known credential patterns stripped from error strings
 - [ ] Agent output in errors sanitized or truncated to non-sensitive portions
+
+## Work Log
+
+| Date | Action | Learnings |
+|------|--------|-----------|
+| 2026-03-12 | Identified during security review | Raw gh output and agent output in error messages |
+| 2026-03-12 | Skipped during triage (low risk, internal) | Tracker restored after review flagged deletion |

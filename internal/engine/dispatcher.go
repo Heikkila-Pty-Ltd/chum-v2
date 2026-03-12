@@ -841,16 +841,12 @@ func (da *DispatchActivities) ScanOrphanedReviewsActivity(ctx context.Context) (
 			if merged, err := isPRMerged(ctx, project.Workspace, detail.PRNumber); err == nil && merged {
 				detail.Reason = CloseCompleted
 				detail.SubReason = "completed"
-				closeActivities := &Activities{
-					DAG:          da.DAG,
-					Config:       da.Config,
-					Logger:       da.Logger,
-					BeadsClients: da.BeadsClients,
-				}
-				if err := closeActivities.CloseTaskWithDetailActivity(ctx, t.ID, detail); err != nil {
+				detail, err := closeTask(ctx, da.DAG, t.ID, detail)
+				if err != nil {
 					logger.Warn("Failed to auto-complete merged PR task", "task", t.ID, "pr", detail.PRNumber, "error", err)
 					continue
 				}
+				projectTaskToBeads(ctx, logger, da.DAG, da.Config, da.BeadsClients, t.ID, detail)
 				logger.Info("Auto-completed stale needs_review task with merged PR", "task", t.ID, "pr", detail.PRNumber)
 				continue
 			} else if err != nil {

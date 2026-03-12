@@ -13,6 +13,7 @@ import (
 	"go.temporal.io/sdk/activity"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/ghrate"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
@@ -693,6 +694,11 @@ func parseRepoSlug(remote string) (string, error) {
 }
 
 func runCommand(ctx context.Context, dir, name string, args ...string) (string, error) {
+	if name == "gh" {
+		if err := ghrate.Wait(ctx); err != nil {
+			return "", fmt.Errorf("gh rate limit wait: %w", err)
+		}
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()

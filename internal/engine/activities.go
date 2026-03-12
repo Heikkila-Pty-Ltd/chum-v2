@@ -240,11 +240,22 @@ func (a *Activities) CloseTaskActivity(ctx context.Context, taskID, status strin
 // On completion, writes back status to beads (best-effort).
 func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID string, detail CloseDetail) error {
 	logger := activity.GetLogger(ctx)
+	detail, err := closeTask(ctx, a.DAG, taskID, detail)
+	if err != nil {
+		return err
+	}
+	projectTaskToBeads(ctx, logger, a.DAG, a.Config, a.BeadsClients, taskID, detail)
+	return nil
+}
 
+// closeTask handles DAG persistence: preserves existing PR metadata, marshals
+// the close detail, and updates the task status + error_log. It returns the
+// (potentially enriched) detail for downstream use.
+func closeTask(ctx context.Context, store dag.TaskStore, taskID string, detail CloseDetail) (CloseDetail, error) {
 	// Preserve existing PR linkage on follow-up failures where newer close
 	// payloads omit PR metadata (e.g. exec_failed during resumed review).
 	if detail.PRNumber == 0 || strings.TrimSpace(detail.ReviewURL) == "" {
-		if current, err := a.DAG.GetTask(ctx, taskID); err == nil && strings.TrimSpace(current.ErrorLog) != "" {
+		if current, err := store.GetTask(ctx, taskID); err == nil && strings.TrimSpace(current.ErrorLog) != "" {
 			var prev CloseDetail
 			if err := json.Unmarshal([]byte(current.ErrorLog), &prev); err == nil {
 				if detail.PRNumber == 0 && prev.PRNumber > 0 {
@@ -259,33 +270,39 @@ func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID str
 
 	raw, err := json.Marshal(detail)
 	if err != nil {
-		return fmt.Errorf("marshal close detail: %w", err)
+		return detail, fmt.Errorf("marshal close detail: %w", err)
 	}
-	if err := a.DAG.UpdateTask(ctx, taskID, map[string]any{
+	if err := store.UpdateTask(ctx, taskID, map[string]any{
 		"status":    string(detail.Reason),
 		"error_log": string(raw),
 	}); err != nil {
-		return fmt.Errorf("close task %s: %w", taskID, err)
+		return detail, fmt.Errorf("close task %s: %w", taskID, err)
 	}
+	return detail, nil
+}
 
-	// Writeback to beads (best-effort, non-fatal).
-	// NullStore handles the case where bd is unavailable.
-	task, err := a.DAG.GetTask(ctx, taskID)
+// projectTaskToBeads handles beads bridge outbox projection and legacy direct
+// beads writeback. Best-effort: errors are logged but never returned.
+func projectTaskToBeads(ctx context.Context, logger interface {
+	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
+}, store dag.TaskStore, cfg *config.Config, beadsClients map[string]beads.Store, taskID string, detail CloseDetail) {
+	task, err := store.GetTask(ctx, taskID)
 	if err != nil {
 		logger.Warn("Beads writeback skipped: cannot resolve task project", "taskID", taskID, "error", err)
-		return nil
+		return
 	}
 
 	mappedIssueID := ""
-	if bridgeDAG, ok := a.DAG.(*dag.DAG); ok {
+	if bridgeDAG, ok := store.(*dag.DAG); ok {
 		if mapping, mapErr := bridgeDAG.GetBeadsMappingByTask(ctx, task.Project, taskID); mapErr == nil {
 			mappedIssueID = strings.TrimSpace(mapping.IssueID)
 		}
 	}
 
 	// S6-S8: When bridge mode is enabled, writebacks are projected via durable outbox.
-	if a.Config != nil && a.Config.BeadsBridge.Enabled && !a.Config.BeadsBridge.DryRun {
-		if bridgeDAG, ok := a.DAG.(*dag.DAG); ok {
+	if cfg != nil && cfg.BeadsBridge.Enabled && !cfg.BeadsBridge.DryRun {
+		if bridgeDAG, ok := store.(*dag.DAG); ok {
 			if mappedIssueID != "" {
 				if detail.Reason != CloseDecomposed {
 					if err := beadsbridge.EnqueueTaskTerminal(ctx, bridgeDAG, task.Project, mappedIssueID, taskID,
@@ -298,19 +315,19 @@ func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID str
 						logger.Warn("Bridge outbox enqueue failed", "taskID", taskID, "issueID", mappedIssueID, "error", err)
 					}
 				}
-				return nil
+				return
 			}
 		}
 		logger.Info("Beads writeback skipped: bridge mode requires mapped beads issue",
 			"taskID", taskID,
 			"project", task.Project,
 		)
-		return nil
+		return
 	}
 
-	bc, ok := a.BeadsClients[task.Project]
+	bc, ok := beadsClients[task.Project]
 	if !ok {
-		return nil
+		return
 	}
 	issueID := mappedIssueID
 	if issueID == "" && task.Metadata != nil {
@@ -328,7 +345,7 @@ func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID str
 				"issueID", issueID,
 				"error", showErr,
 			)
-			return nil
+			return
 		}
 	}
 	switch detail.Reason {
@@ -356,7 +373,6 @@ func (a *Activities) CloseTaskWithDetailActivity(ctx context.Context, taskID str
 			logger.Warn("Beads failed writeback failed", "taskID", taskID, "issueID", issueID, "error", err)
 		}
 	}
-	return nil
 }
 
 // --- 7. CleanupWorktreeActivity ---
