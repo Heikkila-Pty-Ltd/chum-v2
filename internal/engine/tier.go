@@ -38,33 +38,6 @@ func TierForEstimate(estimateMinutes int) string {
 	}
 }
 
-// RetriesForTier returns the maximum retry count for a given tier.
-// Cheap models get more chances; expensive models fewer.
-func RetriesForTier(tier string) int {
-	switch tier {
-	case "fast":
-		return 3
-	case "balanced":
-		return 2
-	case "premium":
-		return 1
-	default:
-		return 2
-	}
-}
-
-// NextTier returns the next tier in the escalation chain, or "" if at the top.
-func NextTier(current string) string {
-	switch current {
-	case "fast":
-		return "balanced"
-	case "balanced":
-		return "premium"
-	default:
-		return ""
-	}
-}
-
 // PickProviderForTier selects the first enabled provider from the given tier.
 // Returns (cli, model, providerName) or ("","","") if no provider is available.
 func PickProviderForTier(cfg *config.Config, tier string) (cli, model, name string) {

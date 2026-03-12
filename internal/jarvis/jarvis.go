@@ -114,6 +114,11 @@ func (e *Engine) ingressRequiresBeads() bool {
 	return p != "" && p != "legacy"
 }
 
+// BeadsClient returns the beads store for a project, or nil if unavailable.
+func (e *Engine) BeadsClient(project string) beads.Store {
+	return e.beadsClients[project]
+}
+
 // CanSubmitViaBeads reports whether Submit can route the given project through
 // beads-first ingress under the current policy/configuration.
 func (e *Engine) CanSubmitViaBeads(project string) bool {

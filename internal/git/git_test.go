@@ -357,3 +357,36 @@ func TestPush_NonFastForwardNonChumBranchFails(t *testing.T) {
 		t.Fatalf("error = %v, want non-fast-forward hint", err)
 	}
 }
+
+func TestValidateTaskID(t *testing.T) {
+	t.Parallel()
+
+	valid := []string{
+		"chum-ues.1.2",
+		"task-123",
+		"my_task",
+		"TASK.v2",
+		"a",
+	}
+	for _, id := range valid {
+		if err := ValidateTaskID(id); err != nil {
+			t.Errorf("ValidateTaskID(%q) = %v, want nil", id, err)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"../etc/passwd",
+		"task/../../root",
+		"task id with spaces",
+		"task;rm -rf /",
+		"task$(evil)",
+		"task`cmd`",
+		"task\ninjection",
+	}
+	for _, id := range invalid {
+		if err := ValidateTaskID(id); err == nil {
+			t.Errorf("ValidateTaskID(%q) = nil, want error", id)
+		}
+	}
+}

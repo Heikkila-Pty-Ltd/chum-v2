@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"go.temporal.io/sdk/activity"
 
@@ -234,14 +235,12 @@ func (a *Activities) MergePRActivity(ctx context.Context, workDir string, prNumb
 			return &MergeResult{Merged: true, Reason: out}
 		}
 
-		// CHUM self-review can satisfy internal policy, but branch protection may
-		// still reject merge without a distinct approving reviewer. Try admin.
+		// When branch protection blocks the merge (e.g., required reviewers,
+		// status checks), report merge_blocked and let a human resolve it.
+		// Never escalate to --admin — that bypasses all branch protection rules
+		// and combined with self-review could merge unreviewed code.
 		if isBaseBranchPolicyBlocked(err) {
-			adminOut, adminErr := runCommand(ctx, workDir, "gh", "pr", "merge", strconv.Itoa(prNumber), "--squash", "--delete-branch", "--admin")
-			if adminErr == nil {
-				return &MergeResult{Merged: true, Reason: adminOut}
-			}
-			return &MergeResult{Merged: false, SubReason: "merge_blocked", Reason: adminErr.Error()}
+			return &MergeResult{Merged: false, SubReason: "merge_blocked", Reason: err.Error()}
 		}
 		return &MergeResult{Merged: false, SubReason: "merge_failed", Reason: err.Error()}
 	}
@@ -477,7 +476,23 @@ PR diff:
 func parseReviewSignal(output string) (signal string, body string, invalid bool) {
 	output = llm.UnwrapClaudeJSON(output)
 	lines := strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n")
+
+	// Only check the first 3 non-blank lines for the signal. This prevents
+	// matching "APPROVE" or "REQUEST_CHANGES" from echoed prompt instructions
+	// deeper in the output (e.g., when the reviewer LLM echoes the prompt
+	// before giving its actual verdict). The review prompt says "Line 1 must
+	// be exactly one of: APPROVE / REQUEST_CHANGES", so the signal should
+	// appear at the top.
+	nonBlankSeen := 0
+	const maxSignalLines = 3
 	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		nonBlankSeen++
+		if nonBlankSeen > maxSignalLines {
+			break
+		}
 		signal, inlineBody, ok := parseReviewSignalLine(line)
 		if !ok {
 			continue
@@ -665,12 +680,24 @@ func findLatestMatchingReview(reviews []ghReview, reviewerLogin, headSHA string,
 	return last, found
 }
 
+// repoSlugCache caches repo slugs per workDir to avoid repeated
+// `git remote get-url origin` subprocesses (called 3-4 times per review round).
+var repoSlugCache sync.Map
+
 func repoSlugFromWorkDir(ctx context.Context, workDir string) (string, error) {
+	if cached, ok := repoSlugCache.Load(workDir); ok {
+		return cached.(string), nil
+	}
 	out, err := runCommand(ctx, workDir, "git", "remote", "get-url", "origin")
 	if err != nil {
 		return "", fmt.Errorf("resolve origin URL: %w", err)
 	}
-	return parseRepoSlug(strings.TrimSpace(out))
+	slug, err := parseRepoSlug(strings.TrimSpace(out))
+	if err != nil {
+		return "", err
+	}
+	repoSlugCache.Store(workDir, slug)
+	return slug, nil
 }
 
 func parseRepoSlug(remote string) (string, error) {

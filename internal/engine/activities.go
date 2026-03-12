@@ -133,13 +133,12 @@ func (a *Activities) ExecuteActivity(ctx context.Context, req TaskRequest) (*Exe
 
 	prompt := fmt.Sprintf(`You are a senior software engineer. Implement the following task.
 
-TASK:
 %s
 
 CODEBASE:
 %s
 
-Implement this task by modifying the necessary files. Do not explain, just code.`, req.Prompt, codeContext)
+Implement this task by modifying the necessary files. Do not explain, just code.`, wrapUserContent("TASK", req.Prompt), codeContext)
 
 	result, err := a.LLM.Exec(ctx, req.Agent, req.Model, req.WorkDir, prompt)
 	if err != nil {
@@ -210,12 +209,7 @@ func (a *Activities) PushActivity(ctx context.Context, workDir string) error {
 	return gitpkg.Push(ctx, workDir)
 }
 
-// --- 5. CreatePRActivity ---
-
-// CreatePRActivity creates a pull request for the feature branch.
-func (a *Activities) CreatePRActivity(ctx context.Context, workDir, title string) error {
-	return gitpkg.CreatePR(ctx, workDir, title)
-}
+// --- 5. CreatePRInfoActivity ---
 
 // CreatePRInfoActivity creates a pull request and returns metadata (PR number/head SHA/url).
 func (a *Activities) CreatePRInfoActivity(ctx context.Context, workDir, title string) (*PRInfo, error) {
@@ -373,12 +367,6 @@ func (a *Activities) CleanupWorktreeActivity(ctx context.Context, baseDir, wtDir
 }
 
 // --- context helpers ---
-
-// buildCodebaseContext produces AST-based codebase context for the agent prompt.
-// Falls back to file listing if AST parsing fails.
-func (a *Activities) buildCodebaseContext(ctx context.Context, workDir string) string {
-	return a.buildCodebaseContextForTask(ctx, workDir, "")
-}
 
 // buildCodebaseContextForTask produces AST-based codebase context filtered by
 // relevance to the given task prompt. When taskPrompt is non-empty, files are

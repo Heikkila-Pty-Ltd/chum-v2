@@ -387,6 +387,19 @@ html, body {
   background: var(--surface-4);
 }
 
+.panel-pr-link {
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+.panel-pr-link:hover { text-decoration: underline; }
+.panel-pr-reason {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-left: var(--sp-2);
+}
+
 .panel-target {
   font-family: var(--font-mono);
   font-size: 11px;

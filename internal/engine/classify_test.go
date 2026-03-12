@@ -226,36 +226,6 @@ func TestIsInfrastructureFailure(t *testing.T) {
 	}
 }
 
-func TestIsTransientInfraFailure(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name     string
-		failures string
-		want     bool
-	}{
-		// Transient — worth retrying
-		{"parallel_lint", "parallel golangci-lint is running", true},
-		{"git_lock", "git lock contention", true},
-		{"index_lock", "index.lock exists", true},
-		{"unable_create", "unable to create temp file", true},
-
-		// Persistent — don't retry
-		{"disk_full", "no space left on device", false},
-		{"cmd_not_found", "command not found: semgrep", false},
-		{"perm_denied", "permission denied", false},
-		{"overloaded", "server overloaded", false},
-		{"empty", "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := IsTransientInfraFailure(tt.failures); got != tt.want {
-				t.Errorf("IsTransientInfraFailure(%q) = %v, want %v", tt.failures, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestExtractInfraReason(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

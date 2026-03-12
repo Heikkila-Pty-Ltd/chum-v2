@@ -172,29 +172,6 @@ func IsInfrastructureFailure(failures string) bool {
 	return false
 }
 
-// transientPatterns are infra failures that are likely temporary and worth
-// one retry (e.g., lock contention). Persistent issues (disk full, missing
-// tools) need human intervention and should not be retried.
-var transientPatterns = []string{
-	"parallel golangci-lint is running",
-	"git lock",
-	"index.lock",
-	"unable to create",
-}
-
-// IsTransientInfraFailure returns true if the infra failure is likely
-// temporary and worth one retry. Returns false for persistent issues
-// (disk full, missing tools) that need human intervention.
-func IsTransientInfraFailure(failures string) bool {
-	lower := strings.ToLower(failures)
-	for _, p := range transientPatterns {
-		if strings.Contains(lower, p) {
-			return true
-		}
-	}
-	return false
-}
-
 // ExtractInfraReason returns a human-readable reason for the infrastructure failure.
 func ExtractInfraReason(failures string) string {
 	lower := strings.ToLower(failures)

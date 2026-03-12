@@ -140,7 +140,6 @@ func registerEngineWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Confi
 	w.RegisterActivity(a.ExecuteActivity)
 	w.RegisterActivity(a.DoDCheckActivity)
 	w.RegisterActivity(a.PushActivity)
-	w.RegisterActivity(a.CreatePRActivity)
 	w.RegisterActivity(a.CreatePRInfoActivity)
 	w.RegisterActivity(a.GetPRInfoActivity)
 	w.RegisterActivity(a.CloseTaskActivity)
