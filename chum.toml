@@ -17,6 +17,15 @@ dolt_health_check_interval = "2m"
 dolt_data_dir = ".beads/dolt/beads_chum"
 dolt_host = "127.0.0.1"
 dolt_port = 3307
+
+# If true, enable early termination of tasks that produce very little output.
+# This helps save LLM tokens and avoid waiting for hung processes.
+early_kill_enabled = true
+# Minimum number of output bytes required from the process within the check interval.
+early_kill_output_min_bytes = 10
+# Interval at which to check the process output for early termination.
+early_kill_output_check_interval = "30s"
+
 jarvis_port = 9780
 jarvis_kb_path = "/home/ubuntu/.picoclaw/bots/jarvis/jarvis.db"
 

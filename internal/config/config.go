@@ -96,6 +96,9 @@ type General struct {
 	ShortTimeout               Duration `toml:"short_timeout"`                 // short ops like push/PR (default: 2m)
 	ReviewTimeout              Duration `toml:"review_timeout"`                // review activity timeout (default: 10m)
 	RequireCrossProviderReview bool     `toml:"require_cross_provider_review"` // if true, reviewer must use a different provider than executor
+	EarlyKillEnabled           bool     `toml:"early_kill_enabled"`            // if true, enable early termination of tasks with low output
+	EarlyKillOutputMinBytes    int      `toml:"early_kill_output_min_bytes"`   // minimum output bytes per check interval to avoid early kill
+	EarlyKillOutputCheckInterval Duration `toml:"early_kill_output_check_interval"` // interval to check output for early kill
 
 	DoltHealthCheckEnabled  bool     `toml:"dolt_health_check_enabled"`
 	DoltHealthCheckInterval Duration `toml:"dolt_health_check_interval"`
@@ -171,6 +174,15 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.General.ReviewTimeout.Duration == 0 {
 		cfg.General.ReviewTimeout.Duration = 10 * time.Minute
+	}
+	if cfg.General.EarlyKillEnabled == false { // Default to enabled
+		cfg.General.EarlyKillEnabled = true
+	}
+	if cfg.General.EarlyKillOutputMinBytes == 0 {
+		cfg.General.EarlyKillOutputMinBytes = 10
+	}
+	if cfg.General.EarlyKillOutputCheckInterval.Duration == 0 {
+		cfg.General.EarlyKillOutputCheckInterval.Duration = 30 * time.Second
 	}
 	if cfg.General.DoltHealthCheckInterval.Duration == 0 {
 		cfg.General.DoltHealthCheckInterval.Duration = 30 * time.Second
