@@ -155,6 +155,16 @@ func (m *mockTaskStore) IsGlobalPauseSet(ctx context.Context) (bool, bool, error
 	return m.globalPaused, m.globalPauseSet, m.globalPauseErr
 }
 
+func (m *mockTaskStore) CountChildrenByParent(ctx context.Context, project string) (map[string]int, error) {
+	counts := make(map[string]int)
+	for _, t := range m.tasks[project] {
+		if t.ParentID != "" {
+			counts[t.ParentID]++
+		}
+	}
+	return counts, nil
+}
+
 func (m *mockTaskStore) GetAllTargetsForStatuses(ctx context.Context, project string, statuses ...string) (map[string][]dag.TaskTarget, error) {
 	return nil, nil
 }

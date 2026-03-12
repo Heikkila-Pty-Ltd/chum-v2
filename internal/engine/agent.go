@@ -5,9 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
-	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
 	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
@@ -33,39 +31,11 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	startTime := workflow.Now(ctx)
 
 	// --- Activity options (from config via dispatcher, with defaults) ---
-	shortTimeout := req.ShortTimeout
-	if shortTimeout <= 0 {
-		shortTimeout = 2 * time.Minute
-	}
-	execTimeout := req.ExecTimeout
-	if execTimeout <= 0 {
-		execTimeout = 45 * time.Minute
-	}
-	reviewTimeout := req.ReviewTimeout
-	if reviewTimeout <= 0 {
-		reviewTimeout = 10 * time.Minute
-	}
-	dodTimeout := execTimeout
-	if reviewTimeout > dodTimeout {
-		dodTimeout = reviewTimeout
-	}
-
-	shortOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: shortTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
-	}
-	execOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: execTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
-	}
-	dodOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: dodTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
-	}
-	reviewOpts := workflow.ActivityOptions{
-		StartToCloseTimeout: reviewTimeout,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
-	}
+	opts := BuildActivityOpts(req.ShortTimeout, req.ExecTimeout, req.ReviewTimeout)
+	shortOpts := opts.Short
+	execOpts := opts.Exec
+	dodOpts := opts.DoD
+	reviewOpts := opts.Review
 
 	baseWorkDir := req.WorkDir
 

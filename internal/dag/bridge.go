@@ -384,6 +384,34 @@ func (d *DAG) GetBeadsOutboxRow(ctx context.Context, id int64) (BeadsSyncOutboxR
 	return row, nil
 }
 
+// GetBeadsMappingsByTasks returns beads mappings for multiple task IDs in a single query.
+func (d *DAG) GetBeadsMappingsByTasks(ctx context.Context, project string, taskIDs []string) (map[string]BeadsSyncMapRow, error) {
+	if len(taskIDs) == 0 {
+		return nil, nil
+	}
+	query := `SELECT project, issue_id, task_id, last_fingerprint, admitted_at, updated_at
+		FROM beads_sync_map WHERE project = ? AND task_id IN (` + sqlPlaceholders(len(taskIDs)) + `)`
+	args := make([]any, 0, len(taskIDs)+1)
+	args = append(args, project)
+	for _, id := range taskIDs {
+		args = append(args, id)
+	}
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get beads mappings by tasks: %w", err)
+	}
+	defer rows.Close()
+	m := make(map[string]BeadsSyncMapRow)
+	for rows.Next() {
+		var row BeadsSyncMapRow
+		if err := rows.Scan(&row.Project, &row.IssueID, &row.TaskID, &row.LastFingerprint, &row.AdmittedAt, &row.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan beads mapping row: %w", err)
+		}
+		m[row.TaskID] = row
+	}
+	return m, rows.Err()
+}
+
 // IsNoRows returns whether an error chain contains sql.ErrNoRows.
 func IsNoRows(err error) bool {
 	return errors.Is(err, sql.ErrNoRows)

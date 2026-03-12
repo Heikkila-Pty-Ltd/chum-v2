@@ -440,6 +440,26 @@ func (d *DAG) GetReadyNodes(ctx context.Context, project string) ([]Task, error)
 	return tasks, rows.Err()
 }
 
+// CountChildrenByParent returns a map from parent_id to child count for a project.
+func (d *DAG) CountChildrenByParent(ctx context.Context, project string) (map[string]int, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT parent_id, COUNT(*) FROM tasks WHERE project = ? AND parent_id != '' GROUP BY parent_id`, project)
+	if err != nil {
+		return nil, fmt.Errorf("count children: %w", err)
+	}
+	defer rows.Close()
+	m := make(map[string]int)
+	for rows.Next() {
+		var pid string
+		var cnt int
+		if err := rows.Scan(&pid, &cnt); err != nil {
+			return nil, err
+		}
+		m[pid] = cnt
+	}
+	return m, rows.Err()
+}
+
 // sqlPlaceholders returns a comma-separated string of N question marks for use
 // in SQL IN clauses. The caller must ensure n > 0.
 // Safety: this generates only literal "?" characters — no user input is interpolated.
