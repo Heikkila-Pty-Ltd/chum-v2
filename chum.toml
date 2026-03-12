@@ -55,3 +55,11 @@ tier = "balanced"
 fast = ["gemini"]
 balanced = ["gemini", "codex"]
 premium = ["codex"]
+
+[early_kill]
+# This section is a placeholder for EarlyKillConfig.
+# The exact structure and fields need to be defined based on its implementation.
+enabled = false
+# timeout = "5m"
+# output_threshold_bytes = 1024
+
