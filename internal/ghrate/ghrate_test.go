@@ -4,28 +4,32 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 func TestWaitAllowsImmediateCall(t *testing.T) {
-	// The limiter has burst=5, so the first call should be immediate.
+	// Use a local limiter so tests are independent of shared state.
+	l := rate.NewLimiter(rate.Limit(0.9), 5)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if err := Wait(ctx); err != nil {
+	if err := l.Wait(ctx); err != nil {
 		t.Fatalf("Wait returned error on first call: %v", err)
 	}
 }
 
 func TestWaitRespectsContextCancellation(t *testing.T) {
-	// Drain the burst tokens.
+	// Use a local limiter and drain it.
+	l := rate.NewLimiter(rate.Limit(0.9), 5)
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
-		_ = Wait(ctx)
+		_ = l.Wait(ctx)
 	}
 
-	// Now a call with an already-cancelled context should fail.
+	// A call with an already-cancelled context should fail immediately.
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := Wait(cancelled); err == nil {
+	if err := l.Wait(cancelled); err == nil {
 		t.Fatal("Wait should return error with cancelled context")
 	}
 }
