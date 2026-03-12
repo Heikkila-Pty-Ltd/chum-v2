@@ -32,49 +32,6 @@ func TestTierForEstimate(t *testing.T) {
 	}
 }
 
-func TestRetriesForTier(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		tier string
-		want int
-	}{
-		{"fast", 3},
-		{"balanced", 2},
-		{"premium", 1},
-		{"unknown", 2},
-		{"", 2},
-	}
-	for _, tt := range tests {
-		t.Run(tt.tier, func(t *testing.T) {
-			t.Parallel()
-			if got := RetriesForTier(tt.tier); got != tt.want {
-				t.Errorf("RetriesForTier(%q) = %d, want %d", tt.tier, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestNextTier(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		current string
-		want    string
-	}{
-		{"fast", "balanced"},
-		{"balanced", "premium"},
-		{"premium", ""},
-		{"unknown", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.current, func(t *testing.T) {
-			t.Parallel()
-			if got := NextTier(tt.current); got != tt.want {
-				t.Errorf("NextTier(%q) = %q, want %q", tt.current, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestEscChain(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

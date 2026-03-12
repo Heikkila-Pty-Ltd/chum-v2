@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -74,10 +73,11 @@ exit 1
 	}
 }
 
-func TestMergePRActivity_BlockedUsesAdminFallback(t *testing.T) {
+func TestMergePRActivity_BlockedReportsMergeBlocked(t *testing.T) {
 	repo := initMergeTestRepo(t)
 	binDir := t.TempDir()
 	ghPath := filepath.Join(binDir, "gh")
+	// Branch protection blocks the merge — should NOT escalate to --admin.
 	script := `#!/bin/sh
 set -eu
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
@@ -85,16 +85,6 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "merge" ]; then
-  admin=0
-  for a in "$@"; do
-    if [ "$a" = "--admin" ]; then
-      admin=1
-    fi
-  done
-  if [ "$admin" = "1" ]; then
-    echo 'merged-admin'
-    exit 0
-  fi
   echo 'X Pull request is not mergeable: the base branch policy prohibits the merge.' >&2
   exit 1
 fi
@@ -111,10 +101,10 @@ exit 1
 	if err != nil {
 		t.Fatalf("MergePRActivity error: %v", err)
 	}
-	if !res.Merged {
-		t.Fatalf("expected merged result, got %+v", res)
+	if res.Merged {
+		t.Fatalf("expected merge_blocked, got merged")
 	}
-	if !strings.Contains(res.Reason, "merged-admin") {
-		t.Fatalf("merge reason = %q, want admin fallback output", res.Reason)
+	if res.SubReason != "merge_blocked" {
+		t.Fatalf("SubReason = %q, want merge_blocked", res.SubReason)
 	}
 }

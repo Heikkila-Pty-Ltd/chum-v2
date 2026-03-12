@@ -10,9 +10,30 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// validTaskID matches safe task IDs: alphanumeric, dots, dashes, underscores.
+// No path separators, no shell metacharacters, no spaces.
+var validTaskID = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// ValidateTaskID rejects task IDs that could cause path traversal or
+// git branch name issues when used in branch names (chum/{taskID})
+// and filesystem paths (/tmp/chum-worktrees/{taskID}).
+func ValidateTaskID(taskID string) error {
+	if taskID == "" {
+		return errors.New("empty task ID")
+	}
+	if !validTaskID.MatchString(taskID) {
+		return fmt.Errorf("invalid task ID %q: must match [a-zA-Z0-9._-]+", taskID)
+	}
+	if strings.Contains(taskID, "..") {
+		return fmt.Errorf("invalid task ID %q: contains path traversal", taskID)
+	}
+	return nil
+}
 
 // SetupWorktree creates an isolated git worktree for a task.
 // Handles stale branches/worktrees from previous failed runs.
@@ -25,6 +46,9 @@ func SetupWorktree(ctx context.Context, baseDir, taskID string) (string, error) 
 // When startRef is empty it uses the latest origin default branch.
 // When startRef is set (for example a PR head SHA), the new branch starts there.
 func SetupWorktreeAtRef(ctx context.Context, baseDir, taskID, startRef string) (string, error) {
+	if err := ValidateTaskID(taskID); err != nil {
+		return "", err
+	}
 	branch := fmt.Sprintf("chum/%s", taskID)
 	wtDir := filepath.Join(os.TempDir(), "chum-worktrees", taskID)
 

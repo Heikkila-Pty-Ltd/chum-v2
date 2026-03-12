@@ -73,9 +73,14 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	// Agents must never work on master. Every task gets its own worktree
 	// on a feature branch. If worktree setup fails, the task fails.
 
-	// cleanup runs on every exit path, even if setup fails
-	// Use predictable worktree path based on taskID (same logic as SetupWorktree)
-	predictableWorktreePath := filepath.Join(os.TempDir(), "chum-worktrees", req.TaskID)
+	// cleanup runs on every exit path, even if setup fails.
+	// Use SideEffect to record os.TempDir() deterministically — replaying on
+	// a different worker (or after TMPDIR change) must produce the same path.
+	var worktreeTmpDir string
+	_ = workflow.SideEffect(ctx, func(ctx workflow.Context) interface{} {
+		return os.TempDir()
+	}).Get(&worktreeTmpDir)
+	predictableWorktreePath := filepath.Join(worktreeTmpDir, "chum-worktrees", req.TaskID)
 	cleaned := false
 	cleanup := func() {
 		if cleaned {
@@ -271,213 +276,28 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	if reviewRoundsVersion == 1 && req.MaxReviewRounds > 0 {
 		maxReviewRounds = req.MaxReviewRounds
 	}
-	reviewCtx := workflow.WithActivityOptions(ctx, reviewOpts)
 
-	for round := 1; round <= maxReviewRounds; round++ {
-		logger.Info("Review round", "Round", round, "PR", prInfo.Number)
-
-		var draft ReviewDraft
-		if err := workflow.ExecuteActivity(reviewCtx, a.RunReviewActivity,
-			req.WorkDir, prInfo.Number, round, req.Agent).Get(ctx, &draft); err != nil {
-			logger.Error("Reviewer run failed", "error", err)
-			return closeAndTrace(CloseDetail{
-				Reason:    CloseNeedsReview,
-				SubReason: "reviewer_error",
-				PRNumber:  prInfo.Number,
-				ReviewURL: prInfo.URL,
-			})
-		}
-
-		if err := workflow.ExecuteActivity(prCtx, a.GuardReviewerCleanActivity, req.WorkDir).Get(ctx, nil); err != nil {
-			logger.Error("Reviewer guard failed", "error", err)
-			return closeAndTrace(CloseDetail{
-				Reason:    CloseNeedsReview,
-				SubReason: "reviewer_modified_code",
-				PRNumber:  prInfo.Number,
-				ReviewURL: prInfo.URL,
-			})
-		}
-
-		var submitted ReviewResult
-		if err := workflow.ExecuteActivity(prCtx, a.SubmitReviewActivity,
-			req.WorkDir, prInfo.Number, round, reviewerLogin, prInfo.HeadSHA, draft.Signal, draft.Body).Get(ctx, &submitted); err != nil {
-			logger.Error("Submit review failed", "error", err)
-			return closeAndTrace(CloseDetail{
-				Reason:    CloseNeedsReview,
-				SubReason: "review_submit_failed",
-				PRNumber:  prInfo.Number,
-				ReviewURL: prInfo.URL,
-			})
-		}
-
-		var state ReviewResult
-		if err := workflow.ExecuteActivity(prCtx, a.CheckPRStateActivity,
-			req.WorkDir, prInfo.Number, round, reviewerLogin, prInfo.HeadSHA).Get(ctx, &state); err != nil {
-			logger.Error("Check review state failed", "error", err)
-			return closeAndTrace(CloseDetail{
-				Reason:    CloseNeedsReview,
-				SubReason: "reviewer_error",
-				PRNumber:  prInfo.Number,
-				ReviewURL: submitted.ReviewURL,
-			})
-		}
-
-		switch state.Outcome {
-		case ReviewApproved:
-			var merge MergeResult
-			if err := workflow.ExecuteActivity(prCtx, a.MergePRActivity, req.WorkDir, prInfo.Number).Get(ctx, &merge); err != nil {
-				logger.Error("Merge activity failed", "error", err)
-				return closeAndTrace(CloseDetail{
-					Reason:    CloseNeedsReview,
-					SubReason: "merge_failed",
-					PRNumber:  prInfo.Number,
-					ReviewURL: state.ReviewURL,
-				})
-			}
-			if merge.Merged {
-				logger.Info("Task merged successfully", "TaskID", req.TaskID, "PR", prInfo.Number)
-				return closeAndTrace(CloseDetail{
-					Reason:    CloseCompleted,
-					SubReason: "completed",
-					PRNumber:  prInfo.Number,
-					ReviewURL: state.ReviewURL,
-				})
-			}
-			sub := merge.SubReason
-			if sub == "" {
-				sub = "merge_blocked"
-			}
-			return closeAndTrace(CloseDetail{
-				Reason:    CloseNeedsReview,
-				SubReason: sub,
-				PRNumber:  prInfo.Number,
-				ReviewURL: state.ReviewURL,
-			})
-
-		case ReviewChangesRequested:
-			if round == maxReviewRounds {
-				return closeAndTrace(CloseDetail{
-					Reason:    CloseNeedsReview,
-					SubReason: "max_rounds_reached",
-					PRNumber:  prInfo.Number,
-					ReviewURL: state.ReviewURL,
-				})
-			}
-
-			feedback := strings.TrimSpace(state.Comments)
-			if state.ReviewID > 0 {
-				var inline string
-				if err := workflow.ExecuteActivity(prCtx, a.ReadReviewFeedbackActivity,
-					req.WorkDir, prInfo.Number, state.ReviewID).Get(ctx, &inline); err == nil {
-					inline = strings.TrimSpace(inline)
-					if inline != "" {
-						if feedback != "" {
-							feedback += "\n\n"
-						}
-						feedback += "Inline comments:\n" + inline
-					}
-				}
-			}
-			req.Prompt = augmentPromptWithReviewFeedback(req.Prompt, round, feedback)
-
-			reqAfterReExec, reExecResult, err := executeWithProviderFallback(execCtx, req)
-			if err != nil {
-				logger.Error("Re-execute failed after review changes", "error", err)
-				return closeAndTrace(CloseDetail{
-					Reason:    CloseNeedsReview,
-					SubReason: "exec_failed",
-					PRNumber:  prInfo.Number,
-					ReviewURL: state.ReviewURL,
-				})
-			}
-			req = reqAfterReExec
-			totalInputTokens += reExecResult.InputTokens
-			totalOutputTokens += reExecResult.OutputTokens
-			totalCostUSD += reExecResult.CostUSD
-			if err := workflow.ExecuteActivity(dodCtx, a.DoDCheckActivity, req.WorkDir, req.Project).Get(ctx, &dodResult); err != nil {
-				logger.Error("DoD error after review changes", "error", err)
-				return closeAndTrace(CloseDetail{
-					Reason:    CloseNeedsReview,
-					SubReason: "dod_error",
-					PRNumber:  prInfo.Number,
-					ReviewURL: state.ReviewURL,
-				})
-			}
-			if !dodResult.Passed {
-				failureMsg2 := BuildClassifierInput(dodResult)
-				cat2, sum2 := ClassifyFailure(failureMsg2)
-				logger.Warn("DoD FAILED after review changes", "Category", cat2, "Summary", sum2)
-				return closeAndTrace(CloseDetail{
-					Reason:    CloseDoDFailed,
-					SubReason: string(cat2),
-					Category:  string(cat2),
-					Summary:   sum2,
-					PRNumber:  prInfo.Number,
-					ReviewURL: state.ReviewURL,
-				})
-			}
-			if err := workflow.ExecuteActivity(pushCtx, a.PushActivity, req.WorkDir).Get(ctx, nil); err != nil {
-				logger.Error("Push failed after review changes", "error", err)
-				return closeAndTrace(CloseDetail{
-					Reason:    CloseNeedsReview,
-					SubReason: "push_failed",
-					PRNumber:  prInfo.Number,
-					ReviewURL: state.ReviewURL,
-				})
-			}
-
-			var refreshed PRInfo
-			if err := workflow.ExecuteActivity(prCtx, a.GetPRInfoActivity, req.WorkDir, prInfo.Number).Get(ctx, &refreshed); err != nil {
-				logger.Error("Failed to refresh PR head SHA after push", "error", err)
-				return closeAndTrace(CloseDetail{
-					Reason:    CloseNeedsReview,
-					SubReason: "reviewer_error",
-					PRNumber:  prInfo.Number,
-					ReviewURL: state.ReviewURL,
-				})
-			}
-			if refreshed.HeadSHA == "" {
-				logger.Error("Refreshed PR metadata missing head SHA", "PR", prInfo.Number)
-				return closeAndTrace(CloseDetail{
-					Reason:    CloseNeedsReview,
-					SubReason: "reviewer_error",
-					PRNumber:  prInfo.Number,
-					ReviewURL: state.ReviewURL,
-				})
-			}
-			prInfo = refreshed
-
-		case ReviewNoActivity:
-			return closeAndTrace(CloseDetail{
-				Reason:    CloseNeedsReview,
-				SubReason: "no_reviewer_activity",
-				PRNumber:  prInfo.Number,
-				ReviewURL: state.ReviewURL,
-			})
-
-		case ReviewerFailed:
-			return closeAndTrace(CloseDetail{
-				Reason:    CloseNeedsReview,
-				SubReason: "reviewer_error",
-				PRNumber:  prInfo.Number,
-				ReviewURL: state.ReviewURL,
-			})
-
-		default:
-			return closeAndTrace(CloseDetail{
-				Reason:    CloseNeedsReview,
-				SubReason: "reviewer_error",
-				PRNumber:  prInfo.Number,
-				ReviewURL: state.ReviewURL,
-			})
-		}
-	}
-
-	return closeAndTrace(CloseDetail{
-		Reason:    CloseNeedsReview,
-		SubReason: "max_rounds_reached",
-		PRNumber:  prInfo.Number,
-		ReviewURL: prInfo.URL,
+	return reviewLoop(ctx, &reviewLoopParams{
+		TaskID:          req.TaskID,
+		Project:         req.Project,
+		Prompt:          req.Prompt,
+		WorkDir:         req.WorkDir,
+		Agent:           req.Agent,
+		Model:           req.Model,
+		MaxReviewRounds: maxReviewRounds,
+		PRInfo:          prInfo,
+		ReviewerLogin:   reviewerLogin,
+		ShortOpts:       shortOpts,
+		ExecOpts:        execOpts,
+		ReviewOpts:      reviewOpts,
+		DoDOpts:         dodOpts,
+		CloseFn:         closeAndTrace,
+		OnTokens: func(input, output int, cost float64) {
+			totalInputTokens += input
+			totalOutputTokens += output
+			totalCostUSD += cost
+		},
+		ClassifyDoD: true,
 	})
 }
 
@@ -510,7 +330,8 @@ func augmentPromptWithReviewFeedback(prompt string, round int, feedback string) 
 	if feedback == "" {
 		feedback = "No detailed feedback was provided; address review concerns conservatively."
 	}
-	return fmt.Sprintf("%s\n\nReviewer feedback (round %d):\n%s", prompt, round, feedback)
+	return fmt.Sprintf("%s\n\n%s", prompt,
+		wrapUserContent(fmt.Sprintf("REVIEWER FEEDBACK ROUND %d", round), feedback))
 }
 
 func closeAndNotify(ctx workflow.Context, opts workflow.ActivityOptions, taskID string, detail CloseDetail) error {

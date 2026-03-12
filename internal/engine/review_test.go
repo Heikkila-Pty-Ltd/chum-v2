@@ -85,6 +85,52 @@ func TestParseReviewSignal_ParsesMarkdownPrefixedSignalLine(t *testing.T) {
 	}
 }
 
+func TestParseReviewSignal_EchoedPromptDoesNotMatchApprove(t *testing.T) {
+	t.Parallel()
+
+	// Simulates a reviewer (e.g., codex) that echoes the review prompt
+	// instructions before giving its actual verdict. The prompt contains
+	// "APPROVE" as an instruction, which must NOT be matched as the signal.
+	out := `REQUEST_CHANGES
+
+All following lines must be concise review rationale.
+When requesting changes, list concrete findings with severity and, when possible, file/line pointers.
+Do not include markdown code fences.
+
+Review round: 1
+
+PR diff:
+diff --git a/chum.toml b/chum.toml
+
+High: config.go makes early_kill_enabled = false impossible.`
+
+	signal, _, invalid := parseReviewSignal(out)
+	if invalid {
+		t.Fatal("expected valid signal")
+	}
+	if signal != "REQUEST_CHANGES" {
+		t.Fatalf("signal = %q, want REQUEST_CHANGES (should not match echoed prompt APPROVE)", signal)
+	}
+}
+
+func TestParseReviewSignal_DeepApproveNotMatched(t *testing.T) {
+	t.Parallel()
+
+	// Signal buried past 3 non-blank lines should NOT be matched.
+	// This prevents matching "APPROVE" from echoed prompt instructions.
+	out := "Line one commentary.\nLine two commentary.\nLine three commentary.\nLine four commentary.\nAPPROVE\nLooks good."
+	signal, body, invalid := parseReviewSignal(out)
+	if !invalid {
+		t.Fatal("expected invalid — signal is too deep in output")
+	}
+	if signal != "REQUEST_CHANGES" {
+		t.Fatalf("signal = %q, want REQUEST_CHANGES (fail-safe)", signal)
+	}
+	if !strings.Contains(body, "Invalid reviewer signal") {
+		t.Fatalf("body should indicate invalid signal, got %q", body)
+	}
+}
+
 func TestDefaultReviewer(t *testing.T) {
 	t.Parallel()
 
