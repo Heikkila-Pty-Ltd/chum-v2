@@ -365,8 +365,8 @@ func (a *Activities) resolveReviewerWithStage(execAgent string) (reviewerAgent s
 		return candidate.CLI, candidate.Model, true, candidate.Enabled, "cross_provider"
 	}
 
-	// Stage 3: Self-review (executor reviews its own work).
-	if candidate, ok := findProviderByTarget(providers, execCLI, false); ok {
+	// Stage 3: Self-review — prefer enabled, fall back to disabled only if nothing else.
+	if candidate, ok := findProviderByTarget(providers, execCLI, true); ok {
 		return candidate.CLI, candidate.Model, false, candidate.Enabled, "self_review"
 	}
 

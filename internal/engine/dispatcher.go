@@ -908,6 +908,8 @@ var terminalStatuses = []string{
 	string(types.StatusDone),
 	string(types.StatusFailed),
 	string(types.StatusDecomposed),
+	string(types.StatusDoDFailed),
+	string(types.StatusStale),
 }
 
 // CleanupOrphanedWorktreesActivity removes worktree directories for tasks that
@@ -930,7 +932,15 @@ func (da *DispatchActivities) CleanupOrphanedWorktreesActivity(ctx context.Conte
 		taskID := entry.Name()
 		task, err := da.DAG.GetTask(ctx, taskID)
 		if err != nil {
-			continue // task doesn't exist or error, skip
+			// Task not found in DAG — orphaned directory, safe to remove.
+			wtPath := filepath.Join(worktreeBase, taskID)
+			if err := os.RemoveAll(wtPath); err != nil {
+				da.Logger.Warn("Failed to clean orphaned worktree (unknown task)", "path", wtPath, "error", err)
+			} else {
+				da.Logger.Info("Cleaned orphaned worktree (unknown task)", "task", taskID, "path", wtPath)
+				cleaned++
+			}
+			continue
 		}
 		terminal := false
 		for _, s := range terminalStatuses {
