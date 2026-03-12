@@ -12,6 +12,7 @@ import (
 
 	"go.temporal.io/sdk/activity"
 
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 )
@@ -328,30 +329,27 @@ func (a *Activities) resolveReviewer(execAgent string) (reviewerAgent string, re
 	return reviewerAgent, reviewerModel, crossProvider
 }
 
+func sortedProviders(cfgProviders map[string]config.Provider) []namedProvider {
+	providers := make([]namedProvider, 0, len(cfgProviders))
+	for name, p := range cfgProviders {
+		providers = append(providers, namedProvider{Name: name, CLI: p.CLI, Model: p.Model, Reviewer: p.Reviewer, Enabled: p.Enabled})
+	}
+	sort.Slice(providers, func(i, j int) bool { return providers[i].Name < providers[j].Name })
+	return providers
+}
+
 func (a *Activities) resolveReviewerWithStage(execAgent string) (reviewerAgent string, reviewerModel string, crossProvider bool, reviewerEnabled bool, stage string) {
 	execCLI := llm.NormalizeCLIName(execAgent)
 	fallbackAgent := DefaultReviewer(execCLI)
 	if a.Config == nil || len(a.Config.Providers) == 0 {
-		return fallbackAgent, "", llm.NormalizeCLIName(fallbackAgent) != execCLI, false, "no_config_default_reviewer"
+		return fallbackAgent, "", llm.NormalizeCLIName(fallbackAgent) != execCLI, false, "no_config"
 	}
 
-	providers := make([]namedProvider, 0, len(a.Config.Providers))
-	for name, p := range a.Config.Providers {
-		providers = append(providers, namedProvider{
-			Name:     name,
-			CLI:      p.CLI,
-			Model:    p.Model,
-			Reviewer: p.Reviewer,
-			Enabled:  p.Enabled,
-		})
-	}
-	sort.Slice(providers, func(i, j int) bool {
-		return providers[i].Name < providers[j].Name
-	})
+	providers := sortedProviders(a.Config.Providers)
 
-	// 1) Executor-specific reviewer mapping, preferring enabled cross-provider reviewers.
+	// Stage 1: Explicit reviewer override from executor's config (must be enabled).
 	for _, p := range providers {
-		if llm.NormalizeCLIName(p.CLI) != execCLI {
+		if llm.NormalizeCLIName(p.CLI) != execCLI || strings.TrimSpace(p.Reviewer) == "" {
 			continue
 		}
 		candidate, ok := findProviderByTarget(providers, p.Reviewer, true)
@@ -359,51 +357,20 @@ func (a *Activities) resolveReviewerWithStage(execAgent string) (reviewerAgent s
 			continue
 		}
 		cross := llm.NormalizeCLIName(candidate.CLI) != execCLI
-		if cross {
-			return candidate.CLI, candidate.Model, true, candidate.Enabled, "exec_override_enabled_cross"
-		}
+		return candidate.CLI, candidate.Model, cross, candidate.Enabled, "explicit_config"
 	}
 
-	// 2) Default mapping among enabled providers.
-	if candidate, ok := findProviderByTarget(providers, fallbackAgent, true); ok {
-		cross := llm.NormalizeCLIName(candidate.CLI) != execCLI
-		if cross {
-			return candidate.CLI, candidate.Model, true, candidate.Enabled, "default_mapping_enabled_cross"
-		}
-	}
-
-	// 3) Any enabled cross provider.
+	// Stage 2: Any enabled cross-provider.
 	if candidate, ok := firstCrossProvider(providers, execCLI, true); ok {
-		return candidate.CLI, candidate.Model, true, candidate.Enabled, "any_enabled_cross"
+		return candidate.CLI, candidate.Model, true, candidate.Enabled, "cross_provider"
 	}
 
-	// 4) Relax enabled requirement for explicitly configured reviewer.
-	for _, p := range providers {
-		if llm.NormalizeCLIName(p.CLI) != execCLI {
-			continue
-		}
-		candidate, ok := findProviderByTarget(providers, p.Reviewer, false)
-		if !ok {
-			continue
-		}
-		cross := llm.NormalizeCLIName(candidate.CLI) != execCLI
-		return candidate.CLI, candidate.Model, cross, candidate.Enabled, "exec_override_any"
-	}
-
-	// 5) Relax enabled requirement for default mapping.
-	if candidate, ok := findProviderByTarget(providers, fallbackAgent, false); ok {
-		cross := llm.NormalizeCLIName(candidate.CLI) != execCLI
-		return candidate.CLI, candidate.Model, cross, candidate.Enabled, "default_mapping_any"
-	}
-
-	// 6) Last resort: any configured cross provider, then executor itself.
-	if candidate, ok := firstCrossProvider(providers, execCLI, false); ok {
-		return candidate.CLI, candidate.Model, true, candidate.Enabled, "any_configured_cross"
-	}
+	// Stage 3: Self-review (executor reviews its own work).
 	if candidate, ok := findProviderByTarget(providers, execCLI, false); ok {
-		return candidate.CLI, candidate.Model, false, candidate.Enabled, "executor_self_fallback"
+		return candidate.CLI, candidate.Model, false, candidate.Enabled, "self_review"
 	}
-	return fallbackAgent, "", llm.NormalizeCLIName(fallbackAgent) != execCLI, false, "default_reviewer_fallback"
+
+	return fallbackAgent, "", llm.NormalizeCLIName(fallbackAgent) != execCLI, false, "default_fallback"
 }
 
 func findProviderByTarget(providers []namedProvider, target string, onlyEnabled bool) (namedProvider, bool) {

@@ -4,8 +4,50 @@ package engine
 import (
 	"time"
 
+	"go.temporal.io/sdk/temporal"
+	"go.temporal.io/sdk/workflow"
+
 	gitpkg "github.com/Heikkila-Pty-Ltd/chum-v2/internal/git"
 )
+
+// Default timeouts for workflow activities.
+const (
+	DefaultShortTimeout  = 2 * time.Minute
+	DefaultExecTimeout   = 45 * time.Minute
+	DefaultReviewTimeout = 10 * time.Minute
+)
+
+// WorkflowActivityOpts holds the four ActivityOptions sets used by agent and review workflows.
+type WorkflowActivityOpts struct {
+	Short  workflow.ActivityOptions
+	Exec   workflow.ActivityOptions
+	Review workflow.ActivityOptions
+	DoD    workflow.ActivityOptions
+}
+
+// BuildActivityOpts constructs ActivityOptions with defaults for zero values.
+func BuildActivityOpts(shortTimeout, execTimeout, reviewTimeout time.Duration) WorkflowActivityOpts {
+	if shortTimeout <= 0 {
+		shortTimeout = DefaultShortTimeout
+	}
+	if execTimeout <= 0 {
+		execTimeout = DefaultExecTimeout
+	}
+	if reviewTimeout <= 0 {
+		reviewTimeout = DefaultReviewTimeout
+	}
+	dodTimeout := execTimeout
+	if reviewTimeout > dodTimeout {
+		dodTimeout = reviewTimeout
+	}
+	noRetry := &temporal.RetryPolicy{MaximumAttempts: 1}
+	return WorkflowActivityOpts{
+		Short:  workflow.ActivityOptions{StartToCloseTimeout: shortTimeout, RetryPolicy: noRetry},
+		Exec:   workflow.ActivityOptions{StartToCloseTimeout: execTimeout, RetryPolicy: noRetry},
+		Review: workflow.ActivityOptions{StartToCloseTimeout: reviewTimeout, RetryPolicy: noRetry},
+		DoD:    workflow.ActivityOptions{StartToCloseTimeout: dodTimeout, RetryPolicy: noRetry},
+	}
+}
 
 // TaskRequest is the input to the AgentWorkflow.
 // Tasks arrive fully planned and scoped from beads — description, acceptance

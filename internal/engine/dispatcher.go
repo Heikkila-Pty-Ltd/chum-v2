@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -154,6 +156,15 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 			}
 			logger.Info("Dispatched review recovery", "TaskID", o.TaskID, "PR", o.PRNumber, "ChildWorkflowID", childExecution.ID)
 		}
+	}
+
+	// === WORKTREE CLEANUP ===
+	// Remove worktree directories for tasks that have reached terminal status.
+	var wtCleaned int
+	if err := workflow.ExecuteActivity(scanCtx, da.CleanupOrphanedWorktreesActivity).Get(ctx, &wtCleaned); err != nil {
+		logger.Error("Worktree cleanup failed", "error", err)
+	} else if wtCleaned > 0 {
+		logger.Info("Cleaned orphaned worktrees", "count", wtCleaned)
 	}
 
 	return nil
@@ -397,20 +408,11 @@ func (da *DispatchActivities) scanProjectReadyTasks(ctx context.Context, project
 // suppressRedundantParentDispatch removes ready parent tasks that already have
 // child tasks and marks them decomposed to prevent repeated decomposition loops.
 func (da *DispatchActivities) suppressRedundantParentDispatch(ctx context.Context, projectName string, ready []dag.Task) []dag.Task {
-	allTasks, err := da.DAG.ListTasks(ctx, projectName)
+	childrenByParent, err := da.DAG.CountChildrenByParent(ctx, projectName)
 	if err != nil {
-		da.Logger.Warn("Unable to inspect project tasks for parent-child suppression",
+		da.Logger.Warn("Unable to count children for parent-child suppression",
 			"project", projectName, "error", err)
 		return ready
-	}
-
-	childrenByParent := make(map[string]int)
-	for _, t := range allTasks {
-		parentID := strings.TrimSpace(t.ParentID)
-		if parentID == "" {
-			continue
-		}
-		childrenByParent[parentID]++
 	}
 	if len(childrenByParent) == 0 {
 		return ready
@@ -445,17 +447,26 @@ func (da *DispatchActivities) filterBeadsMappedReadyTasks(ctx context.Context, p
 		return ready
 	}
 	bc := da.BeadsClients[projectName]
+
+	// Batch-fetch all mappings at once instead of N+1 queries.
+	taskIDs := make([]string, len(ready))
+	for i, t := range ready {
+		taskIDs[i] = t.ID
+	}
+	mappings, err := bridgeDAG.GetBeadsMappingsByTasks(ctx, projectName, taskIDs)
+	if err != nil {
+		da.Logger.Warn("Batch beads mapping fetch failed, falling back to individual lookups",
+			"project", projectName, "error", err)
+		mappings = nil
+	}
+
 	filtered := make([]dag.Task, 0, len(ready))
 	for _, t := range ready {
-		mapping, err := bridgeDAG.GetBeadsMappingByTask(ctx, projectName, t.ID)
-		if err == nil && strings.TrimSpace(mapping.IssueID) != "" {
-			filtered = append(filtered, t)
-			continue
-		}
-		if err != nil && !dag.IsNoRows(err) {
-			da.Logger.Warn("Skipping ready task: unable to resolve beads mapping",
-				"project", projectName, "task", t.ID, "error", err)
-			continue
+		if mappings != nil {
+			if m, ok := mappings[t.ID]; ok && strings.TrimSpace(m.IssueID) != "" {
+				filtered = append(filtered, t)
+				continue
+			}
 		}
 
 		// Legacy recovery: for old tasks where task ID equals beads issue ID,
@@ -888,6 +899,58 @@ func orphanReviewRecoverable(detail CloseDetail) bool {
 	default:
 		return false
 	}
+}
+
+// terminalStatuses are task statuses that indicate the task is done and its
+// worktree can be cleaned up.
+var terminalStatuses = []string{
+	string(types.StatusCompleted),
+	string(types.StatusDone),
+	string(types.StatusFailed),
+	string(types.StatusDecomposed),
+}
+
+// CleanupOrphanedWorktreesActivity removes worktree directories for tasks that
+// have reached terminal status.
+func (da *DispatchActivities) CleanupOrphanedWorktreesActivity(ctx context.Context) (int, error) {
+	worktreeBase := filepath.Join(os.TempDir(), "chum-worktrees")
+	entries, err := os.ReadDir(worktreeBase)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read worktree base: %w", err)
+	}
+
+	var cleaned int
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		taskID := entry.Name()
+		task, err := da.DAG.GetTask(ctx, taskID)
+		if err != nil {
+			continue // task doesn't exist or error, skip
+		}
+		terminal := false
+		for _, s := range terminalStatuses {
+			if task.Status == s {
+				terminal = true
+				break
+			}
+		}
+		if !terminal {
+			continue
+		}
+		wtPath := filepath.Join(worktreeBase, taskID)
+		if err := os.RemoveAll(wtPath); err != nil {
+			da.Logger.Warn("Failed to clean orphaned worktree", "path", wtPath, "error", err)
+			continue
+		}
+		da.Logger.Info("Cleaned orphaned worktree", "task", taskID, "path", wtPath)
+		cleaned++
+	}
+	return cleaned, nil
 }
 
 func isWorkflowAlreadyStartedError(err error) bool {
