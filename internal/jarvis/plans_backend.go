@@ -422,17 +422,27 @@ func (a *API) handlePlanApprove(w http.ResponseWriter, r *http.Request) {
 	var batches []executionBatch
 	_ = json.Unmarshal(plan.ExecutionBatches, &batches)
 
+	// Validate every draft task against admission gate constraints.
+	// Reject approval if any task violates hard requirements.
 	var riskFlags []string
+	var rejectReasons []string
 	for _, dt := range draftTasks {
+		if dt.Type == "epic" {
+			continue // epics don't execute directly
+		}
 		if len(dt.Description) <= 50 {
-			riskFlags = append(riskFlags, fmt.Sprintf("%s: description too short (%d chars)", dt.Ref, len(dt.Description)))
+			rejectReasons = append(rejectReasons, fmt.Sprintf("%s: description too short (%d chars, need >50)", dt.Ref, len(dt.Description)))
 		}
 		if dt.Acceptance == "" {
-			riskFlags = append(riskFlags, fmt.Sprintf("%s: missing acceptance criteria", dt.Ref))
+			rejectReasons = append(rejectReasons, fmt.Sprintf("%s: missing acceptance criteria", dt.Ref))
 		}
 		if dt.EstimateMinutes > 15 {
-			riskFlags = append(riskFlags, fmt.Sprintf("%s: estimate %dm exceeds 15m limit", dt.Ref, dt.EstimateMinutes))
+			rejectReasons = append(rejectReasons, fmt.Sprintf("%s: estimate %dm exceeds 15m limit", dt.Ref, dt.EstimateMinutes))
 		}
+	}
+	if len(rejectReasons) > 0 {
+		a.jsonError(w, fmt.Sprintf("draft tasks fail admission gate: %s", strings.Join(rejectReasons, "; ")), http.StatusUnprocessableEntity)
+		return
 	}
 
 	if err := a.DAG.UpdatePlanFields(r.Context(), id, map[string]any{"status": "approved"}); err != nil {
@@ -461,35 +471,52 @@ func (a *API) handlePlanMaterialize(w http.ResponseWriter, r *http.Request) {
 		a.jsonError(w, "plan id required", http.StatusBadRequest)
 		return
 	}
+	// Atomically transition approved→materializing to prevent double-click races.
+	// If another request already started materializing, this returns an error.
+	if err := a.DAG.TransitionPlanStatus(r.Context(), id, "approved", "materializing"); err != nil {
+		a.jsonError(w, fmt.Sprintf("cannot materialize: %v", err), http.StatusConflict)
+		return
+	}
+
 	plan, err := a.DAG.GetPlan(r.Context(), id)
 	if err != nil {
 		a.jsonError(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	if plan.Status != "approved" {
-		a.jsonError(w, fmt.Sprintf("plan must be approved before materialization (current: %s)", plan.Status), http.StatusBadRequest)
-		return
-	}
 
 	var draftTasks []dag.DraftTask
 	if err := json.Unmarshal(plan.DraftTasks, &draftTasks); err != nil || len(draftTasks) == 0 {
+		// Roll back status on validation failure.
+		_ = a.DAG.UpdatePlanFields(r.Context(), id, map[string]any{"status": "approved"})
 		a.jsonError(w, "no draft tasks to materialize", http.StatusBadRequest)
 		return
 	}
 
 	ctx := r.Context()
+
+	// Enforce beads-first ingress policy: if the policy requires beads,
+	// we must have a working beads client. No silent fallback to direct DAG writes.
+	requiresBeads := a.IngressPolicy != "" && a.IngressPolicy != "legacy"
 	var bc beads.Store
 	if a.Engine != nil {
 		bc = a.Engine.BeadsClient(plan.Project)
+	}
+	if requiresBeads && bc == nil {
+		_ = a.DAG.UpdatePlanFields(ctx, id, map[string]any{"status": "approved"})
+		a.jsonError(w, fmt.Sprintf("beads ingress policy %q requires a beads client for project %q; cannot fall back to direct DAG writes", a.IngressPolicy, plan.Project), http.StatusFailedDependency)
+		return
 	}
 
 	var goalID string
 	if bc != nil {
 		goalID, err = a.materializeViaBeads(ctx, bc, plan, draftTasks)
 	} else {
+		// Only reachable under "legacy" ingress policy.
 		goalID, err = a.materializeViaDAG(ctx, plan, draftTasks)
 	}
 	if err != nil {
+		// Roll back to approved so user can retry.
+		_ = a.DAG.UpdatePlanFields(ctx, id, map[string]any{"status": "approved"})
 		a.jsonError(w, fmt.Sprintf("materialization failed: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -507,6 +534,38 @@ func (a *API) handlePlanMaterialize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.jsonOK(w, plan)
+}
+
+// topoSortDraftTasks orders tasks so that parents appear before children.
+// Tasks with a parent_ref are placed after their parent. Tasks without
+// parent_ref keep their original relative order.
+func topoSortDraftTasks(tasks []dag.DraftTask) []dag.DraftTask {
+	byRef := map[string]int{}
+	for i, t := range tasks {
+		byRef[t.Ref] = i
+	}
+
+	visited := make([]bool, len(tasks))
+	result := make([]dag.DraftTask, 0, len(tasks))
+
+	var visit func(i int)
+	visit = func(i int) {
+		if visited[i] {
+			return
+		}
+		// Visit parent first if it exists.
+		if pr := tasks[i].ParentRef; pr != "" {
+			if pi, ok := byRef[pr]; ok {
+				visit(pi)
+			}
+		}
+		visited[i] = true
+		result = append(result, tasks[i])
+	}
+	for i := range tasks {
+		visit(i)
+	}
+	return result
 }
 
 func (a *API) materializeViaBeads(ctx context.Context, bc beads.Store, plan *dag.PlanDoc, draftTasks []dag.DraftTask) (string, error) {
@@ -534,11 +593,14 @@ func (a *API) materializeViaBeads(ctx context.Context, bc beads.Store, plan *dag
 	}
 	a.DAG.UpsertBeadsMapping(ctx, plan.Project, planEpicID, planEpicID, "")
 
+	// Sort so parents are created before children.
+	sorted := topoSortDraftTasks(draftTasks)
+
 	// Two passes: first create all items, then wire dependencies.
 	refToIssueID := map[string]string{}
-	for _, dt := range draftTasks {
-		// Determine parent: if parent_ref set and already created, use it.
-		// Otherwise fall back to the plan epic.
+	for _, dt := range sorted {
+		// Determine parent: if parent_ref set, it must already be created
+		// (guaranteed by topoSort). Otherwise fall back to the plan epic.
 		beadsParentID := planEpicID
 		dagParentID := planEpicID
 		if dt.ParentRef != "" {
@@ -619,9 +681,12 @@ func (a *API) materializeViaDAG(ctx context.Context, plan *dag.PlanDoc, draftTas
 		return "", fmt.Errorf("create goal task: %w", err)
 	}
 
+	// Sort so parents are created before children.
+	sorted := topoSortDraftTasks(draftTasks)
+
 	// Two passes: create all, then wire dependencies.
 	refToTaskID := map[string]string{}
-	for _, dt := range draftTasks {
+	for _, dt := range sorted {
 		// Determine parent: parent_ref → already-created item, else goal.
 		parentID := goalID
 		if dt.ParentRef != "" {

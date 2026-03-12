@@ -227,6 +227,31 @@ func (d *DAG) UpdatePlanFields(ctx context.Context, id string, fields map[string
 	return nil
 }
 
+// TransitionPlanStatus atomically moves a plan from expectedStatus to newStatus.
+// Returns an error if the plan is not in the expected status (prevents races).
+func (d *DAG) TransitionPlanStatus(ctx context.Context, id, expectedStatus, newStatus string) error {
+	res, err := d.db.ExecContext(ctx,
+		`UPDATE plan_docs SET status = ?, updated_at = datetime('now') WHERE id = ? AND status = ?`,
+		newStatus, id, expectedStatus)
+	if err != nil {
+		return fmt.Errorf("transition plan status: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		// Determine why: plan not found or wrong status.
+		var current string
+		err := d.db.QueryRowContext(ctx, `SELECT status FROM plan_docs WHERE id = ?`, id).Scan(&current)
+		if err != nil {
+			return fmt.Errorf("plan %q not found", id)
+		}
+		if current == newStatus {
+			return fmt.Errorf("plan %q is already %s (duplicate request)", id, newStatus)
+		}
+		return fmt.Errorf("plan %q is in status %q, expected %q", id, current, expectedStatus)
+	}
+	return nil
+}
+
 func joinStrings(ss []string, sep string) string {
 	result := ""
 	for i, s := range ss {
