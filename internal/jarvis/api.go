@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
@@ -19,6 +20,7 @@ type API struct {
 	DAG    *dag.DAG
 	Store  *store.Store // trace/lesson/safety store; nil disables trace endpoints
 	LLM    llm.Runner   // LLM runner for suggestions; nil disables suggest endpoint
+	AST    *ast.Parser  // AST parser for codebase context; nil skips AST context
 	Logger *slog.Logger
 	WebDir string // directory for static dashboard files; empty disables serving
 

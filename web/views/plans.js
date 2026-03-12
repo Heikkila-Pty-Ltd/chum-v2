@@ -15,16 +15,7 @@
   let chatScrollEl = null;
   let userScrolledUp = false;
   let cachedShell = null; // cached DOM node to survive tab switches
-
-  // --- API helpers ---
-  const PlanAPI = {
-    list: (project) => App.API.get(`/api/dashboard/plans/${project}`),
-    get: (id) => App.API.get(`/api/dashboard/plan/${id}`),
-    create: (body) => App.API.post('/api/dashboard/plans', body),
-    decompose: (id) => App.API.post(`/api/dashboard/plan/${id}/decompose`, {}),
-    approve: (id) => App.API.post(`/api/dashboard/plan/${id}/approve`, {}),
-    materialize: (id) => App.API.post(`/api/dashboard/plan/${id}/materialize`, {}),
-  };
+  let selectedTaskRef = null; // currently selected draft task for refine flow
 
   // --- Render entry point ---
   function render(viewport, project) {
@@ -32,9 +23,8 @@
     if (cachedShell && cachedShell.parentNode !== viewport) {
       viewport.innerHTML = '';
       viewport.appendChild(cachedShell);
-      // Rebind the chat scroll ref — the element is still alive.
       chatScrollEl = cachedShell.querySelector('[data-plans-chat]');
-      loadPlanList(project); // refresh sidebar quietly
+      loadPlanList(project);
       return;
     }
 
@@ -70,7 +60,7 @@
 
   async function loadPlanList(project) {
     try {
-      const data = await PlanAPI.list(project || App.currentProject || 'default');
+      const data = await App.API.plans(project || App.currentProject || 'default');
       plans = data.plans || [];
       renderPlanList();
     } catch (err) {
@@ -108,7 +98,7 @@
 
   async function createNewPlan(project) {
     try {
-      const data = await PlanAPI.create({
+      const data = await App.API.planCreate({
         project: project || App.currentProject || 'default',
         title: 'New Plan',
       });
@@ -121,18 +111,22 @@
 
   async function openPlan(planId) {
     activePlanId = planId;
-    renderPlanList(); // update active highlight
+    selectedTaskRef = null;
+    renderPlanList();
 
     const mainEl = document.querySelector('[data-plans-main]');
     if (!mainEl) return;
 
     try {
-      currentPlan = await PlanAPI.get(planId);
+      currentPlan = await App.API.plan(planId);
       renderPlanMain(mainEl);
     } catch (err) {
       mainEl.innerHTML = `<div class="plans-welcome"><div class="plans-welcome-hint">Failed to load plan: ${App.escapeHtml(err.message)}</div></div>`;
     }
   }
+
+  // Active main-area tab: 'chat' or 'document'
+  let activeMainTab = 'chat';
 
   function renderPlanMain(mainEl) {
     const plan = currentPlan;
@@ -144,24 +138,44 @@
       conversation = typeof raw === 'string' ? JSON.parse(raw) : raw;
     } catch {}
 
-    let draftTasks = [];
-    try {
-      const raw = plan.draft_tasks || '[]';
-      draftTasks = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    } catch {}
+    const draftTasks = parseDraftTasks(plan);
+    const hasDoc = !!(plan.working_markdown || plan.brief_markdown);
+
+    // If plan has a document but no conversation, default to document tab
+    if (hasDoc && conversation.length === 0 && activeMainTab === 'chat') {
+      activeMainTab = 'document';
+    }
 
     mainEl.innerHTML = `
       <div class="plans-status-bar">
         <span class="plans-status-indicator" data-status="${App.escapeHtml(plan.status)}">${App.escapeHtml(plan.status)}</span>
         <span class="plans-status-title">${App.escapeHtml(plan.title)}</span>
+        <div class="plans-main-tabs">
+          <button class="plans-main-tab ${activeMainTab === 'chat' ? 'active' : ''}" data-main-tab="chat">Chat</button>
+          <button class="plans-main-tab ${activeMainTab === 'document' ? 'active' : ''}" data-main-tab="document">Plan${hasDoc ? '' : ' (empty)'}</button>
+        </div>
       </div>
-      <div class="plans-chat" role="log" aria-live="polite" data-plans-chat>
-        ${conversation.length === 0
-          ? `<div class="plans-chat-empty">Start by describing what you want to build.</div>`
-          : conversation.map(renderMessage).join('')}
+
+      <div class="plans-main-pane ${activeMainTab === 'chat' ? 'active' : ''}" data-main-pane="chat">
+        <div class="plans-chat" role="log" aria-live="polite" data-plans-chat>
+          ${conversation.length === 0
+            ? `<div class="plans-chat-empty">Start by describing what you want to build.</div>`
+            : conversation.map(renderMessage).join('')}
+        </div>
       </div>
-      ${renderTaskPreview(draftTasks, plan.status)}
-      ${renderPipelineActions(plan.status, draftTasks.length)}
+
+      <div class="plans-main-pane ${activeMainTab === 'document' ? 'active' : ''}" data-main-pane="document">
+        <div class="plans-document" data-plans-document>
+          ${renderPlanDocument(plan)}
+        </div>
+      </div>
+
+      <div data-plans-preview-container>
+        ${renderTaskPreview(draftTasks, plan.status)}
+      </div>
+      <div data-plans-pipeline-container>
+        ${renderPipelineActions(plan.status, draftTasks.length)}
+      </div>
       <div class="plans-quick-actions" data-plans-quick>
         <button class="plans-quick-btn" data-quick="Break this into tasks">break into tasks</button>
         <button class="plans-quick-btn" data-quick="Write the spec now">write spec</button>
@@ -177,9 +191,100 @@
 
     chatScrollEl = mainEl.querySelector('[data-plans-chat]');
     userScrolledUp = false;
+    bindMainTabEvents(mainEl);
     bindChatEvents(mainEl);
     bindPipelineEvents(mainEl);
+    bindTaskPreviewEvents(mainEl);
     scrollToBottom();
+  }
+
+  // --- Plan document view ---
+  function renderPlanDocument(plan) {
+    const brief = plan.brief_markdown || '';
+    const working = plan.working_markdown || '';
+
+    if (!brief && !working) {
+      return `<div class="plans-doc-empty">
+        <div class="plans-doc-empty-title">No plan document yet</div>
+        <div class="plans-doc-empty-hint">Use the chat to describe your idea, then ask to "write the spec" or "decompose into tasks". The structured plan will appear here.</div>
+      </div>`;
+    }
+
+    let html = '';
+
+    if (brief) {
+      html += `<div class="plans-doc-section">
+        <div class="plans-doc-section-label">Brief</div>
+        <div class="plans-doc-content">${simpleMarkdown(brief)}</div>
+      </div>`;
+    }
+
+    if (working) {
+      html += `<div class="plans-doc-section">
+        ${brief ? '<div class="plans-doc-section-label">Working Spec</div>' : ''}
+        <div class="plans-doc-content">${simpleMarkdown(working)}</div>
+      </div>`;
+    }
+
+    // Structured analysis (JSON) — render if present
+    let structured = null;
+    try {
+      const raw = plan.structured || '{}';
+      structured = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (structured && Object.keys(structured).length === 0) structured = null;
+    } catch { structured = null; }
+
+    if (structured) {
+      html += `<div class="plans-doc-section">
+        <div class="plans-doc-section-label">Structured Analysis</div>
+        <div class="plans-doc-content"><pre><code>${App.escapeHtml(JSON.stringify(structured, null, 2))}</code></pre></div>
+      </div>`;
+    }
+
+    return html;
+  }
+
+  function bindMainTabEvents(mainEl) {
+    mainEl.querySelectorAll('[data-main-tab]').forEach(tab => {
+      tab.addEventListener('click', () => {
+        activeMainTab = tab.dataset.mainTab;
+        mainEl.querySelectorAll('.plans-main-tab').forEach(t => t.classList.toggle('active', t.dataset.mainTab === activeMainTab));
+        mainEl.querySelectorAll('.plans-main-pane').forEach(p => p.classList.toggle('active', p.dataset.mainPane === activeMainTab));
+      });
+    });
+  }
+
+  // --- Re-render pipeline + preview + document in-place (called during streaming) ---
+  function renderPipeline() {
+    if (!currentPlan) return;
+    const draftTasks = parseDraftTasks(currentPlan);
+
+    const previewContainer = document.querySelector('[data-plans-preview-container]');
+    if (previewContainer) {
+      previewContainer.innerHTML = renderTaskPreview(draftTasks, currentPlan.status);
+      const mainEl = previewContainer.closest('[data-plans-main]');
+      if (mainEl) bindTaskPreviewEvents(mainEl);
+    }
+
+    const pipelineContainer = document.querySelector('[data-plans-pipeline-container]');
+    if (pipelineContainer) {
+      pipelineContainer.innerHTML = renderPipelineActions(currentPlan.status, draftTasks.length);
+      const mainEl = pipelineContainer.closest('[data-plans-main]');
+      if (mainEl) bindPipelineEvents(mainEl);
+    }
+
+    // Update document pane if visible
+    const docEl = document.querySelector('[data-plans-document]');
+    if (docEl) {
+      docEl.innerHTML = renderPlanDocument(currentPlan);
+    }
+  }
+
+  function parseDraftTasks(plan) {
+    try {
+      const raw = plan.draft_tasks || '[]';
+      return typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch { return []; }
   }
 
   // --- Pipeline actions (decompose → approve → materialize) ---
@@ -187,21 +292,17 @@
   function renderPipelineActions(status, taskCount) {
     const actions = [];
 
-    // Decompose: available when grooming/needs_input, or re-decompose when already decomposed
     if (['grooming', 'needs_input'].includes(status)) {
       actions.push(`<button class="plans-pipeline-btn" data-pipeline="decompose">Decompose into tasks</button>`);
     }
-    // Decomposed: approve or re-decompose
     if (status === 'decomposed') {
       actions.push(`<button class="plans-pipeline-btn plans-pipeline-btn--approve" data-pipeline="approve">Approve ${taskCount} tasks</button>`);
       actions.push(`<button class="plans-pipeline-btn" data-pipeline="decompose">Re-decompose</button>`);
     }
-    // Approved: materialize or go back
     if (status === 'approved') {
       actions.push(`<button class="plans-pipeline-btn plans-pipeline-btn--materialize" data-pipeline="materialize">Materialize (create work items)</button>`);
       actions.push(`<button class="plans-pipeline-btn" data-pipeline="decompose">Re-decompose</button>`);
     }
-    // Done state
     if (status === 'materialized') {
       actions.push(`<div class="plans-pipeline-done">Materialized \u2014 tasks created and queued for execution.</div>`);
     }
@@ -210,112 +311,267 @@
     return `<div class="plans-pipeline-bar" data-plans-pipeline>${actions.join('')}</div>`;
   }
 
+  // --- Rich Task Preview ---
+
   function renderTaskPreview(draftTasks, status) {
     if (!draftTasks || draftTasks.length === 0) return '';
     if (!['decomposed', 'approved', 'materialized'].includes(status)) return '';
 
-    // Count by type.
-    const epics = draftTasks.filter(t => t.type === 'epic');
-    const tasks = draftTasks.filter(t => t.type !== 'epic' && t.type !== 'subtask');
-    const subtasks = draftTasks.filter(t => t.type === 'subtask');
-    const leafTasks = draftTasks.filter(t => t.type !== 'epic');
-    const totalEst = leafTasks.reduce((s, t) => s + (t.estimate_minutes || 0), 0);
+    const totalEst = draftTasks.reduce((s, t) => s + (t.estimate_minutes || 0), 0);
     const maxBatch = Math.max(0, ...draftTasks.map(t => t.batch || 0));
 
-    // Build lookup for hierarchy rendering.
     const byRef = {};
     draftTasks.forEach(t => { byRef[t.ref] = t; });
 
-    // Render in hierarchy order: epics first with their children, then orphan tasks.
-    const rendered = new Set();
-    let rows = '';
-
-    function renderTask(t, depth) {
-      if (rendered.has(t.ref)) return '';
-      rendered.add(t.ref);
-
-      const deps = (t.depends_on || []).join(', ') || '\u2014';
-      const hasDetail = t.description || t.acceptance;
-      const isEpic = t.type === 'epic';
-      const isSubtask = t.type === 'subtask';
-      const indent = depth * 16;
-      const typeClass = isEpic ? 'plans-task-epic' : isSubtask ? 'plans-task-subtask' : '';
-      const typeLabel = isEpic ? 'epic' : isSubtask ? 'sub' : '';
-      const estDisplay = isEpic ? '\u2014' : `${t.estimate_minutes}m`;
-
-      let html = `<tr class="plans-task-row ${typeClass} ${hasDetail ? 'plans-task-expandable' : ''}" data-task-ref="${App.escapeHtml(t.ref)}">
-        <td class="plans-task-ref" style="padding-left:${8 + indent}px">${typeLabel ? `<span class="plans-task-type-badge">${typeLabel}</span> ` : ''}${App.escapeHtml(t.ref)}</td>
-        <td>${App.escapeHtml(t.title)}</td>
-        <td class="plans-task-est">${estDisplay}</td>
-        <td class="plans-task-batch">${isEpic ? '\u2014' : 'B' + t.batch}</td>
-        <td class="plans-task-deps">${App.escapeHtml(deps)}</td>
-      </tr>`;
-
-      if (hasDetail) {
-        html += `<tr class="plans-task-detail" data-detail-for="${App.escapeHtml(t.ref)}">
-          <td colspan="5">
-            <div class="plans-task-detail-body">
-              ${t.description ? `<div class="plans-task-desc">${simpleMarkdown(t.description)}</div>` : ''}
-              ${t.acceptance ? `<div class="plans-task-accept"><strong>Acceptance:</strong> ${simpleMarkdown(t.acceptance)}</div>` : ''}
-            </div>
-          </td>
-        </tr>`;
-      }
-
-      // Render children.
-      const children = (t.children || []);
-      for (const childRef of children) {
-        if (byRef[childRef]) {
-          html += renderTask(byRef[childRef], depth + 1);
-        }
-      }
-      return html;
-    }
-
-    // Render epics and their trees first.
-    for (const epic of epics) {
-      rows += renderTask(epic, 0);
-    }
-    // Render remaining orphan tasks/subtasks.
-    for (const t of draftTasks) {
-      if (!rendered.has(t.ref)) {
-        rows += renderTask(t, 0);
-      }
-    }
-
     const summary = [];
-    if (epics.length) summary.push(`${epics.length} epic${epics.length > 1 ? 's' : ''}`);
-    summary.push(`${tasks.length + subtasks.length} task${tasks.length + subtasks.length !== 1 ? 's' : ''}`);
-    summary.push(`${totalEst}m total`);
+    summary.push(`${draftTasks.length} task${draftTasks.length !== 1 ? 's' : ''}`);
+    if (totalEst > 0) summary.push(`${totalEst}m total`);
     summary.push(`${maxBatch + 1} batch${maxBatch > 0 ? 'es' : ''}`);
 
     return `<div class="plans-task-preview" data-plans-tasks>
       <div class="plans-task-preview-header">
-        ${summary.map(s => `<span>${s}</span>`).join('')}
+        <div class="plans-task-preview-tabs">
+          <button class="plans-preview-tab active" data-preview-tab="tree">Tasks</button>
+          <button class="plans-preview-tab" data-preview-tab="graph">Graph</button>
+        </div>
+        <div class="plans-task-preview-summary">
+          ${summary.map(s => `<span>${s}</span>`).join('')}
+        </div>
       </div>
-      <table class="plans-task-table">
-        <thead><tr><th>Ref</th><th>Title</th><th>Est</th><th>Batch</th><th>Deps</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+      <div class="plans-preview-body">
+        <div class="plans-preview-pane plans-preview-pane-tree active" data-preview-pane="tree">
+          ${renderTaskTree(draftTasks, byRef)}
+        </div>
+        <div class="plans-preview-pane plans-preview-pane-graph" data-preview-pane="graph">
+          <div class="plans-dep-graph" data-plans-dep-graph></div>
+        </div>
+      </div>
+      ${renderSelectedTaskDetail(byRef)}
     </div>`;
   }
 
-  function bindPipelineEvents(mainEl) {
-    mainEl.querySelectorAll('[data-pipeline]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const action = btn.dataset.pipeline;
-        if (btn.disabled) return;
-        executePipelineAction(action, btn);
+  function renderTaskTree(draftTasks, byRef) {
+    // Group tasks by batch for display
+    const batches = {};
+    draftTasks.forEach(t => {
+      const b = t.batch || 0;
+      if (!batches[b]) batches[b] = [];
+      batches[b].push(t);
+    });
+    const batchKeys = Object.keys(batches).sort((a, b) => Number(a) - Number(b));
+    const showBatchHeaders = batchKeys.length > 1;
+
+    let rows = '';
+    for (const bk of batchKeys) {
+      if (showBatchHeaders) {
+        rows += `<tr class="plans-task-batch-header"><td colspan="4">Batch ${Number(bk) + 1}</td></tr>`;
+      }
+      for (const t of batches[bk]) {
+        const deps = (t.depends_on || []).join(', ') || '\u2014';
+        const isSelected = t.ref === selectedTaskRef;
+
+        rows += `<tr class="plans-task-row ${isSelected ? 'plans-task-selected' : ''}" data-task-ref="${App.escapeHtml(t.ref)}">
+          <td class="plans-task-ref">${App.escapeHtml(t.ref)}</td>
+          <td>${App.escapeHtml(t.title)}</td>
+          <td class="plans-task-est">${t.estimate_minutes ? t.estimate_minutes + 'm' : '\u2014'}</td>
+          <td class="plans-task-deps">${App.escapeHtml(deps)}</td>
+        </tr>`;
+      }
+    }
+
+    return `<table class="plans-task-table">
+      <thead><tr><th>Ref</th><th>Title</th><th>Est</th><th>Deps</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  }
+
+  function renderSelectedTaskDetail(byRef) {
+    if (!selectedTaskRef || !byRef[selectedTaskRef]) return '';
+    const t = byRef[selectedTaskRef];
+
+    return `<div class="plans-selected-task" data-selected-task>
+      <div class="plans-selected-header">
+        <span class="plans-selected-ref">${App.escapeHtml(t.ref)}</span>
+        <span class="plans-selected-title">${App.escapeHtml(t.title)}</span>
+        <button class="plans-selected-close" data-deselect-task>\u00d7</button>
+      </div>
+      ${t.description ? `<div class="plans-selected-section"><div class="plans-selected-label">Description</div><div class="plans-selected-body">${simpleMarkdown(t.description)}</div></div>` : ''}
+      ${t.acceptance ? `<div class="plans-selected-section"><div class="plans-selected-label">Acceptance Criteria</div><div class="plans-selected-body">${simpleMarkdown(t.acceptance)}</div></div>` : ''}
+      ${t.estimate_minutes ? `<div class="plans-selected-section"><div class="plans-selected-label">Estimate</div><div class="plans-selected-body">${t.estimate_minutes}m</div></div>` : ''}
+      ${(t.depends_on || []).length ? `<div class="plans-selected-section"><div class="plans-selected-label">Depends On</div><div class="plans-selected-body">${t.depends_on.map(d => App.escapeHtml(d)).join(', ')}</div></div>` : ''}
+      <div class="plans-selected-actions">
+        <button class="plans-refine-btn" data-refine-task="${App.escapeHtml(t.ref)}">Refine this task</button>
+      </div>
+    </div>`;
+  }
+
+  function renderDepGraph(container, draftTasks) {
+    if (!draftTasks || draftTasks.length === 0) return;
+    if (typeof d3 === 'undefined' || typeof dagre === 'undefined') {
+      container.innerHTML = '<div class="plans-graph-unavailable">Graph library not loaded</div>';
+      return;
+    }
+
+    const width = container.clientWidth || 400;
+    if (draftTasks.length === 0) return;
+    const leafTasks = draftTasks;
+
+    const NODE_W = 120, NODE_H = 28;
+
+    // Build dagre graph for layout
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({ rankdir: 'LR', nodesep: 20, ranksep: 40, marginx: 10, marginy: 10 });
+    g.setDefaultEdgeLabel(() => ({}));
+
+    leafTasks.forEach(t => {
+      g.setNode(t.ref, { width: NODE_W, height: NODE_H, label: App.truncate(t.title, 25) });
+    });
+
+    const refSet = new Set(leafTasks.map(t => t.ref));
+    leafTasks.forEach(t => {
+      (t.depends_on || []).forEach(dep => {
+        if (refSet.has(dep)) g.setEdge(dep, t.ref);
       });
     });
 
-    // Click-to-expand task detail rows.
-    mainEl.querySelectorAll('.plans-task-expandable').forEach(row => {
+    dagre.layout(g);
+
+    // Render with D3
+    const graphBounds = g.graph();
+    const graphW = graphBounds.width || width;
+    const graphH = graphBounds.height || 200;
+    const scale = Math.min(1, (width - 20) / graphW, 180 / graphH);
+    const svgH = graphH * scale + 20;
+
+    container.innerHTML = '';
+    const svg = d3.select(container).append('svg').attr('width', width).attr('height', svgH);
+
+    // Arrow marker
+    svg.append('defs').append('marker')
+      .attr('id', 'plans-arrow').attr('viewBox', '0 0 10 10')
+      .attr('refX', 10).attr('refY', 5)
+      .attr('markerWidth', 6).attr('markerHeight', 6)
+      .attr('orient', 'auto')
+      .append('path').attr('d', 'M0,0 L10,5 L0,10 Z').attr('fill', 'var(--border-emphasis)');
+
+    const inner = svg.append('g')
+      .attr('transform', `translate(${(width - graphW * scale) / 2},10) scale(${scale})`);
+
+    // Edges
+    g.edges().forEach(e => {
+      const edge = g.edge(e);
+      const line = d3.line().x(p => p.x).y(p => p.y).curve(d3.curveBasis);
+      inner.append('path')
+        .attr('d', line(edge.points))
+        .attr('fill', 'none')
+        .attr('stroke', 'var(--border-emphasis)')
+        .attr('stroke-width', 1)
+        .attr('marker-end', 'url(#plans-arrow)');
+    });
+
+    // Nodes
+    g.nodes().forEach(id => {
+      const n = g.node(id);
+      const ng = inner.append('g').attr('transform', `translate(${n.x - NODE_W/2},${n.y - NODE_H/2})`);
+      ng.append('rect')
+        .attr('width', NODE_W).attr('height', NODE_H)
+        .attr('rx', 3).attr('fill', 'var(--surface-3)')
+        .attr('stroke', 'var(--border-default)').attr('stroke-width', 1);
+      ng.append('text')
+        .attr('x', NODE_W / 2).attr('y', NODE_H / 2 + 4)
+        .attr('text-anchor', 'middle')
+        .attr('fill', 'var(--text-primary)')
+        .attr('font-size', '10px')
+        .attr('font-family', 'var(--font-display)')
+        .text(n.label);
+    });
+  }
+
+  function bindTaskPreviewEvents(mainEl) {
+    // Tab switching (tree/graph)
+    mainEl.querySelectorAll('[data-preview-tab]').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const target = tab.dataset.previewTab;
+        mainEl.querySelectorAll('.plans-preview-tab').forEach(t => t.classList.toggle('active', t.dataset.previewTab === target));
+        mainEl.querySelectorAll('.plans-preview-pane').forEach(p => p.classList.toggle('active', p.dataset.previewPane === target));
+
+        // Lazy-render graph on first switch
+        if (target === 'graph') {
+          const graphEl = mainEl.querySelector('[data-plans-dep-graph]');
+          if (graphEl && !graphEl.hasChildNodes()) {
+            renderDepGraph(graphEl, parseDraftTasks(currentPlan));
+          }
+        }
+      });
+    });
+
+    // Task row click → select
+    mainEl.querySelectorAll('.plans-task-row').forEach(row => {
       row.addEventListener('click', () => {
         const ref = row.dataset.taskRef;
-        const detail = mainEl.querySelector(`[data-detail-for="${ref}"]`);
-        if (detail) detail.classList.toggle('expanded');
-        row.classList.toggle('expanded');
+        selectedTaskRef = (selectedTaskRef === ref) ? null : ref;
+        // Re-render preview to show/hide detail
+        const previewContainer = mainEl.querySelector('[data-plans-preview-container]');
+        if (previewContainer && currentPlan) {
+          const draftTasks = parseDraftTasks(currentPlan);
+          previewContainer.innerHTML = renderTaskPreview(draftTasks, currentPlan.status);
+          bindTaskPreviewEvents(mainEl);
+          // Re-render graph if graph tab was active
+          const activeTab = previewContainer.querySelector('.plans-preview-tab.active');
+          if (activeTab && activeTab.dataset.previewTab === 'graph') {
+            const graphEl = previewContainer.querySelector('[data-plans-dep-graph]');
+            if (graphEl) renderDepGraph(graphEl, draftTasks);
+          }
+        }
+      });
+    });
+
+    // Deselect button
+    mainEl.querySelectorAll('[data-deselect-task]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        selectedTaskRef = null;
+        const previewContainer = mainEl.querySelector('[data-plans-preview-container]');
+        if (previewContainer && currentPlan) {
+          const draftTasks = parseDraftTasks(currentPlan);
+          previewContainer.innerHTML = renderTaskPreview(draftTasks, currentPlan.status);
+          bindTaskPreviewEvents(mainEl);
+        }
+      });
+    });
+
+    // Refine button → populate composer with context
+    mainEl.querySelectorAll('[data-refine-task]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ref = btn.dataset.refineTask;
+        const draftTasks = parseDraftTasks(currentPlan);
+        const task = draftTasks.find(t => t.ref === ref);
+        if (!task) return;
+
+        const input = mainEl.querySelector('[data-plans-input]');
+        if (input) {
+          input.value = `Regarding task ${ref} ("${task.title}"): `;
+          input.focus();
+          input.style.height = 'auto';
+          input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+        }
+      });
+    });
+
+    // Pipeline events within preview
+    mainEl.querySelectorAll('[data-pipeline]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.disabled) return;
+        executePipelineAction(btn.dataset.pipeline, btn);
+      });
+    });
+  }
+
+  function bindPipelineEvents(mainEl) {
+    mainEl.querySelectorAll('[data-plans-pipeline-container] [data-pipeline]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.disabled) return;
+        executePipelineAction(btn.dataset.pipeline, btn);
       });
     });
   }
@@ -328,21 +584,15 @@
                       action === 'approve' ? 'Approving\u2026' : 'Materializing\u2026';
 
     try {
-      const res = await fetch(`/api/dashboard/plan/${activePlanId}/${action}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}',
-      });
+      const apiFn = action === 'decompose' ? App.API.planDecompose
+                   : action === 'approve' ? App.API.planApprove
+                   : App.API.planMaterialize;
 
-      const body = await res.json();
-      if (!res.ok) {
-        throw new Error(body.error || `${res.status} ${res.statusText}`);
-      }
-
-      let result = body;
+      let result = await apiFn(activePlanId);
       if (action === 'approve' && result.plan) result = result.plan;
 
       currentPlan = result;
+      selectedTaskRef = null;
       const mainEl = document.querySelector('[data-plans-main]');
       if (mainEl) renderPlanMain(mainEl);
       loadPlanList(currentPlan.project || App.currentProject);
@@ -359,7 +609,6 @@
         ${App.escapeHtml(msg.message)}
       </div>`;
     }
-    // Assistant messages: render as HTML (simple markdown-ish rendering).
     return `<div class="plans-msg plans-msg-assistant">
       <div class="plans-msg-role">planner</div>
       ${simpleMarkdown(msg.message)}
@@ -376,20 +625,18 @@
 
     if (input) {
       input.addEventListener('keydown', (e) => {
-        e.stopPropagation(); // prevent app keyboard shortcuts
+        e.stopPropagation();
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           sendMessage(input);
         }
       });
-      // Auto-resize textarea.
       input.addEventListener('input', () => {
         input.style.height = 'auto';
         input.style.height = Math.min(input.scrollHeight, 120) + 'px';
       });
     }
 
-    // Quick action buttons.
     mainEl.querySelectorAll('[data-quick]').forEach(btn => {
       btn.addEventListener('click', () => {
         if (uiState !== 'IDLE') return;
@@ -399,7 +646,6 @@
       });
     });
 
-    // Track user scroll position.
     if (chatScrollEl) {
       chatScrollEl.addEventListener('scroll', () => {
         const { scrollTop, scrollHeight, clientHeight } = chatScrollEl;
@@ -413,25 +659,18 @@
     const message = input ? input.value.trim() : '';
     if (!message || !activePlanId) return;
 
-    // 1. Capture and clear input.
     input.value = '';
     input.style.height = 'auto';
 
-    // 2. Add user message to chat immediately.
     appendUserMessage(message);
-
-    // 3. Create streaming assistant bubble.
     const assistantEl = appendStreamingBubble();
-
-    // 4. Transition to SENDING.
     setUIState('SENDING');
 
     try {
-      // 5. POST to groom endpoint with streaming.
       const controller = new AbortController();
       activeStream = { planId: activePlanId, controller };
 
-      const res = await fetch(`/api/dashboard/plan/${activePlanId}/groom`, {
+      const res = await fetch(`/api/dashboard/plan/${activePlanId}/interview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message }),
@@ -442,10 +681,8 @@
         throw new Error(`${res.status} ${res.statusText}`);
       }
 
-      // 6. Transition to STREAMING.
       setUIState('STREAMING');
 
-      // 7. Read SSE stream.
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -457,7 +694,7 @@
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        buffer = lines.pop(); // keep incomplete line in buffer
+        buffer = lines.pop();
 
         for (const line of lines) {
           if (line.startsWith('data: ')) {
@@ -465,14 +702,12 @@
               const data = JSON.parse(line.slice(6));
               if (data.text) {
                 fullText += data.text;
-                // Use textContent for streaming (XSS-safe).
                 assistantEl.querySelector('.plans-msg-content').textContent = fullText;
                 if (!userScrolledUp) scrollToBottom();
               }
               if (data.error) {
                 assistantEl.querySelector('.plans-msg-content').textContent = 'Error: ' + data.error;
               }
-              // Update plan state from done event so UI controls refresh.
               if (data.plan && currentPlan) {
                 Object.assign(currentPlan, data.plan);
                 renderPipeline();
@@ -484,7 +719,6 @@
         }
       }
 
-      // 8. Final render with markdown after stream completes.
       assistantEl.classList.remove('plans-msg-streaming');
       assistantEl.querySelector('.plans-msg-content').innerHTML = simpleMarkdown(fullText);
 
@@ -503,7 +737,6 @@
 
   function appendUserMessage(text) {
     if (!chatScrollEl) return;
-    // Remove empty state if present.
     const empty = chatScrollEl.querySelector('.plans-chat-empty');
     if (empty) empty.remove();
 
@@ -544,7 +777,6 @@
     if (sendBtn) sendBtn.disabled = !isIdle;
     quickBtns.forEach(b => b.disabled = !isIdle);
 
-    // Update aria-busy on chat container.
     if (chatScrollEl) chatScrollEl.setAttribute('aria-busy', (!isIdle).toString());
   }
 
@@ -557,23 +789,17 @@
   }
 
   // --- Simple markdown renderer ---
-  // Handles: headers, bold, code blocks, inline code, lists, paragraphs.
-  // No external deps. Escapes HTML first for safety.
   function simpleMarkdown(text) {
     if (!text) return '';
 
-    // Escape HTML entities.
-    let html = text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+    let html = App.escapeHtml(text);
 
     // Code blocks (```...```).
     html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
       return `<pre><code>${code.trim()}</code></pre>`;
     });
 
-    // Inline code (`...`).
+    // Inline code.
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
 
     // Headers.
@@ -581,11 +807,13 @@
     html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
     html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
 
-    // Bold.
+    // Bold / italic.
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-
-    // Italic.
     html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+    // Checkbox lists (must come before unordered lists).
+    html = html.replace(/^- \[x\] (.+)$/gm, '<li>\u2611 $1</li>');
+    html = html.replace(/^- \[ \] (.+)$/gm, '<li>\u2610 $1</li>');
 
     // Unordered lists.
     html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
@@ -593,22 +821,16 @@
       if (!match.startsWith('<ul>')) return `<ul>${match}</ul>`;
       return match;
     });
-    // Clean up adjacent </ul><ul> pairs.
     html = html.replace(/<\/ul>\s*<ul>/g, '');
 
     // Ordered lists.
     html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
 
-    // Checkbox lists.
-    html = html.replace(/^- \[x\] (.+)$/gm, '<li>\u2611 $1</li>');
-    html = html.replace(/^- \[ \] (.+)$/gm, '<li>\u2610 $1</li>');
-
-    // Tables (basic).
+    // Tables.
     html = html.replace(/^\|(.+)\|$/gm, (_, row) => {
       const cells = row.split('|').map(c => c.trim());
-      if (cells.every(c => /^[-:]+$/.test(c))) return ''; // separator row
-      const tag = 'td';
-      return '<tr>' + cells.map(c => `<${tag}>${c}</${tag}>`).join('') + '</tr>';
+      if (cells.every(c => /^[-:]+$/.test(c))) return '';
+      return '<tr>' + cells.map(c => `<td>${c}</td>`).join('') + '</tr>';
     });
     html = html.replace(/(<tr>[\s\S]*?<\/tr>)/g, (match) => {
       if (!match.startsWith('<table>')) return `<table>${match}</table>`;
@@ -616,12 +838,10 @@
     });
     html = html.replace(/<\/table>\s*<table>/g, '');
 
-    // Paragraphs: double newlines become paragraph breaks.
+    // Paragraphs.
     html = html.replace(/\n\n+/g, '</p><p>');
-    // Single newlines become line breaks (but not inside pre/code).
     html = html.replace(/(?<!<\/pre>)\n(?!<)/g, '<br>');
 
-    // Wrap in paragraph if not already wrapped.
     if (!html.startsWith('<')) html = '<p>' + html + '</p>';
 
     return html;
@@ -629,7 +849,6 @@
 
   // --- Refresh ---
   function refresh(project) {
-    // Don't refresh while streaming.
     if (uiState !== 'IDLE') return;
     loadPlanList(project);
   }

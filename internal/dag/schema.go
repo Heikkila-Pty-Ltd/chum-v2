@@ -208,6 +208,9 @@ func (d *DAG) EnsureSchema(ctx context.Context) error {
 	if err := d.migratePlanDocsExtend(ctx); err != nil {
 		return fmt.Errorf("migrate plan_docs: %w", err)
 	}
+	if err := d.migratePlanContextSnapshot(ctx); err != nil {
+		return fmt.Errorf("migrate plan context_snapshot: %w", err)
+	}
 	return nil
 }
 
@@ -358,6 +361,11 @@ func (d *DAG) migrateEdgeSource(ctx context.Context) error {
 // migrateTaskMetadata adds the metadata column to tasks if it doesn't exist.
 func (d *DAG) migrateTaskMetadata(ctx context.Context) error {
 	return d.migrateAddColumn(ctx, "tasks", "metadata", "TEXT NOT NULL DEFAULT '{}'")
+}
+
+// migratePlanContextSnapshot adds the context_snapshot column to plan_docs.
+func (d *DAG) migratePlanContextSnapshot(ctx context.Context) error {
+	return d.migrateAddColumn(ctx, "plan_docs", "context_snapshot", "TEXT NOT NULL DEFAULT ''")
 }
 
 // migrateTaskExecMetrics adds execution metric columns to tasks if they don't exist.

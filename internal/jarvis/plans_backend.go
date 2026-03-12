@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/codebase"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
@@ -111,8 +112,43 @@ func (a *API) handlePlanInterview(w http.ResponseWriter, r *http.Request) {
 		briefContext = plan.BriefMarkdown
 	}
 
+	// Resolve workDir for this project.
+	workDir := "."
+	if a.Engine != nil && plan.Project != "" {
+		if wd := a.Engine.WorkDir(plan.Project); wd != "" {
+			workDir = wd
+		}
+	}
+
+	// Gather codebase context (first turn) or reuse cached.
+	var ctxFormatted string
+	if plan.ContextSnapshot != "" {
+		ctxFormatted = plan.ContextSnapshot
+	} else {
+		ctxResult := codebase.Build(r.Context(), codebase.BuildOpts{
+			Parser:  a.AST,
+			Store:   a.Store,
+			DAG:     a.DAG,
+			Logger:  a.Logger,
+			WorkDir: workDir,
+			Project: plan.Project,
+			Query:   briefContext + " " + body.Message,
+		})
+		ctxFormatted = codebase.FormatForPrompt(ctxResult)
+		// Cache for subsequent turns.
+		if ctxFormatted != "" {
+			_ = a.DAG.UpdatePlanFields(r.Context(), id, map[string]any{
+				"context_snapshot": ctxFormatted,
+			})
+		}
+	}
+
 	var sb strings.Builder
 	sb.WriteString(interviewSystemPrompt)
+	if ctxFormatted != "" {
+		sb.WriteString("\n\n--- CODEBASE CONTEXT ---\n")
+		sb.WriteString(ctxFormatted)
+	}
 	sb.WriteString("\n\n--- PLAN BRIEF ---\n")
 	sb.WriteString(briefContext)
 	sb.WriteString("\n\n--- CONVERSATION SO FAR ---\n")
@@ -120,7 +156,7 @@ func (a *API) handlePlanInterview(w http.ResponseWriter, r *http.Request) {
 		sb.WriteString(fmt.Sprintf("%s: %s\n\n", turn["role"], turn["message"]))
 	}
 
-	result, err := a.LLM.Plan(r.Context(), "claude", "claude-sonnet-4-20250514", ".", sb.String())
+	result, err := a.LLM.Plan(r.Context(), "claude", "claude-sonnet-4-20250514", workDir, sb.String())
 	if err != nil {
 		a.jsonError(w, fmt.Sprintf("LLM call failed: %v", err), http.StatusInternalServerError)
 		return
@@ -243,11 +279,44 @@ func (a *API) handlePlanDecompose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve workDir for this project.
+	workDir := "."
+	if a.Engine != nil && plan.Project != "" {
+		if wd := a.Engine.WorkDir(plan.Project); wd != "" {
+			workDir = wd
+		}
+	}
+
+	// Gather codebase context — reuse cached from interview if available.
+	var ctxFormatted string
+	if plan.ContextSnapshot != "" {
+		ctxFormatted = plan.ContextSnapshot
+	} else {
+		specDoc := plan.WorkingMarkdown
+		if specDoc == "" {
+			specDoc = plan.BriefMarkdown
+		}
+		ctxResult := codebase.Build(r.Context(), codebase.BuildOpts{
+			Parser:  a.AST,
+			Store:   a.Store,
+			DAG:     a.DAG,
+			Logger:  a.Logger,
+			WorkDir: workDir,
+			Project: plan.Project,
+			Query:   specDoc,
+		})
+		ctxFormatted = codebase.FormatForPrompt(ctxResult)
+	}
+
 	// Build context from all available sources: working markdown, brief,
 	// structured analysis, and — critically — the conversation itself,
 	// which is where the real spec lives after grooming.
 	var sb strings.Builder
 	sb.WriteString(decomposeSystemPrompt)
+	if ctxFormatted != "" {
+		sb.WriteString("\n\n--- CODEBASE CONTEXT ---\n")
+		sb.WriteString(ctxFormatted)
+	}
 
 	if plan.WorkingMarkdown != "" {
 		sb.WriteString("\n\n--- PLAN DOCUMENT ---\n")
@@ -284,7 +353,7 @@ func (a *API) handlePlanDecompose(w http.ResponseWriter, r *http.Request) {
 
 	a.Logger.Info("Decompose: calling LLM", "plan_id", id, "prompt_len", sb.Len())
 
-	result, err := a.LLM.Plan(r.Context(), "claude", "claude-sonnet-4-20250514", ".", sb.String())
+	result, err := a.LLM.Plan(r.Context(), "claude", "claude-sonnet-4-20250514", workDir, sb.String())
 	if err != nil {
 		a.jsonError(w, fmt.Sprintf("LLM call failed: %v", err), http.StatusInternalServerError)
 		return

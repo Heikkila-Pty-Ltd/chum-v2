@@ -1,7 +1,7 @@
 ---
 title: "refactor: Engine small fixes batch (005, 012, 013, 014)"
 type: refactor
-status: active
+status: completed
 date: 2026-03-12
 ---
 
