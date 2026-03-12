@@ -32,12 +32,19 @@
 
   // --- Data loading ---
   async function loadAll(project) {
-    const [grouped, summary, actions, state] = await Promise.all([
+    // Overview data is required; Jarvis calls are optional — don't let
+    // them reject the entire render when Jarvis is unavailable.
+    const [grouped, jarvisResults] = await Promise.all([
       App.API.overviewGrouped(project),
-      App.API.jarvisSummary(),
-      App.API.jarvisActions(),
-      App.API.jarvisState(),
+      Promise.allSettled([
+        App.API.jarvisSummary(),
+        App.API.jarvisActions(),
+        App.API.jarvisState(),
+      ]),
     ]);
+    const summary = jarvisResults[0].status === 'fulfilled' ? jarvisResults[0].value : {};
+    const actions = jarvisResults[1].status === 'fulfilled' ? jarvisResults[1].value : [];
+    const state   = jarvisResults[2].status === 'fulfilled' ? jarvisResults[2].value : {};
     const dismissed = getDismissed();
     const filteredActions = actions.filter(a =>
       !(a.type === 'recurring_failure' && dismissed[a.detail])

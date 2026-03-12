@@ -10,7 +10,7 @@ import (
 )
 
 const maxClaudeMDChars = 2000 // ~500 tokens
-const maxDirTreeFiles = 80   // cap directory map to avoid prompt overflow
+const maxDirTreeFiles = 80    // cap directory map to avoid prompt overflow
 
 // FormatForPrompt formats a ContextResult into a compact string suitable for
 // injection into an LLM prompt. Uses progressive disclosure:

@@ -231,8 +231,9 @@
       });
     });
 
-    // Find the node with max distance — that's the end of the critical path
-    let maxDist = 0, endNode = null;
+    // Find the node with max distance — that's the end of the critical path.
+    // Use -1 so zero-distance nodes (isolated, no edges) are still eligible.
+    let maxDist = -1, endNode = null;
     dist.forEach((d, id) => { if (d > maxDist) { maxDist = d; endNode = id; } });
 
     if (!endNode) return new Set();

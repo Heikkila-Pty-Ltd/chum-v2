@@ -32,10 +32,10 @@ type ContextResult struct {
 
 // BuildOpts configures what context sources to gather.
 type BuildOpts struct {
-	Parser *ast.Parser      // AST parser; nil skips AST context
-	Store  *store.Store     // lesson store; nil skips lessons
-	DAG    *dag.DAG         // DAG store; nil skips active tasks
-	Logger *slog.Logger     // logger for warnings; nil uses slog.Default()
+	Parser *ast.Parser  // AST parser; nil skips AST context
+	Store  *store.Store // lesson store; nil skips lessons
+	DAG    *dag.DAG     // DAG store; nil skips active tasks
+	Logger *slog.Logger // logger for warnings; nil uses slog.Default()
 
 	WorkDir string // project workspace path
 	Project string // project name (for DAG queries)
@@ -153,4 +153,3 @@ func (r *ContextResult) FormatAST() string {
 	}
 	return ""
 }
-
