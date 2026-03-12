@@ -125,9 +125,10 @@
     const select = document.querySelector('[data-filter="goal"]');
     if (!select || select.options.length > 1) return;
 
-    // Find root nodes (those that appear as 'from' but never as 'to', or nodes with type 'goal')
-    const targets = new Set(data.edges.map(e => e.to));
-    const roots = data.nodes.filter(n => !targets.has(n.id));
+    // Find root nodes — those that don't depend on anything (never appear as 'from',
+    // since edge.from = dependent, edge.to = prerequisite per edges.go convention).
+    const dependents = new Set(data.edges.map(e => e.from));
+    const roots = data.nodes.filter(n => !dependents.has(n.id));
     roots.forEach(r => {
       const opt = document.createElement('option');
       opt.value = r.id;
@@ -147,7 +148,8 @@
       filtered = filtered.filter(n => n.status !== 'completed' && n.status !== 'done');
     }
 
-    // Goal filter — keep only descendants of selected goal
+    // Goal filter — keep only dependents of selected goal (tasks that depend on it,
+    // directly or transitively). Edge convention: from=dependent, to=prerequisite.
     if (goalFilter) {
       const descendants = new Set();
       descendants.add(goalFilter);
@@ -155,8 +157,8 @@
       while (changed) {
         changed = false;
         edges.forEach(e => {
-          if (descendants.has(e.from) && !descendants.has(e.to)) {
-            descendants.add(e.to);
+          if (descendants.has(e.to) && !descendants.has(e.from)) {
+            descendants.add(e.from);
             changed = true;
           }
         });
@@ -174,14 +176,17 @@
     const unfinished = new Set(nodes.filter(n => n.status !== 'completed' && n.status !== 'done').map(n => n.id));
     if (unfinished.size === 0) return new Set();
 
-    // Build adjacency for unfinished nodes
+    // Build adjacency for unfinished nodes.
+    // Edge convention: from=dependent, to=prerequisite.
+    // "children" = dependents (tasks that depend on this node).
+    // "parents" = prerequisites (tasks this node depends on).
     const children = new Map();
     const parents = new Map();
     unfinished.forEach(id => { children.set(id, []); parents.set(id, []); });
     edges.forEach(e => {
       if (unfinished.has(e.from) && unfinished.has(e.to)) {
-        children.get(e.from).push(e.to);
-        parents.get(e.to).push(e.from);
+        children.get(e.to).push(e.from);
+        parents.get(e.from).push(e.to);
       }
     });
 

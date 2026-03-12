@@ -683,44 +683,17 @@
 
       setUIState('STREAMING');
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let fullText = '';
+      const plan = await res.json();
+      const fullText = plan.planner_reply || '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.text) {
-                fullText += data.text;
-                assistantEl.querySelector('.plans-msg-content').textContent = fullText;
-                if (!userScrolledUp) scrollToBottom();
-              }
-              if (data.error) {
-                assistantEl.querySelector('.plans-msg-content').textContent = 'Error: ' + data.error;
-              }
-              if (data.plan && currentPlan) {
-                Object.assign(currentPlan, data.plan);
-                renderPipeline();
-              }
-            } catch {
-              // Skip malformed JSON lines.
-            }
-          }
-        }
+      if (currentPlan) {
+        Object.assign(currentPlan, plan);
+        renderPipeline();
       }
 
       assistantEl.classList.remove('plans-msg-streaming');
       assistantEl.querySelector('.plans-msg-content').innerHTML = simpleMarkdown(fullText);
+      if (!userScrolledUp) scrollToBottom();
 
     } catch (err) {
       if (err.name === 'AbortError') {
