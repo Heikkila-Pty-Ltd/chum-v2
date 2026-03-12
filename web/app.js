@@ -400,6 +400,34 @@ const App = (() => {
       `;
     }
 
+    // PR / review link from error_log
+    if (t.error_log) {
+      try {
+        const errInfo = JSON.parse(t.error_log);
+        if (errInfo.review_url || errInfo.pr_number) {
+          const prUrl = errInfo.review_url || `https://github.com/pulls/${errInfo.pr_number}`;
+          const label = errInfo.pr_number ? `PR #${errInfo.pr_number}` : 'Review';
+          const reason = errInfo.sub_reason ? ` — ${errInfo.sub_reason.replace(/_/g, ' ')}` : '';
+          html += `
+            <div class="panel-section">
+              <div class="panel-section-label">Pull Request</div>
+              <a class="panel-pr-link" href="${escapeHtml(prUrl)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>${reason ? `<span class="panel-pr-reason">${escapeHtml(reason)}</span>` : ''}
+            </div>
+          `;
+        }
+      } catch (_) {
+        // error_log is not JSON — show raw if non-empty
+        if (t.error_log.trim()) {
+          html += `
+            <div class="panel-section">
+              <div class="panel-section-label">Error</div>
+              <div class="panel-description">${escapeHtml(t.error_log)}</div>
+            </div>
+          `;
+        }
+      }
+    }
+
     html += renderPlanningSection(t, data.planning, data.planning_sessions);
 
     return html;

@@ -205,7 +205,108 @@ func (d *DAG) EnsureSchema(ctx context.Context) error {
 	if err := d.migrateTaskExecMetrics(ctx); err != nil {
 		return fmt.Errorf("migrate schema: %w", err)
 	}
+	if err := d.migratePlanDocsExtend(ctx); err != nil {
+		return fmt.Errorf("migrate plan_docs: %w", err)
+	}
 	return nil
+}
+
+// migratePlanDocsExtend adds new columns to plan_docs and drops the restrictive
+// CHECK constraint on status by recreating the table if needed.
+func (d *DAG) migratePlanDocsExtend(ctx context.Context) error {
+	// Add new columns needed for decompose/approve/materialize flow.
+	newCols := []struct{ name, typedef string }{
+		{"brief_markdown", "TEXT NOT NULL DEFAULT ''"},
+		{"working_markdown", "TEXT NOT NULL DEFAULT ''"},
+		{"goal_task_id", "TEXT NOT NULL DEFAULT ''"},
+		{"structured", "TEXT NOT NULL DEFAULT '{}'"}, // CHECK omitted on ALTER
+		{"execution_batches", "TEXT NOT NULL DEFAULT '[]'"},
+		{"materialized_goal_id", "TEXT NOT NULL DEFAULT ''"},
+		{"next_question", "TEXT NOT NULL DEFAULT ''"},
+		{"planner_reply", "TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, col := range newCols {
+		if err := d.migrateAddColumn(ctx, "plan_docs", col.name, col.typedef); err != nil {
+			return err
+		}
+	}
+
+	// Drop the restrictive CHECK constraint on status by recreating the table.
+	// Only needed if the old CHECK exists (status IN ('draft','grooming','ready','materialized')).
+	var createSQL string
+	err := d.db.QueryRowContext(ctx,
+		"SELECT sql FROM sqlite_master WHERE type='table' AND name='plan_docs'").Scan(&createSQL)
+	if err != nil {
+		return nil // table doesn't exist yet, nothing to migrate
+	}
+	// If there's no restrictive CHECK, we're already migrated.
+	if !contains(createSQL, "CHECK (status IN") && !contains(createSQL, "CHECK(status IN") {
+		return nil
+	}
+
+	// Recreate without the CHECK constraint.
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin plan_docs migration tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE plan_docs RENAME TO plan_docs_old`); err != nil {
+		return fmt.Errorf("rename plan_docs: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE plan_docs (
+		id TEXT PRIMARY KEY,
+		project TEXT NOT NULL DEFAULT '',
+		title TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'draft',
+		spec_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(spec_json)),
+		conversation TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(conversation)),
+		draft_tasks TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(draft_tasks)),
+		brief_markdown TEXT NOT NULL DEFAULT '',
+		working_markdown TEXT NOT NULL DEFAULT '',
+		goal_task_id TEXT NOT NULL DEFAULT '',
+		structured TEXT NOT NULL DEFAULT '{}',
+		execution_batches TEXT NOT NULL DEFAULT '[]',
+		materialized_goal_id TEXT NOT NULL DEFAULT '',
+		next_question TEXT NOT NULL DEFAULT '',
+		planner_reply TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+		updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
+	)`); err != nil {
+		return fmt.Errorf("recreate plan_docs: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO plan_docs
+		(id, project, title, status, spec_json, conversation, draft_tasks,
+		 brief_markdown, working_markdown, goal_task_id, structured,
+		 execution_batches, materialized_goal_id, next_question, planner_reply,
+		 created_at, updated_at)
+		SELECT id, project, title, status, spec_json, conversation, draft_tasks,
+		 COALESCE(brief_markdown, ''), COALESCE(working_markdown, ''),
+		 COALESCE(goal_task_id, ''), COALESCE(structured, '{}'),
+		 COALESCE(execution_batches, '[]'), COALESCE(materialized_goal_id, ''),
+		 COALESCE(next_question, ''), COALESCE(planner_reply, ''),
+		 created_at, updated_at
+		FROM plan_docs_old`); err != nil {
+		return fmt.Errorf("copy plan_docs data: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE plan_docs_old`); err != nil {
+		return fmt.Errorf("drop plan_docs_old: %w", err)
+	}
+	return tx.Commit()
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && len(substr) > 0 &&
+		(s == substr || len(s) > 0 && findSubstr(s, substr))
+}
+
+func findSubstr(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
 
 // migrateAddColumn adds a column to a table if it doesn't already exist.
