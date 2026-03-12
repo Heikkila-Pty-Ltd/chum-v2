@@ -505,6 +505,7 @@ func TestDoltDefaults(t *testing.T) {
 	}
 }
 
+
 func TestRateLimitDefaults(t *testing.T) {
 	t.Parallel()
 	content := `[general]`
