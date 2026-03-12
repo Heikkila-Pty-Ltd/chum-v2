@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/ghrate"
 )
 
 // validTaskID matches safe task IDs: alphanumeric, dots, dashes, underscores.
@@ -345,6 +347,9 @@ func CreatePR(ctx context.Context, workDir, title string) error {
 		args = append(args, "--base", baseBranch)
 	}
 
+	if err := ghrate.Wait(ctx); err != nil {
+		return fmt.Errorf("gh rate limit wait: %w", err)
+	}
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Dir = workDir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -496,6 +501,9 @@ func GetPRInfo(ctx context.Context, workDir string, prNumber int) (*PRInfo, erro
 	args := []string{"pr", "view", "--json", "number,headRefOid,url"}
 	if prNumber > 0 {
 		args = []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "number,headRefOid,url"}
+	}
+	if err := ghrate.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("gh rate limit wait: %w", err)
 	}
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Dir = workDir
