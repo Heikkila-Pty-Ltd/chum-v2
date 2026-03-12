@@ -536,6 +536,26 @@ func (a *API) handlePlanMaterialize(w http.ResponseWriter, r *http.Request) {
 	a.jsonOK(w, plan)
 }
 
+// validateDraftTaskRefs checks that all depends_on and parent_ref references
+// point to refs that exist in the task list. Must be called before any writes.
+func validateDraftTaskRefs(tasks []dag.DraftTask) error {
+	refSet := map[string]bool{}
+	for _, t := range tasks {
+		refSet[t.Ref] = true
+	}
+	for _, t := range tasks {
+		for _, dep := range t.DependsOn {
+			if !refSet[dep] {
+				return fmt.Errorf("task %s depends on unknown ref %q", t.Ref, dep)
+			}
+		}
+		if t.ParentRef != "" && !refSet[t.ParentRef] {
+			return fmt.Errorf("task %s has unknown parent_ref %q", t.Ref, t.ParentRef)
+		}
+	}
+	return nil
+}
+
 // topoSortDraftTasks orders tasks so that parents appear before children.
 // Tasks with a parent_ref are placed after their parent. Tasks without
 // parent_ref keep their original relative order.
@@ -569,6 +589,11 @@ func topoSortDraftTasks(tasks []dag.DraftTask) []dag.DraftTask {
 }
 
 func (a *API) materializeViaBeads(ctx context.Context, bc beads.Store, plan *dag.PlanDoc, draftTasks []dag.DraftTask) (string, error) {
+	// Validate all refs before any writes to prevent partial materialization.
+	if err := validateDraftTaskRefs(draftTasks); err != nil {
+		return "", fmt.Errorf("ref validation: %w", err)
+	}
+
 	// Create top-level plan epic in beads.
 	planEpicID, err := bc.Create(ctx, beads.CreateParams{
 		Title:     plan.Title,
@@ -669,6 +694,11 @@ func (a *API) materializeViaBeads(ctx context.Context, bc beads.Store, plan *dag
 }
 
 func (a *API) materializeViaDAG(ctx context.Context, plan *dag.PlanDoc, draftTasks []dag.DraftTask) (string, error) {
+	// Validate all refs before any writes to prevent partial materialization.
+	if err := validateDraftTaskRefs(draftTasks); err != nil {
+		return "", fmt.Errorf("ref validation: %w", err)
+	}
+
 	// Create top-level goal.
 	goalID, err := a.DAG.CreateTask(ctx, dag.Task{
 		Title:   plan.Title,

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"time"
 )
 
@@ -58,17 +57,18 @@ type PlanDocSummary struct {
 
 // ConversationMessage represents a single message in the plan conversation.
 type ConversationMessage struct {
-	Role      string `json:"role"`      // "user" or "assistant"
+	Role      string `json:"role"` // "user" or "assistant"
 	Message   string `json:"message"`
 	Timestamp string `json:"timestamp"`
 }
 
 func generatePlanID() (string, error) {
-	n, err := rand.Int(rand.Reader, big.NewInt(99999))
-	if err != nil {
+	// 12-digit hex = 48 bits of entropy (~281 trillion values), collision-safe.
+	var buf [6]byte
+	if _, err := rand.Read(buf[:]); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("plan-%05d", n.Int64()), nil
+	return fmt.Sprintf("plan-%x", buf), nil
 }
 
 // CreatePlan inserts a new plan document.
