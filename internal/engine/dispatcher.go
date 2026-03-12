@@ -462,11 +462,19 @@ func (da *DispatchActivities) filterBeadsMappedReadyTasks(ctx context.Context, p
 
 	filtered := make([]dag.Task, 0, len(ready))
 	for _, t := range ready {
+		// Try batch result first.
 		if mappings != nil {
 			if m, ok := mappings[t.ID]; ok && strings.TrimSpace(m.IssueID) != "" {
 				filtered = append(filtered, t)
 				continue
 			}
+		}
+
+		// Individual mapping lookup — covers batch-query failures and
+		// tasks missing from the batch result.
+		if m, mErr := bridgeDAG.GetBeadsMappingByTask(ctx, projectName, t.ID); mErr == nil && strings.TrimSpace(m.IssueID) != "" {
+			filtered = append(filtered, t)
+			continue
 		}
 
 		// Legacy recovery: for old tasks where task ID equals beads issue ID,
