@@ -541,6 +541,9 @@ func (a *API) handlePlanMaterialize(w http.ResponseWriter, r *http.Request) {
 func validateDraftTaskRefs(tasks []dag.DraftTask) error {
 	refSet := map[string]bool{}
 	for _, t := range tasks {
+		if refSet[t.Ref] {
+			return fmt.Errorf("duplicate task ref %q", t.Ref)
+		}
 		refSet[t.Ref] = true
 	}
 	for _, t := range tasks {
@@ -558,34 +561,48 @@ func validateDraftTaskRefs(tasks []dag.DraftTask) error {
 
 // topoSortDraftTasks orders tasks so that parents appear before children.
 // Tasks with a parent_ref are placed after their parent. Tasks without
-// parent_ref keep their original relative order.
-func topoSortDraftTasks(tasks []dag.DraftTask) []dag.DraftTask {
+// parent_ref keep their original relative order. Detects cycles.
+func topoSortDraftTasks(tasks []dag.DraftTask) ([]dag.DraftTask, error) {
 	byRef := map[string]int{}
 	for i, t := range tasks {
 		byRef[t.Ref] = i
 	}
 
-	visited := make([]bool, len(tasks))
+	const (
+		unvisited  = 0
+		inProgress = 1
+		done       = 2
+	)
+	state := make([]int, len(tasks))
 	result := make([]dag.DraftTask, 0, len(tasks))
 
-	var visit func(i int)
-	visit = func(i int) {
-		if visited[i] {
-			return
+	var visit func(i int) error
+	visit = func(i int) error {
+		if state[i] == done {
+			return nil
 		}
+		if state[i] == inProgress {
+			return fmt.Errorf("parent_ref cycle detected at %q", tasks[i].Ref)
+		}
+		state[i] = inProgress
 		// Visit parent first if it exists.
 		if pr := tasks[i].ParentRef; pr != "" {
 			if pi, ok := byRef[pr]; ok {
-				visit(pi)
+				if err := visit(pi); err != nil {
+					return err
+				}
 			}
 		}
-		visited[i] = true
+		state[i] = done
 		result = append(result, tasks[i])
+		return nil
 	}
 	for i := range tasks {
-		visit(i)
+		if err := visit(i); err != nil {
+			return nil, err
+		}
 	}
-	return result
+	return result, nil
 }
 
 func (a *API) materializeViaBeads(ctx context.Context, bc beads.Store, plan *dag.PlanDoc, draftTasks []dag.DraftTask) (string, error) {
@@ -619,7 +636,10 @@ func (a *API) materializeViaBeads(ctx context.Context, bc beads.Store, plan *dag
 	a.DAG.UpsertBeadsMapping(ctx, plan.Project, planEpicID, planEpicID, "")
 
 	// Sort so parents are created before children.
-	sorted := topoSortDraftTasks(draftTasks)
+	sorted, err := topoSortDraftTasks(draftTasks)
+	if err != nil {
+		return "", fmt.Errorf("task ordering: %w", err)
+	}
 
 	// Two passes: first create all items, then wire dependencies.
 	refToIssueID := map[string]string{}
@@ -712,7 +732,10 @@ func (a *API) materializeViaDAG(ctx context.Context, plan *dag.PlanDoc, draftTas
 	}
 
 	// Sort so parents are created before children.
-	sorted := topoSortDraftTasks(draftTasks)
+	sorted, err := topoSortDraftTasks(draftTasks)
+	if err != nil {
+		return "", fmt.Errorf("task ordering: %w", err)
+	}
 
 	// Two passes: create all, then wire dependencies.
 	refToTaskID := map[string]string{}

@@ -5,15 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // StreamChunk represents a piece of streaming LLM output.
 type StreamChunk struct {
-	Text string // incremental text token
-	Done bool   // true on final chunk
+	Text  string // incremental text token
+	Done  bool   // true on final chunk
+	Error error  // non-nil if CLI exited with an error
 }
 
 // streamEvent represents a JSON line from --output-format stream-json.
@@ -60,8 +61,9 @@ func RunCLIStream(ctx context.Context, agent, model, workDir, prompt string) (<-
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 
-	// Capture stderr separately so it doesn't mix into the stream.
-	cmd.Stderr = io.Discard
+	// Capture stderr for error reporting.
+	var stderrBuf strings.Builder
+	cmd.Stderr = &stderrBuf
 
 	if err := cmd.Start(); err != nil {
 		stdinFile.Close()
@@ -100,8 +102,19 @@ func RunCLIStream(ctx context.Context, agent, model, workDir, prompt string) (<-
 			}
 		}
 
-		_ = cmd.Wait()
-		ch <- StreamChunk{Done: true}
+		var streamErr error
+		if scanErr := scanner.Err(); scanErr != nil {
+			streamErr = fmt.Errorf("stream read: %w", scanErr)
+		}
+		if waitErr := cmd.Wait(); waitErr != nil && streamErr == nil {
+			stderr := strings.TrimSpace(stderrBuf.String())
+			if stderr != "" {
+				streamErr = fmt.Errorf("CLI exited: %w: %s", waitErr, stderr)
+			} else {
+				streamErr = fmt.Errorf("CLI exited: %w", waitErr)
+			}
+		}
+		ch <- StreamChunk{Done: true, Error: streamErr}
 	}()
 
 	return ch, nil

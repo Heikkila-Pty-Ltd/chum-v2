@@ -214,6 +214,7 @@ func (a *API) handlePlanGroom(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var fullText strings.Builder
+	var streamErr error
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 
@@ -230,6 +231,7 @@ func (a *API) handlePlanGroom(w http.ResponseWriter, r *http.Request) {
 				goto done
 			}
 			if chunk.Done {
+				streamErr = chunk.Error
 				goto done
 			}
 			fullText.WriteString(chunk.Text)
@@ -239,7 +241,14 @@ func (a *API) handlePlanGroom(w http.ResponseWriter, r *http.Request) {
 	}
 
 done:
-	// 7. Save assistant response to conversation.
+	// 7. Surface CLI errors to the client.
+	if streamErr != nil {
+		a.Logger.Error("LLM stream failed", "error", streamErr, "plan_id", id)
+		fmt.Fprintf(w, "event: error\ndata: %s\n\n", mustJSON(map[string]string{"error": streamErr.Error()}))
+		flusher.Flush()
+	}
+
+	// 8. Save assistant response to conversation.
 	responseText := strings.TrimSpace(fullText.String())
 	if responseText != "" {
 		msg := dag.ConversationMessage{
@@ -252,11 +261,17 @@ done:
 		}
 	}
 
-	// 8. Send done event.
-	fmt.Fprintf(w, "event: done\ndata: %s\n\n", mustJSON(map[string]any{
+	// 9. Re-read plan to get latest state and send done event with full plan.
+	updatedPlan, err := a.DAG.GetPlan(r.Context(), id)
+	donePayload := map[string]any{
 		"full_text": responseText,
 		"status":    plan.Status,
-	}))
+	}
+	if err == nil {
+		donePayload["status"] = updatedPlan.Status
+		donePayload["plan"] = updatedPlan
+	}
+	fmt.Fprintf(w, "event: done\ndata: %s\n\n", mustJSON(donePayload))
 	flusher.Flush()
 }
 

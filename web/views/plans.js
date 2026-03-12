@@ -472,6 +472,11 @@
               if (data.error) {
                 assistantEl.querySelector('.plans-msg-content').textContent = 'Error: ' + data.error;
               }
+              // Update plan state from done event so UI controls refresh.
+              if (data.plan && currentPlan) {
+                Object.assign(currentPlan, data.plan);
+                renderPipeline();
+              }
             } catch {
               // Skip malformed JSON lines.
             }
