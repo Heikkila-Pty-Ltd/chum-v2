@@ -97,6 +97,11 @@ func NewEngine(d dag.TaskStore, tc client.Client, taskQueue string, workDirs map
 	}
 }
 
+// WorkDir returns the workspace path for a project, or empty string if unknown.
+func (e *Engine) WorkDir(project string) string {
+	return e.workDirs[project]
+}
+
 // ConfigureBeadsIngress configures beads-first ingress for external submissions.
 // Any non-legacy policy requires Submit to create work in beads before DAG admission.
 func (e *Engine) ConfigureBeadsIngress(policy, canaryLabel string, clients map[string]beads.Store) {

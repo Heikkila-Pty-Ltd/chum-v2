@@ -23,6 +23,7 @@ type PlanDoc struct {
 	Structured         json.RawMessage `json:"structured"`
 	ExecutionBatches   json.RawMessage `json:"execution_batches"`
 	MaterializedGoalID string          `json:"materialized_goal_id"`
+	ContextSnapshot    string          `json:"context_snapshot,omitempty"`
 	NextQuestion       string          `json:"next_question"`
 	PlannerReply       string          `json:"planner_reply"`
 	CreatedAt          time.Time       `json:"created_at"`
@@ -99,11 +100,11 @@ func (d *DAG) CreatePlan(ctx context.Context, p *PlanDoc) error {
 	_, err := d.db.ExecContext(ctx,
 		`INSERT INTO plan_docs (id, project, title, status, spec_json, conversation, draft_tasks,
 		 brief_markdown, working_markdown, goal_task_id, structured, execution_batches,
-		 materialized_goal_id, next_question, planner_reply)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 materialized_goal_id, context_snapshot, next_question, planner_reply)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.Project, p.Title, p.Status, string(p.SpecJSON), string(p.Conversation), string(p.DraftTasks),
 		p.BriefMarkdown, p.WorkingMarkdown, p.GoalTaskID, string(structured), string(executionBatches),
-		p.MaterializedGoalID, p.NextQuestion, p.PlannerReply)
+		p.MaterializedGoalID, p.ContextSnapshot, p.NextQuestion, p.PlannerReply)
 	if err != nil {
 		return fmt.Errorf("create plan: %w", err)
 	}
@@ -122,7 +123,7 @@ func (d *DAG) GetPlan(ctx context.Context, id string) (*PlanDoc, error) {
 	row := d.db.QueryRowContext(ctx,
 		`SELECT id, project, title, status, spec_json, conversation, draft_tasks,
 		 brief_markdown, working_markdown, goal_task_id, structured, execution_batches,
-		 materialized_goal_id, next_question, planner_reply, created_at, updated_at
+		 materialized_goal_id, context_snapshot, next_question, planner_reply, created_at, updated_at
 		 FROM plan_docs WHERE id = ?`, id)
 
 	var p PlanDoc
@@ -131,7 +132,7 @@ func (d *DAG) GetPlan(ctx context.Context, id string) (*PlanDoc, error) {
 		&specJSON, &conversation, &draftTasks,
 		&p.BriefMarkdown, &p.WorkingMarkdown, &p.GoalTaskID,
 		&structured, &executionBatches,
-		&p.MaterializedGoalID, &p.NextQuestion, &p.PlannerReply,
+		&p.MaterializedGoalID, &p.ContextSnapshot, &p.NextQuestion, &p.PlannerReply,
 		&p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get plan: %w", err)
@@ -195,7 +196,8 @@ func (d *DAG) UpdatePlanFields(ctx context.Context, id string, fields map[string
 		"brief_markdown": true, "working_markdown": true, "goal_task_id": true,
 		"conversation": true, "structured": true,
 		"draft_tasks": true, "execution_batches": true,
-		"materialized_goal_id": true, "next_question": true, "planner_reply": true,
+		"materialized_goal_id": true, "context_snapshot": true,
+		"next_question": true, "planner_reply": true,
 	}
 	var setClauses []string
 	var args []any

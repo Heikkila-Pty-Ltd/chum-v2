@@ -1,5 +1,6 @@
 # Binaries
 /chum
+/dashboard-preview
 *.test
 
 # Database

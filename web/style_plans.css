@@ -154,6 +154,48 @@
   text-overflow: ellipsis;
 }
 
+/* --- Main area tabs (Chat / Plan) --- */
+.plans-main-tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.plans-main-tab {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 3px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+
+.plans-main-tab:hover {
+  color: var(--text-secondary);
+}
+
+.plans-main-tab.active {
+  color: var(--text-primary);
+  background: var(--surface-3);
+  border-color: var(--border-default);
+}
+
+/* --- Main panes (shown/hidden by tab) --- */
+.plans-main-pane {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.plans-main-pane.active {
+  display: flex;
+}
+
 /* --- Chat thread --- */
 .plans-chat {
   flex: 1;
@@ -644,4 +686,138 @@
 .plans-task-subtask .plans-task-type-badge {
   background: rgba(201, 168, 76, 0.12);
   color: var(--text-tertiary);
+}
+
+/* Batch header row */
+.plans-task-batch-header td {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  background: var(--surface-2);
+  padding: var(--sp-1) var(--sp-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* --- Plan document view --- */
+.plans-document {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-5) var(--sp-6);
+}
+
+.plans-doc-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: var(--sp-3);
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.plans-doc-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.plans-doc-empty-hint {
+  font-size: 12px;
+  max-width: 400px;
+  line-height: 1.6;
+}
+
+.plans-doc-section {
+  margin-bottom: var(--sp-5);
+}
+
+.plans-doc-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  margin-bottom: var(--sp-2);
+  padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.plans-doc-content {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-primary);
+  max-width: 720px;
+}
+
+.plans-doc-content p {
+  margin-bottom: var(--sp-3);
+}
+
+.plans-doc-content h1, .plans-doc-content h2, .plans-doc-content h3 {
+  margin: var(--sp-4) 0 var(--sp-2);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.plans-doc-content h1 { font-size: 18px; }
+.plans-doc-content h2 { font-size: 15px; }
+.plans-doc-content h3 { font-size: 13px; }
+
+.plans-doc-content ul, .plans-doc-content ol {
+  padding-left: var(--sp-5);
+  margin-bottom: var(--sp-3);
+}
+
+.plans-doc-content li {
+  margin-bottom: var(--sp-1);
+}
+
+.plans-doc-content pre {
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: var(--sp-3);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  margin: var(--sp-3) 0;
+}
+
+.plans-doc-content code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--surface-2);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+.plans-doc-content pre code {
+  background: none;
+  padding: 0;
+}
+
+.plans-doc-content strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.plans-doc-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: var(--sp-3) 0;
+  font-size: 12px;
+}
+
+.plans-doc-content th, .plans-doc-content td {
+  border: 1px solid var(--border-default);
+  padding: var(--sp-1) var(--sp-2);
+  text-align: left;
+}
+
+.plans-doc-content th {
+  background: var(--surface-2);
+  font-weight: 600;
 }

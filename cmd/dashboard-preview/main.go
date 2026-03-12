@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/beads"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/config"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
@@ -105,7 +106,8 @@ func main() {
 	}
 
 	runner := llm.CLIRunner{}
-	api := &jarvis.API{Engine: eng, DAG: d, Store: s, LLM: runner, Logger: logger, WebDir: webDir, JarvisKBPath: jarvisDB}
+	parser := ast.NewParser(logger)
+	api := &jarvis.API{Engine: eng, DAG: d, Store: s, LLM: runner, AST: parser, Logger: logger, WebDir: webDir, JarvisKBPath: jarvisDB}
 
 	addr := fmt.Sprintf("0.0.0.0:%s", port)
 	ln, err := net.Listen("tcp", addr)
