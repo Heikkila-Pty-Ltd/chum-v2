@@ -1,6 +1,7 @@
 package codebase
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/ast"
@@ -204,6 +205,33 @@ func TestFormatAST_CapsAllFiles(t *testing.T) {
 	r := &ContextResult{AllFiles: files}
 	// FormatAST should cap to 20 files (not crash on 25)
 	_ = r.FormatAST()
+}
+
+func TestFormatForPrompt_DirTreeCap(t *testing.T) {
+	// Create more files than maxDirTreeFiles to verify capping
+	files := make([]*ast.ParsedFile, 100)
+	for i := range files {
+		files[i] = &ast.ParsedFile{
+			Path:    fmt.Sprintf("pkg/file_%03d.go", i),
+			Package: "pkg",
+		}
+	}
+	r := &ContextResult{AllFiles: files}
+	out := FormatForPrompt(r)
+	if out == "" {
+		t.Fatal("expected non-empty output")
+	}
+	// Should not contain all 100 files — capped at maxDirTreeFiles
+	count := 0
+	for i := range files {
+		name := fmt.Sprintf("file_%03d.go", i)
+		if contains(out, name) {
+			count++
+		}
+	}
+	if count > maxDirTreeFiles {
+		t.Errorf("directory map should be capped at %d files, got %d", maxDirTreeFiles, count)
+	}
 }
 
 func contains(s, substr string) bool {

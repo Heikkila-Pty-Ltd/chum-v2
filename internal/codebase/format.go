@@ -10,6 +10,7 @@ import (
 )
 
 const maxClaudeMDChars = 2000 // ~500 tokens
+const maxDirTreeFiles = 80   // cap directory map to avoid prompt overflow
 
 // FormatForPrompt formats a ContextResult into a compact string suitable for
 // injection into an LLM prompt. Uses progressive disclosure:
@@ -39,6 +40,9 @@ func FormatForPrompt(r *ContextResult) string {
 
 	// Codebase map — progressive disclosure
 	allFiles := collectAllFiles(r)
+	if len(allFiles) > maxDirTreeFiles {
+		allFiles = allFiles[:maxDirTreeFiles]
+	}
 	if len(allFiles) > 0 {
 		// Layer 1: Directory map (compact, one line per file)
 		sb.WriteString("\n### Codebase Map\n")

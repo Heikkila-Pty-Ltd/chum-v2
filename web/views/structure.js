@@ -14,6 +14,11 @@
   let showCriticalPath = false;
 
   function render(viewport, project) {
+    // Reset project-specific state on (re-)render
+    goalFilter = '';
+    cachedData = null;
+    cachedTreeData = null;
+
     viewport.innerHTML = `
       <div class="structure-container view-enter" id="structure-root">
         <div class="structure-controls">
@@ -123,18 +128,26 @@
 
   function populateGoalFilter(data) {
     const select = document.querySelector('[data-filter="goal"]');
-    if (!select || select.options.length > 1) return;
+    if (!select) return;
 
-    // Find root nodes — those that don't depend on anything (never appear as 'from',
-    // since edge.from = dependent, edge.to = prerequisite per edges.go convention).
-    const dependents = new Set(data.edges.map(e => e.from));
-    const roots = data.nodes.filter(n => !dependents.has(n.id));
-    roots.forEach(r => {
+    // Rebuild options each time so live refreshes pick up new goals.
+    const prev = select.value;
+    while (select.options.length > 1) select.remove(1);
+
+    // Goals are top-level tasks (no parent_id) — use the task hierarchy,
+    // not dependency edges, so the dropdown shows actual goals.
+    const goals = data.nodes.filter(n => !n.parent_id);
+    goals.forEach(g => {
       const opt = document.createElement('option');
-      opt.value = r.id;
-      opt.textContent = App.truncate(r.title, 30);
+      opt.value = g.id;
+      opt.textContent = App.truncate(g.title, 30);
       select.appendChild(opt);
     });
+
+    // Restore previous selection if it still exists.
+    if (prev && [...select.options].some(o => o.value === prev)) {
+      select.value = prev;
+    }
   }
 
   // --- Filter helpers ---
@@ -148,17 +161,16 @@
       filtered = filtered.filter(n => n.status !== 'completed' && n.status !== 'done');
     }
 
-    // Goal filter — keep only dependents of selected goal (tasks that depend on it,
-    // directly or transitively). Edge convention: from=dependent, to=prerequisite.
+    // Goal filter — keep only the selected goal and its children (via parent_id hierarchy).
     if (goalFilter) {
       const descendants = new Set();
       descendants.add(goalFilter);
       let changed = true;
       while (changed) {
         changed = false;
-        edges.forEach(e => {
-          if (descendants.has(e.to) && !descendants.has(e.from)) {
-            descendants.add(e.from);
+        filtered.forEach(n => {
+          if (n.parent_id && descendants.has(n.parent_id) && !descendants.has(n.id)) {
+            descendants.add(n.id);
             changed = true;
           }
         });
