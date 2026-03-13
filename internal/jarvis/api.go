@@ -10,6 +10,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/plansession"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
 )
 
@@ -27,6 +28,8 @@ type API struct {
 	IngressPolicy        string                          // legacy | beads_first | beads_only
 	PlanningDefaultAgent string                          // default planner agent for dashboard starts
 	PlanningCfg          planning.PlanningCeremonyConfig // dashboard planning ceremony config
+
+	PlanSession *plansession.Manager // interactive planner session manager; nil disables session endpoints
 
 	JarvisKBPath string  // path to Jarvis knowledge base SQLite (read-only)
 	jarvisDB     *sql.DB // cached connection to Jarvis KB; opened on first use
@@ -80,6 +83,15 @@ func (a *API) Handler() http.Handler {
 		mux.HandleFunc("POST /api/dashboard/plan/{id}/decompose", a.handlePlanDecompose)
 		mux.HandleFunc("POST /api/dashboard/plan/{id}/approve", a.handlePlanApprove)
 		mux.HandleFunc("POST /api/dashboard/plan/{id}/materialize", a.handlePlanMaterialize)
+	}
+
+	// Interactive planner session endpoints.
+	if a.PlanSession != nil {
+		mux.HandleFunc("POST /api/dashboard/plan/{id}/session", a.handlePlanSessionCreate)
+		mux.HandleFunc("GET /api/dashboard/plan/{id}/session/stream", a.handlePlanSessionStream)
+		mux.HandleFunc("POST /api/dashboard/plan/{id}/session/message", a.handlePlanSessionMessage)
+		mux.HandleFunc("POST /api/dashboard/plan/{id}/session/extract", a.handlePlanSessionExtract)
+		mux.HandleFunc("DELETE /api/dashboard/plan/{id}/session", a.handlePlanSessionDestroy)
 	}
 
 	// Jarvis knowledge base endpoints (read-only).

@@ -17,6 +17,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/jarvis"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/plansession"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
 )
 
@@ -107,7 +108,12 @@ func main() {
 
 	runner := llm.CLIRunner{}
 	parser := ast.NewParser(logger)
-	api := &jarvis.API{Engine: eng, DAG: d, Store: s, LLM: runner, AST: parser, Logger: logger, WebDir: webDir, JarvisKBPath: jarvisDB}
+
+	// Initialize interactive planner session manager.
+	planSess := plansession.NewManager(logger, port, "")
+	planSess.Reconcile() // kill orphaned tmux sessions from previous runs
+
+	api := &jarvis.API{Engine: eng, DAG: d, Store: s, LLM: runner, AST: parser, Logger: logger, WebDir: webDir, JarvisKBPath: jarvisDB, PlanSession: planSess}
 
 	addr := fmt.Sprintf("0.0.0.0:%s", port)
 	ln, err := net.Listen("tcp", addr)
