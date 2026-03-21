@@ -71,6 +71,9 @@ func TestCalculateSourceFreshness(t *testing.T) {
 			if !freshness.LastUpdated.Equal(tt.lastRun) {
 				t.Errorf("Expected LastUpdated %s, got %s", tt.lastRun, freshness.LastUpdated)
 			}
+			if freshness.SourceID != "test-source" {
+				t.Errorf("Expected SourceID test-source, got %s", freshness.SourceID)
+			}
 			if !freshness.NextRunETA.Equal(tt.expectedETA) {
 				t.Errorf("Expected NextRunETA %s, got %s", tt.expectedETA, freshness.NextRunETA)
 			}

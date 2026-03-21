@@ -25,6 +25,7 @@ func CalculateSourceFreshness(sourceID string, now time.Time, lastRun time.Time,
 	}
 
 	return types.SourceFreshness{
+		SourceID:    sourceID,
 		Status:      status,
 		LastUpdated: lastRun,
 		NextRunETA:  nextRunETA,
