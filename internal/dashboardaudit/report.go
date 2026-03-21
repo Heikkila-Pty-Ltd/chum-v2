@@ -382,15 +382,15 @@ func classifyFrontendFile(relPath string) string {
 }
 
 func extractCSSClasses(files []frontendFile) map[string]bool {
-	classPattern := regexp.MustCompile(`\.([A-Za-z_][A-Za-z0-9_-]*)`)
 	classes := map[string]bool{}
 	for _, file := range files {
 		if !strings.HasSuffix(file.RelPath, ".css") {
 			continue
 		}
-		matches := classPattern.FindAllStringSubmatch(file.Content, -1)
-		for _, match := range matches {
-			classes[match[1]] = true
+		for _, selector := range extractSelectorBlocks(file.Content) {
+			for _, className := range extractSelectorClasses(selector) {
+				classes[className] = true
+			}
 		}
 	}
 	return classes
@@ -424,17 +424,26 @@ func extractAPIMethods(files []frontendFile) (map[string]apiMethod, error) {
 		return nil, fmt.Errorf("web/app.js not found")
 	}
 
-	methodPattern := regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\([^)]*\)\s*=>\s*API\.(get|post)\((.+)\),\s*$`)
+	objectBody, err := extractObjectLiteralBody(appFile.Content, "const API =")
+	if err != nil {
+		return nil, err
+	}
+
+	methodPattern := regexp.MustCompile(`(?s)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\([^)]*\)\s*=>\s*API\.(get|post)\s*\((.*)\)\s*$`)
 	methods := map[string]apiMethod{}
-	for _, line := range strings.Split(appFile.Content, "\n") {
-		match := methodPattern.FindStringSubmatch(line)
+	for _, entry := range splitTopLevelEntries(objectBody) {
+		match := methodPattern.FindStringSubmatch(strings.TrimSpace(entry))
 		if len(match) == 0 {
+			continue
+		}
+		firstArg, ok := firstTopLevelArgument(match[3])
+		if !ok {
 			continue
 		}
 		methods[match[1]] = apiMethod{
 			Name:       match[1],
 			HTTPMethod: strings.ToUpper(match[2]),
-			Route:      simplifyJSRoute(match[3]),
+			Route:      simplifyJSRoute(firstArg),
 		}
 	}
 	return methods, nil
@@ -499,22 +508,7 @@ func viewFilesForUsage(files []frontendFile, usageViews map[string]bool) []strin
 }
 
 func isExclusiveToView(className string, usageViews map[string]bool, view string) bool {
-	if len(usageViews) == 1 && usageViews[view] {
-		return true
-	}
-	if len(usageViews) > 1 {
-		return false
-	}
-	switch view {
-	case viewJarvisKB:
-		return strings.HasPrefix(className, "jv-") || strings.HasPrefix(className, "ov2-")
-	case viewTimeline:
-		return strings.HasPrefix(className, "timeline-")
-	case viewStats:
-		return strings.HasPrefix(className, "stats-")
-	default:
-		return false
-	}
+	return len(usageViews) == 1 && usageViews[view]
 }
 
 func isTargetSpecificClass(className string) bool {
@@ -609,4 +603,263 @@ func sortSharedCode(entries []SharedCode) {
 		}
 		return entries[i].Kind < entries[j].Kind
 	})
+}
+
+func extractSelectorBlocks(content string) []string {
+	var selectors []string
+	start := 0
+	for i := 0; i < len(content); i++ {
+		switch content[i] {
+		case '{':
+			selector := strings.TrimSpace(content[start:i])
+			if selector != "" {
+				selectors = append(selectors, selector)
+			}
+			start = i + 1
+		case '}':
+			start = i + 1
+		}
+	}
+	return selectors
+}
+
+func extractSelectorClasses(selector string) []string {
+	seen := map[string]bool{}
+	var classes []string
+	for i := 0; i < len(selector); i++ {
+		if selector[i] != '.' || i+1 >= len(selector) {
+			continue
+		}
+		next := selector[i+1]
+		if !isCSSIdentStart(next) {
+			continue
+		}
+		j := i + 2
+		for j < len(selector) && isCSSIdentPart(selector[j]) {
+			j++
+		}
+		className := selector[i+1 : j]
+		if !seen[className] {
+			seen[className] = true
+			classes = append(classes, className)
+		}
+		i = j - 1
+	}
+	return classes
+}
+
+func isCSSIdentStart(ch byte) bool {
+	return ch == '_' ||
+		(ch >= 'a' && ch <= 'z') ||
+		(ch >= 'A' && ch <= 'Z')
+}
+
+func isCSSIdentPart(ch byte) bool {
+	return isCSSIdentStart(ch) ||
+		(ch >= '0' && ch <= '9') ||
+		ch == '-'
+}
+
+func extractObjectLiteralBody(content, anchor string) (string, error) {
+	idx := strings.Index(content, anchor)
+	if idx < 0 {
+		return "", fmt.Errorf("anchor %q not found", anchor)
+	}
+	open := strings.Index(content[idx:], "{")
+	if open < 0 {
+		return "", fmt.Errorf("object literal for %q not found", anchor)
+	}
+	open += idx
+	close, err := findMatchingBrace(content, open)
+	if err != nil {
+		return "", err
+	}
+	return content[open+1 : close], nil
+}
+
+func splitTopLevelEntries(content string) []string {
+	var entries []string
+	start := 0
+	depthParen := 0
+	depthBracket := 0
+	depthBrace := 0
+	var quote byte
+	inLineComment := false
+	inBlockComment := false
+
+	for i := 0; i < len(content); i++ {
+		if inLineComment {
+			if content[i] == '\n' {
+				inLineComment = false
+			}
+			continue
+		}
+		if inBlockComment {
+			if i+1 < len(content) && content[i] == '*' && content[i+1] == '/' {
+				inBlockComment = false
+				i++
+			}
+			continue
+		}
+		if quote != 0 {
+			if content[i] == '\\' && quote != '`' {
+				i++
+				continue
+			}
+			if content[i] == quote {
+				quote = 0
+			}
+			continue
+		}
+		if i+1 < len(content) && content[i] == '/' && content[i+1] == '/' {
+			inLineComment = true
+			i++
+			continue
+		}
+		if i+1 < len(content) && content[i] == '/' && content[i+1] == '*' {
+			inBlockComment = true
+			i++
+			continue
+		}
+		switch content[i] {
+		case '\'', '"', '`':
+			quote = content[i]
+		case '(':
+			depthParen++
+		case ')':
+			if depthParen > 0 {
+				depthParen--
+			}
+		case '[':
+			depthBracket++
+		case ']':
+			if depthBracket > 0 {
+				depthBracket--
+			}
+		case '{':
+			depthBrace++
+		case '}':
+			if depthBrace > 0 {
+				depthBrace--
+			}
+		case ',':
+			if depthParen == 0 && depthBracket == 0 && depthBrace == 0 {
+				entry := strings.TrimSpace(content[start:i])
+				if entry != "" {
+					entries = append(entries, entry)
+				}
+				start = i + 1
+			}
+		}
+	}
+
+	if tail := strings.TrimSpace(content[start:]); tail != "" {
+		entries = append(entries, tail)
+	}
+	return entries
+}
+
+func firstTopLevelArgument(args string) (string, bool) {
+	start := 0
+	depthParen := 0
+	depthBracket := 0
+	depthBrace := 0
+	var quote byte
+
+	for i := 0; i < len(args); i++ {
+		if quote != 0 {
+			if args[i] == '\\' && quote != '`' {
+				i++
+				continue
+			}
+			if args[i] == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch args[i] {
+		case '\'', '"', '`':
+			quote = args[i]
+		case '(':
+			depthParen++
+		case ')':
+			if depthParen > 0 {
+				depthParen--
+			}
+		case '[':
+			depthBracket++
+		case ']':
+			if depthBracket > 0 {
+				depthBracket--
+			}
+		case '{':
+			depthBrace++
+		case '}':
+			if depthBrace > 0 {
+				depthBrace--
+			}
+		case ',':
+			if depthParen == 0 && depthBracket == 0 && depthBrace == 0 {
+				return strings.TrimSpace(args[start:i]), true
+			}
+		}
+	}
+
+	arg := strings.TrimSpace(args[start:])
+	return arg, arg != ""
+}
+
+func findMatchingBrace(content string, open int) (int, error) {
+	depth := 0
+	var quote byte
+	inLineComment := false
+	inBlockComment := false
+
+	for i := open; i < len(content); i++ {
+		if inLineComment {
+			if content[i] == '\n' {
+				inLineComment = false
+			}
+			continue
+		}
+		if inBlockComment {
+			if i+1 < len(content) && content[i] == '*' && content[i+1] == '/' {
+				inBlockComment = false
+				i++
+			}
+			continue
+		}
+		if quote != 0 {
+			if content[i] == '\\' && quote != '`' {
+				i++
+				continue
+			}
+			if content[i] == quote {
+				quote = 0
+			}
+			continue
+		}
+		if i+1 < len(content) && content[i] == '/' && content[i+1] == '/' {
+			inLineComment = true
+			i++
+			continue
+		}
+		if i+1 < len(content) && content[i] == '/' && content[i+1] == '*' {
+			inBlockComment = true
+			i++
+			continue
+		}
+		switch content[i] {
+		case '\'', '"', '`':
+			quote = content[i]
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i, nil
+			}
+		}
+	}
+	return -1, fmt.Errorf("unterminated object literal")
 }

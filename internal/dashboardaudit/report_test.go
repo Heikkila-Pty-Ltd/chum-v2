@@ -92,6 +92,89 @@ func TestAnalyze_CapturesTimelineAndStatsAsBackendOnly(t *testing.T) {
 	}
 }
 
+func TestIsExclusiveToView_UsesObservedUsageOnly(t *testing.T) {
+	t.Parallel()
+
+	if !isExclusiveToView("jv-goal-card", map[string]bool{viewJarvisKB: true}, viewJarvisKB) {
+		t.Fatal("expected single-view Jarvis usage to be exclusive")
+	}
+	if isExclusiveToView("jv-goal-card", map[string]bool{"overview": true}, viewJarvisKB) {
+		t.Fatal("expected overview-only usage to prevent Jarvis exclusivity")
+	}
+	if isExclusiveToView("jv-goal-card", map[string]bool{viewJarvisKB: true, "overview": true}, viewJarvisKB) {
+		t.Fatal("expected multi-view usage to prevent exclusivity")
+	}
+	if isExclusiveToView("jv-goal-card", nil, viewJarvisKB) {
+		t.Fatal("expected classes without observed usage to stay non-exclusive")
+	}
+}
+
+func TestExtractCSSClasses_OnlyReadsSelectorClasses(t *testing.T) {
+	t.Parallel()
+
+	files := []frontendFile{
+		{
+			RelPath: "web/style.css",
+			Content: `
+.real-class, button.primary:hover, .compound.foo { opacity: .5; transform: translate(.4rem, 0); }
+.rule { background-image: url("/assets/icon.svg"); }
+@media screen and (min-width: 800px) { .nested-class { color: red; } }
+`,
+		},
+	}
+
+	classes := extractCSSClasses(files)
+
+	for _, want := range []string{"real-class", "primary", "compound", "foo", "rule", "nested-class"} {
+		if !classes[want] {
+			t.Fatalf("missing class %q in %#v", want, classes)
+		}
+	}
+	for _, unexpected := range []string{"5", "4rem", "svg"} {
+		if classes[unexpected] {
+			t.Fatalf("unexpected non-selector token %q in %#v", unexpected, classes)
+		}
+	}
+}
+
+func TestExtractAPIMethods_AllowsMultilineMethodEntries(t *testing.T) {
+	t.Parallel()
+
+	methods, err := extractAPIMethods([]frontendFile{
+		{
+			RelPath: "web/app.js",
+			Content: `
+const App = (() => {
+  const API = {
+    async get(path) { return path; },
+    async post(path, body) { return { path, body }; },
+    jarvisGoals:
+      () =>
+        API.get(
+          '/api/dashboard/jarvis/goals'
+        ),
+    jarvisResolve: (body) =>
+      API.post(
+        "/api/dashboard/jarvis/actions/resolve",
+        body,
+      ),
+  };
+})();
+`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("extractAPIMethods() error = %v", err)
+	}
+
+	if got := methods["jarvisGoals"]; got.Route != "/api/dashboard/jarvis/goals" || got.HTTPMethod != "GET" {
+		t.Fatalf("jarvisGoals = %#v", got)
+	}
+	if got := methods["jarvisResolve"]; got.Route != "/api/dashboard/jarvis/actions/resolve" || got.HTTPMethod != "POST" {
+		t.Fatalf("jarvisResolve = %#v", got)
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
