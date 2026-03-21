@@ -13,7 +13,7 @@ const (
 
 // SourceFreshness holds calculated freshness metrics for a data source.
 type SourceFreshness struct {
-	Status FreshnessStatus `json:"status"`
-	LastUpdated time.Time   `json:"last_updated"`
-	NextRunETA  time.Time   `json:"next_run_eta"`
+	Status      FreshnessStatus `json:"status"`
+	LastUpdated time.Time       `json:"last_updated"`
+	NextRunETA  time.Time       `json:"next_run_eta"`
 }

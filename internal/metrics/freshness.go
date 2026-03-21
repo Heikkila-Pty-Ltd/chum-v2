@@ -11,7 +11,7 @@ import (
 // and the next run ETA based on the provided last run time and schedule cadence.
 func CalculateSourceFreshness(sourceID string, now time.Time, lastRun time.Time, scheduleCadence time.Duration) types.SourceFreshness {
 	nextRunETA := lastRun.Add(scheduleCadence)
-	
+
 	status := types.FreshnessStatusOK
 	if now.After(nextRunETA) {
 		// If current time is after the next expected run, it's at least a WARN.

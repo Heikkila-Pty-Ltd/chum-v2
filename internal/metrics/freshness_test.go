@@ -12,50 +12,50 @@ func TestCalculateSourceFreshness(t *testing.T) {
 	cadence := 1 * time.Hour
 
 	tests := []struct {
-		name          string
-		lastRun       time.Time
+		name           string
+		lastRun        time.Time
 		expectedStatus types.FreshnessStatus
 		expectedETA    time.Time
 	}{
 		{
-			name:          "OK - last run is fresh",
-			lastRun:       now.Add(-30 * time.Minute), // 30 minutes ago
+			name:           "OK - last run is fresh",
+			lastRun:        now.Add(-30 * time.Minute), // 30 minutes ago
 			expectedStatus: types.FreshnessStatusOK,
 			expectedETA:    now.Add(30 * time.Minute), // (now - 30min) + 1h = now + 30min
 		},
 		{
-			name:          "OK - last run at cadence boundary",
-			lastRun:       now.Add(-1 * time.Hour), // 1 hour ago
+			name:           "OK - last run at cadence boundary",
+			lastRun:        now.Add(-1 * time.Hour), // 1 hour ago
 			expectedStatus: types.FreshnessStatusOK,
 			expectedETA:    now, // (now - 1h) + 1h = now
 		},
 		{
-			name:          "WARN - slightly past cadence",
-			lastRun:       now.Add(-1 * time.Hour).Add(-1 * time.Minute), // 1h 1min ago
+			name:           "WARN - slightly past cadence",
+			lastRun:        now.Add(-1 * time.Hour).Add(-1 * time.Minute), // 1h 1min ago
 			expectedStatus: types.FreshnessStatusWarn,
 			expectedETA:    now.Add(-1 * time.Minute), // (now - 1h 1min) + 1h = now - 1min
 		},
 		{
-			name:          "WARN - almost at critical threshold",
-			lastRun:       now.Add(-2 * time.Hour).Add(1 * time.Minute), // 1h 59min ago
+			name:           "WARN - almost at critical threshold",
+			lastRun:        now.Add(-2 * time.Hour).Add(1 * time.Minute), // 1h 59min ago
 			expectedStatus: types.FreshnessStatusWarn,
 			expectedETA:    now.Add(-59 * time.Minute), // (now - 1h 59min) + 1h = now - 59min
 		},
 		{
-			name:          "CRITICAL - past twice the cadence",
-			lastRun:       now.Add(-2 * time.Hour).Add(-1 * time.Minute), // 2h 1min ago
+			name:           "CRITICAL - past twice the cadence",
+			lastRun:        now.Add(-2 * time.Hour).Add(-1 * time.Minute), // 2h 1min ago
 			expectedStatus: types.FreshnessStatusCritical,
 			expectedETA:    now.Add(-1 * time.Hour).Add(-1 * time.Minute), // (now - 2h 1min) + 1h = now - 1h 1min
 		},
 		{
-			name:          "CRITICAL - very old",
-			lastRun:       now.Add(-5 * time.Hour), // 5 hours ago
+			name:           "CRITICAL - very old",
+			lastRun:        now.Add(-5 * time.Hour), // 5 hours ago
 			expectedStatus: types.FreshnessStatusCritical,
 			expectedETA:    now.Add(-4 * time.Hour), // (now - 5h) + 1h = now - 4h
 		},
 		{
-			name:          "OK - last run in future",
-			lastRun:       now.Add(30 * time.Minute), // 30 minutes in future
+			name:           "OK - last run in future",
+			lastRun:        now.Add(30 * time.Minute), // 30 minutes in future
 			expectedStatus: types.FreshnessStatusOK,
 			expectedETA:    now.Add(1 * time.Hour).Add(30 * time.Minute), // (now + 30min) + 1h = now + 1h 30min
 		},
