@@ -63,10 +63,11 @@ type TaskRequest struct {
 	ParentID string `json:"parent_id"` // non-empty for subtasks (skip decomposition)
 
 	// Timeouts (zero = use defaults). Populated from config by dispatcher.
-	ExecTimeout     time.Duration `json:"exec_timeout,omitempty"`
-	ShortTimeout    time.Duration `json:"short_timeout,omitempty"`
-	ReviewTimeout   time.Duration `json:"review_timeout,omitempty"`
-	MaxReviewRounds int           `json:"max_review_rounds,omitempty"`
+	ExecTimeout        time.Duration `json:"exec_timeout,omitempty"`
+	ShortTimeout       time.Duration `json:"short_timeout,omitempty"`
+	ReviewTimeout      time.Duration `json:"review_timeout,omitempty"`
+	MaxReviewRounds    int           `json:"max_review_rounds,omitempty"`
+	MaxExperimentAttempts int        `json:"max_experiment_attempts,omitempty"` // 0 = disabled (default)
 }
 
 // ExecResult is the output of the execute activity.
@@ -128,12 +129,14 @@ const (
 
 // CloseDetail is persisted for auditability in task error_log.
 type CloseDetail struct {
-	Reason    CloseReason `json:"reason"`
-	SubReason string      `json:"sub_reason"`
-	Category  string      `json:"category,omitempty"` // failure classification (e.g. "test_failure", "infra_failure")
-	Summary   string      `json:"summary,omitempty"`  // one-line failure summary
-	ReviewURL string      `json:"review_url"`
-	PRNumber  int         `json:"pr_number"`
+	Reason              CloseReason `json:"reason"`
+	SubReason           string      `json:"sub_reason"`
+	Category            string      `json:"category,omitempty"` // failure classification (e.g. "test_failure", "infra_failure")
+	Summary             string      `json:"summary,omitempty"`  // one-line failure summary
+	ReviewURL           string      `json:"review_url"`
+	PRNumber            int         `json:"pr_number"`
+	ExperimentAttempts  int         `json:"experiment_attempts,omitempty"`
+	ExperimentLog       []string    `json:"experiment_log,omitempty"`
 }
 
 // ReviewRequest is the input to ReviewWorkflow for resuming orphaned reviews.
