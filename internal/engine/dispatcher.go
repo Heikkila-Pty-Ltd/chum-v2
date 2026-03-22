@@ -493,7 +493,18 @@ func (da *DispatchActivities) filterBeadsMappedReadyTasks(ctx context.Context, p
 			}
 		}
 
-		da.Logger.Warn("Skipping ready task without beads mapping", "project", projectName, "task", t.ID, "parent", t.ParentID)
+		// Auto-bootstrap: tasks created by the planner/decomposer without
+		// beads entries get a synthetic mapping so they can still dispatch
+		// under beads_only ingress policy.
+		syntheticID := "synthetic/" + t.ID
+		if upErr := bridgeDAG.UpsertBeadsMapping(ctx, projectName, syntheticID, t.ID, "auto-bootstrapped"); upErr != nil {
+			da.Logger.Warn("Skipping ready task: failed to auto-bootstrap beads mapping",
+				"project", projectName, "task", t.ID, "error", upErr)
+			continue
+		}
+		da.Logger.Info("Auto-bootstrapped beads mapping for planner-created task",
+			"project", projectName, "task", t.ID, "issue", syntheticID)
+		filtered = append(filtered, t)
 	}
 	return filtered
 }
