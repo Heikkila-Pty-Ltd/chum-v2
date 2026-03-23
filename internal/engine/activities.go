@@ -37,8 +37,8 @@ type Activities struct {
 	BeadsClients map[string]beads.Store
 	ChatSend     notify.ChatSender
 	LLM          llm.Runner
-	Traces       store.TraceStore // execution trace recording (nil = no-op)
-	Perf         *perf.Tracker    // performance tracking (nil = no-op)
+	Traces       store.TraceStore  // execution trace recording (nil = no-op)
+	Perf         *perf.Tracker     // performance tracking (nil = no-op)
 	Lessons      store.LessonStore // lesson persistence (nil = no-op)
 }
 

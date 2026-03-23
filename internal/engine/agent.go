@@ -185,8 +185,8 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 				failMsg := fmt.Sprintf("Execute failed: %v", err)
 				experimentLog = append(experimentLog, failMsg)
 				if experimentMode {
-				storeExperimentLesson(ctx, shortOpts, a, req, "exec_failure", failMsg, "", nil)
-			}
+					storeExperimentLesson(ctx, shortOpts, a, req, "exec_failure", failMsg, "", nil)
+				}
 				// Reset worktree for retry
 				if resetErr := workflow.ExecuteActivity(
 					workflow.WithActivityOptions(ctx, shortOpts),
