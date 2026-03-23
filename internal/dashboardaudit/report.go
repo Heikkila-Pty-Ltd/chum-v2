@@ -188,10 +188,35 @@ func analyzeFrontend(repoRoot string) (*frontendAnalysis, error) {
 
 	for className, usageFiles := range classUsage {
 		usageViews := viewsForFiles(files, usageFiles)
-		if isExclusiveToView(className, usageViews, viewJarvisKB) {
-			cssExclusive[viewJarvisKB] = append(cssExclusive[viewJarvisKB], "."+className)
+
+		// If it's a target-specific class (by prefix) but has NO usage,
+		// we still assign it to the view it belongs to so it can be pruned.
+		if len(usageViews) == 0 {
+			switch {
+			case strings.HasPrefix(className, "timeline-"):
+				cssExclusive[viewTimeline] = append(cssExclusive[viewTimeline], "."+className)
+				continue
+			case strings.HasPrefix(className, "stats-"):
+				cssExclusive[viewStats] = append(cssExclusive[viewStats], "."+className)
+				continue
+			case strings.HasPrefix(className, "jv-") || strings.HasPrefix(className, "ov2-"):
+				cssExclusive[viewJarvisKB] = append(cssExclusive[viewJarvisKB], "."+className)
+				continue
+			}
+		}
+
+		foundExclusive := false
+		for _, view := range targetViews {
+			if isExclusiveToView(className, usageViews, view) {
+				cssExclusive[view] = append(cssExclusive[view], "."+className)
+				foundExclusive = true
+				break
+			}
+		}
+		if foundExclusive {
 			continue
 		}
+
 		if len(usageViews) > 1 && isTargetSpecificClass(className) && (usageViews[viewJarvisKB] || usageViews[viewTimeline] || usageViews[viewStats]) {
 			shared = append(shared, SharedCode{
 				Kind:        "css_class",
@@ -204,9 +229,11 @@ func analyzeFrontend(repoRoot string) (*frontendAnalysis, error) {
 	}
 
 	for _, file := range files {
-		if file.View == viewJarvisKB {
-			for _, name := range extractNamedFunctions(file.Content) {
-				jsFunctions[viewJarvisKB] = append(jsFunctions[viewJarvisKB], qualifyJSFunction(file.RelPath, name))
+		for _, view := range targetViews {
+			if file.View == view {
+				for _, name := range extractNamedFunctions(file.Content) {
+					jsFunctions[view] = append(jsFunctions[view], qualifyJSFunction(file.RelPath, name))
+				}
 			}
 		}
 	}
