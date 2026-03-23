@@ -89,7 +89,7 @@ func TestLoadMatrixConfigNormalization(t *testing.T) {
 	t.Parallel()
 	content := `
 [general]
-matrix_homeserver = " https://matrix.org  "
+matrix_homeserver = " https://matrix.org/  "
 matrix_room_id = " !room:matrix.org "
 matrix_access_token = " secret-token "
 matrix_webhook_url = " https://hooks.example.com/matrix "
@@ -337,6 +337,64 @@ reconcile_interval = "-1s"
 	}
 }
 
+func TestLoadPlanningValidation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "invalid poll interval",
+			content: `
+[general]
+[planning]
+poll_interval = "-1s"
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "chum.toml")
+			if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestLoadPlanningNormalization(t *testing.T) {
+	t.Parallel()
+	content := `
+[general]
+[planning]
+allowed_senders = [" @user1:example.com ", "  ", "@user2:example.com"]
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chum.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	expected := []string{"@user1:example.com", "@user2:example.com"}
+	if len(cfg.Planning.AllowedSenders) != len(expected) {
+		t.Fatalf("expected %d senders, got %d", len(expected), len(cfg.Planning.AllowedSenders))
+	}
+	for i, s := range cfg.Planning.AllowedSenders {
+		if s != expected[i] {
+			t.Errorf("expected sender %q, got %q", expected[i], s)
+		}
+	}
+}
+
 func TestLoadCustomValues(t *testing.T) {
 	t.Parallel()
 	content := `
@@ -352,7 +410,7 @@ db_path = "custom.db"
 enabled = true
 max_cycles = 5
 signal_timeout = "1h"
-allowed_senders = ["@user:example.com"]
+allowed_senders = [" @user:example.com"]
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "chum.toml")

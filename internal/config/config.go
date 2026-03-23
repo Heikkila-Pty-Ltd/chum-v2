@@ -261,8 +261,24 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("invalid beads_bridge.reconcile_interval %q: must be > 0", cfg.BeadsBridge.ReconcileInterval.Duration)
 	}
 
+	if cfg.Planning.PollInterval.Duration <= 0 {
+		return fmt.Errorf("invalid planning.poll_interval %q: must be > 0", cfg.Planning.PollInterval.Duration)
+	}
+
+	// Planning allowed_senders normalization.
+	if len(cfg.Planning.AllowedSenders) > 0 {
+		var filtered []string
+		for _, s := range cfg.Planning.AllowedSenders {
+			trimmed := strings.TrimSpace(s)
+			if trimmed != "" {
+				filtered = append(filtered, trimmed)
+			}
+		}
+		cfg.Planning.AllowedSenders = filtered
+	}
+
 	// Matrix configuration validation and normalization.
-	cfg.General.MatrixHomeserver = strings.TrimSpace(cfg.General.MatrixHomeserver)
+	cfg.General.MatrixHomeserver = strings.TrimSuffix(strings.TrimSpace(cfg.General.MatrixHomeserver), "/")
 	cfg.General.MatrixAccessToken = strings.TrimSpace(cfg.General.MatrixAccessToken)
 	cfg.General.MatrixRoomID = strings.TrimSpace(cfg.General.MatrixRoomID)
 	cfg.General.MatrixWebhookURL = strings.TrimSpace(cfg.General.MatrixWebhookURL)
