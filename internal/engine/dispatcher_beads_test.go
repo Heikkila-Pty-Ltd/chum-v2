@@ -94,7 +94,7 @@ func TestFilterBeadsMappedReadyTasks_ExistingMappingPasses(t *testing.T) {
 	}
 
 	a := &DispatchActivities{
-		DAG:    d,
+		DAG: d,
 		Config: &config.Config{
 			BeadsBridge: config.BeadsBridge{
 				Enabled:       true,

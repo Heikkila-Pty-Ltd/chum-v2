@@ -128,7 +128,12 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 				return fmt.Errorf("decompose failed: %w", err)
 			}
 			if !decompResult.Atomic && len(decompResult.Steps) > 0 {
-				steps := flattenDecomposedSteps(decompResult.Steps)
+				// Re-decompose any steps exceeding the 15-min threshold.
+				steps, flattenErr := flattenDecomposedSteps(ctx, a, req, decompResult.Steps, 2, dodOpts)
+				if flattenErr != nil {
+					logger.Warn("Re-decomposition failed, using original steps", "error", flattenErr)
+					steps = decompResult.Steps
+				}
 				var subtaskIDs []string
 				if err := workflow.ExecuteActivity(decompCtx, a.CreateSubtasksActivity,
 					req.TaskID, req.Project, steps).Get(ctx, &subtaskIDs); err != nil {
@@ -180,8 +185,8 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 				failMsg := fmt.Sprintf("Execute failed: %v", err)
 				experimentLog = append(experimentLog, failMsg)
 				if experimentMode {
-				storeExperimentLesson(ctx, shortOpts, a, req, "exec_failure", failMsg, "", nil)
-			}
+					storeExperimentLesson(ctx, shortOpts, a, req, "exec_failure", failMsg, "", nil)
+				}
 				// Reset worktree for retry
 				if resetErr := workflow.ExecuteActivity(
 					workflow.WithActivityOptions(ctx, shortOpts),
@@ -517,71 +522,47 @@ func nextFallbackExecutionProvider(agent string) (agentCLI string, model string,
 	}
 }
 
+// maxSingleStepMinutes is the threshold above which a decomposed step
+// should be re-decomposed into smaller units.
 const maxSingleStepMinutes = 15
 
-func flattenDecomposedSteps(steps []types.DecompStep) []types.DecompStep {
+// flattenDecomposedSteps recursively re-decomposes any step whose estimate
+// exceeds maxSingleStepMinutes. depth limits recursion to prevent infinite loops.
+func flattenDecomposedSteps(ctx workflow.Context, a *Activities, req TaskRequest, steps []types.DecompStep, depth int, activityOpts workflow.ActivityOptions) ([]types.DecompStep, error) {
+	if depth <= 0 {
+		return steps, nil
+	}
 	var flat []types.DecompStep
 	for _, s := range steps {
 		if s.Estimate <= maxSingleStepMinutes {
 			flat = append(flat, s)
 			continue
 		}
-		numParts := (s.Estimate + maxSingleStepMinutes - 1) / maxSingleStepMinutes
-		descParts := splitDescription(s.Description, numParts)
-		for i, partDesc := range descParts {
-			subStep := s
-			subStep.Title = fmt.Sprintf("%s (%d/%d)", s.Title, i+1, numParts)
-			subStep.Description = partDesc
-			subStep.Estimate = s.Estimate / numParts
-			if i == numParts-1 {
-				subStep.Estimate = s.Estimate - (numParts-1)*subStep.Estimate
-			}
-			flat = append(flat, subStep)
+		subReq := TaskRequest{
+			TaskID:  req.TaskID,
+			Project: req.Project,
+			Prompt:  s.Title + "\n\n" + s.Description,
+			WorkDir: req.WorkDir,
+			Agent:   req.Agent,
+			Model:   req.Model,
 		}
-	}
-	return flat
-}
-
-func splitDescription(desc string, n int) []string {
-	if n <= 1 {
-		return []string{desc}
-	}
-	sentences := strings.Split(desc, ". ")
-	total := len(sentences)
-	if total == 0 {
-		return []string{desc}
-	}
-	if total <= n {
-		parts := make([]string, n)
-		for i := 0; i < n; i++ {
-			if i < total {
-				parts[i] = sentences[i]
-			} else {
-				parts[i] = sentences[total-1]
-			}
+		var subResult *types.DecompResult
+		decompCtx := workflow.WithActivityOptions(ctx, activityOpts)
+		if err := workflow.ExecuteActivity(decompCtx, a.DecomposeActivity, subReq).Get(ctx, &subResult); err != nil {
+			s.Estimate = maxSingleStepMinutes
+			flat = append(flat, s)
+			continue
 		}
-		return parts
-	}
-	partSize := total / n
-	if partSize == 0 {
-		partSize = 1
-	}
-	var parts []string
-	for i := 0; i < n; i++ {
-		end := (i + 1) * partSize
-		if end > total {
-			end = total
+		if subResult.Atomic || len(subResult.Steps) == 0 {
+			s.Estimate = maxSingleStepMinutes
+			flat = append(flat, s)
+			continue
 		}
-		if i == n-1 {
-			end = total
+		subSteps, err := flattenDecomposedSteps(ctx, a, subReq, subResult.Steps, depth-1, activityOpts)
+		if err != nil {
+			subSteps = subResult.Steps
 		}
-		part := strings.Join(sentences[i*partSize:end], ". ")
-		if part != "" {
-			parts = append(parts, part)
-		}
+		flat = append(flat, subSteps...)
 	}
-	if len(parts) == 0 {
-		parts = []string{desc}
-	}
-	return parts
+	return flat, nil
 }
