@@ -128,9 +128,10 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 				return fmt.Errorf("decompose failed: %w", err)
 			}
 			if !decompResult.Atomic && len(decompResult.Steps) > 0 {
+				steps := flattenDecomposedSteps(decompResult.Steps)
 				var subtaskIDs []string
 				if err := workflow.ExecuteActivity(decompCtx, a.CreateSubtasksActivity,
-					req.TaskID, req.Project, decompResult.Steps).Get(ctx, &subtaskIDs); err != nil {
+					req.TaskID, req.Project, steps).Get(ctx, &subtaskIDs); err != nil {
 					logger.Error("Failed to create subtasks", "error", err)
 					if cerr := closeAndTrace(CloseDetail{
 						Reason:    CloseNeedsReview,
@@ -514,4 +515,73 @@ func nextFallbackExecutionProvider(agent string) (agentCLI string, model string,
 	default:
 		return "", "", false
 	}
+}
+
+const maxSingleStepMinutes = 15
+
+func flattenDecomposedSteps(steps []types.DecompStep) []types.DecompStep {
+	var flat []types.DecompStep
+	for _, s := range steps {
+		if s.Estimate <= maxSingleStepMinutes {
+			flat = append(flat, s)
+			continue
+		}
+		numParts := (s.Estimate + maxSingleStepMinutes - 1) / maxSingleStepMinutes
+		descParts := splitDescription(s.Description, numParts)
+		for i, partDesc := range descParts {
+			subStep := s
+			subStep.Title = fmt.Sprintf("%s (%d/%d)", s.Title, i+1, numParts)
+			subStep.Description = partDesc
+			subStep.Estimate = s.Estimate / numParts
+			if i == numParts-1 {
+				subStep.Estimate = s.Estimate - (numParts-1)*subStep.Estimate
+			}
+			flat = append(flat, subStep)
+		}
+	}
+	return flat
+}
+
+func splitDescription(desc string, n int) []string {
+	if n <= 1 {
+		return []string{desc}
+	}
+	sentences := strings.Split(desc, ". ")
+	total := len(sentences)
+	if total == 0 {
+		return []string{desc}
+	}
+	if total <= n {
+		parts := make([]string, n)
+		for i := 0; i < n; i++ {
+			if i < total {
+				parts[i] = sentences[i]
+			} else {
+				parts[i] = sentences[total-1]
+			}
+		}
+		return parts
+	}
+	partSize := total / n
+	if partSize == 0 {
+		partSize = 1
+	}
+	var parts []string
+	for i := 0; i < n; i++ {
+		end := (i + 1) * partSize
+		if end > total {
+			end = total
+		}
+		if i == n-1 {
+			end = total
+		}
+		part := strings.Join(sentences[i*partSize:end], ". ")
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) == 0 {
+		parts = []string{desc}
+	}
+	return parts
 }
