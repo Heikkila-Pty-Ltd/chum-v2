@@ -131,6 +131,61 @@ matrix_room_id = "!room:matrix.org"
 	}
 }
 
+func TestLoadMatrixConfigOptional(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+		verify  func(*testing.T, *Config)
+	}{
+		{
+			name: "no matrix config",
+			content: `
+[general]
+db_path = "test.db"
+`,
+			verify: func(t *testing.T, cfg *Config) {
+				if cfg.General.MatrixHomeserver != "" {
+					t.Errorf("expected empty homeserver, got %q", cfg.General.MatrixHomeserver)
+				}
+				if cfg.General.MatrixWebhookURL != "" {
+					t.Errorf("expected empty webhook, got %q", cfg.General.MatrixWebhookURL)
+				}
+			},
+		},
+		{
+			name: "only webhook url",
+			content: `
+[general]
+matrix_webhook_url = "https://hooks.example.com/matrix"
+`,
+			verify: func(t *testing.T, cfg *Config) {
+				if cfg.General.MatrixWebhookURL != "https://hooks.example.com/matrix" {
+					t.Errorf("unexpected webhook url: %s", cfg.General.MatrixWebhookURL)
+				}
+				if cfg.General.MatrixHomeserver != "" {
+					t.Errorf("expected empty homeserver, got %q", cfg.General.MatrixHomeserver)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "chum.toml")
+			if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load failed: %v", err)
+			}
+			tt.verify(t, cfg)
+		})
+	}
+}
+
 func TestLoadPlanningDefaults(t *testing.T) {
 	t.Parallel()
 	content := `
