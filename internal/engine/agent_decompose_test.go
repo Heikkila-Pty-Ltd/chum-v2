@@ -1,94 +1,45 @@
 package engine
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
+	"go.temporal.io/sdk/workflow"
 )
 
-func TestFlattenDecomposedSteps(t *testing.T) {
-	tests := []struct {
-		name     string
-		steps    []types.DecompStep
-		wantLen  int
-		wantMax  int
-	}{
-		{
-			name: "All under threshold",
-			steps: []types.DecompStep{
-				{Title: "Small task", Description: "Fix bug", Estimate: 10},
-				{Title: "Another small", Description: "Add field", Estimate: 15},
-			},
-			wantLen: 2,
-			wantMax: 15,
-		},
-		{
-			name: "One oversized task splits into three",
-			steps: []types.DecompStep{
-				{Title: "Big task", Description: "Implement feature A. Then implement feature B. Finally implement feature C.", Estimate: 45},
-			},
-			wantLen: 3,
-			wantMax: 15,
-		},
-		{
-			name: "Mixed sizes",
-			steps: []types.DecompStep{
-				{Title: "Small", Description: "Fix typo", Estimate: 5},
-				{Title: "Medium", Description: "Add test", Estimate: 30},
-				{Title: "Large", Description: "Refactor module", Estimate: 60},
-			},
-			wantLen: 7,
-			wantMax: 15,
-		},
+// dummyActivityOpts returns zero-value activity options for signature compatibility.
+// Actual recursive re-decomposition is tested at the workflow integration level.
+func dummyActivityOpts() workflow.ActivityOptions {
+	return workflow.ActivityOptions{}
+}
+
+func TestFlattenDecomposedSteps_AllUnderThreshold(t *testing.T) {
+	// Steps within the 15-min threshold should pass through unchanged.
+	steps := []types.DecompStep{
+		{Title: "Small task", Description: "Fix bug", Estimate: 10},
+		{Title: "Another small", Description: "Add field", Estimate: 15},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := flattenDecomposedSteps(tt.steps)
-			if len(got) != tt.wantLen {
-				t.Errorf("flattenDecomposedSteps() len = %v, want %v", len(got), tt.wantLen)
-			}
-			for _, s := range got {
-				if s.Estimate > tt.wantMax {
-					t.Errorf("step %q has estimate %v, want <= %v", s.Title, s.Estimate, tt.wantMax)
-				}
-			}
-		})
+	// Can't call with nil context + ExecuteActivity, but we can test the
+	// zero-depth case which skips the activity call.
+	got, err := flattenDecomposedSteps(nil, nil, TaskRequest{}, steps, 0, dummyActivityOpts())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("want 2 steps, got %d", len(got))
 	}
 }
 
-func TestSplitDescription(t *testing.T) {
-	tests := []struct {
-		name string
-		desc string
-		n    int
-	}{
-		{
-			name: "Split into two",
-			desc: "First part of the description. Second part of the description.",
-			n:    2,
-		},
-		{
-			name: "Split into three",
-			desc: "Part one. Part two. Part three.",
-			n:    3,
-		},
-		{
-			name: "Don't split single sentence",
-			desc: "This is a single sentence description.",
-			n:    1,
-		},
+func TestFlattenDecomposedSteps_ZeroDepthPassesThrough(t *testing.T) {
+	// At depth 0, even oversized steps pass through (no re-decomposition).
+	steps := []types.DecompStep{
+		{Title: "Big task", Description: "Huge thing", Estimate: 60},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := splitDescription(tt.desc, tt.n)
-			if len(got) != tt.n {
-				t.Errorf("splitDescription() len = %v, want %v", len(got), tt.n)
-			}
-			joined := strings.Join(got, ". ")
-			if joined != tt.desc {
-				t.Errorf("splitDescription() content mismatch\ngot:  %q\nwant: %q", joined, tt.desc)
-			}
-		})
+	got, err := flattenDecomposedSteps(nil, nil, TaskRequest{}, steps, 0, dummyActivityOpts())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("want 1 step at depth 0, got %d", len(got))
 	}
 }
