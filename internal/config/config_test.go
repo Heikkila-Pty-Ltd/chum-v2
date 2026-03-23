@@ -85,6 +85,40 @@ matrix_webhook_url = "https://hooks.example.com/matrix"
 	}
 }
 
+func TestLoadMatrixConfigNormalization(t *testing.T) {
+	t.Parallel()
+	content := `
+[general]
+matrix_homeserver = " https://matrix.org  "
+matrix_room_id = " !room:matrix.org "
+matrix_access_token = " secret-token "
+matrix_webhook_url = " https://hooks.example.com/matrix "
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chum.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if cfg.General.MatrixHomeserver != "https://matrix.org" {
+		t.Errorf("expected trimmed homeserver, got %q", cfg.General.MatrixHomeserver)
+	}
+	if cfg.General.MatrixRoomID != "!room:matrix.org" {
+		t.Errorf("expected trimmed room_id, got %q", cfg.General.MatrixRoomID)
+	}
+	if cfg.General.MatrixAccessToken != "secret-token" {
+		t.Errorf("expected trimmed access_token, got %q", cfg.General.MatrixAccessToken)
+	}
+	if cfg.General.MatrixWebhookURL != "https://hooks.example.com/matrix" {
+		t.Errorf("expected trimmed webhook_url, got %q", cfg.General.MatrixWebhookURL)
+	}
+}
+
 func TestLoadMatrixConfigValidation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -113,6 +147,15 @@ matrix_access_token = "secret"
 [general]
 matrix_access_token = "secret"
 matrix_room_id = "!room:matrix.org"
+`,
+		},
+		{
+			name: "whitespace access token",
+			content: `
+[general]
+matrix_homeserver = "https://matrix.org"
+matrix_room_id = "!room:matrix.org"
+matrix_access_token = "   "
 `,
 		},
 	}
