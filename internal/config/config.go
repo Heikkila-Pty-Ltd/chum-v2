@@ -260,6 +260,20 @@ func validate(cfg *Config) error {
 	if cfg.BeadsBridge.ReconcileInterval.Duration <= 0 {
 		return fmt.Errorf("invalid beads_bridge.reconcile_interval %q: must be > 0", cfg.BeadsBridge.ReconcileInterval.Duration)
 	}
+
+	// Matrix client validation: if using the Matrix client (non-webhook), all fields are required.
+	if cfg.General.MatrixHomeserver != "" || cfg.General.MatrixAccessToken != "" || cfg.General.MatrixRoomID != "" {
+		if cfg.General.MatrixHomeserver == "" {
+			return fmt.Errorf("matrix_homeserver is required when matrix configuration is provided")
+		}
+		if cfg.General.MatrixAccessToken == "" {
+			return fmt.Errorf("matrix_access_token is required when matrix configuration is provided")
+		}
+		if cfg.General.MatrixRoomID == "" {
+			return fmt.Errorf("matrix_room_id is required when matrix configuration is provided")
+		}
+	}
+
 	return nil
 }
 

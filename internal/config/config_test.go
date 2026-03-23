@@ -51,6 +51,86 @@ workspace = "/tmp/myproject"
 	}
 }
 
+func TestLoadMatrixConfig(t *testing.T) {
+	t.Parallel()
+	content := `
+[general]
+matrix_homeserver = "https://matrix.org"
+matrix_room_id = "!room:matrix.org"
+matrix_access_token = "secret-token"
+matrix_webhook_url = "https://hooks.example.com/matrix"
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chum.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if cfg.General.MatrixHomeserver != "https://matrix.org" {
+		t.Errorf("unexpected matrix_homeserver: %s", cfg.General.MatrixHomeserver)
+	}
+	if cfg.General.MatrixRoomID != "!room:matrix.org" {
+		t.Errorf("unexpected matrix_room_id: %s", cfg.General.MatrixRoomID)
+	}
+	if cfg.General.MatrixAccessToken != "secret-token" {
+		t.Errorf("unexpected matrix_access_token: %s", cfg.General.MatrixAccessToken)
+	}
+	if cfg.General.MatrixWebhookURL != "https://hooks.example.com/matrix" {
+		t.Errorf("unexpected matrix_webhook_url: %s", cfg.General.MatrixWebhookURL)
+	}
+}
+
+func TestLoadMatrixConfigValidation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "missing access token",
+			content: `
+[general]
+matrix_homeserver = "https://matrix.org"
+matrix_room_id = "!room:matrix.org"
+`,
+		},
+		{
+			name: "missing room id",
+			content: `
+[general]
+matrix_homeserver = "https://matrix.org"
+matrix_access_token = "secret"
+`,
+		},
+		{
+			name: "missing homeserver",
+			content: `
+[general]
+matrix_access_token = "secret"
+matrix_room_id = "!room:matrix.org"
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "chum.toml")
+			if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("expected validation error for incomplete matrix config")
+			}
+		})
+	}
+}
+
 func TestLoadPlanningDefaults(t *testing.T) {
 	t.Parallel()
 	content := `
