@@ -1,16 +1,11 @@
 ---
-module: Planner
+title: "Planner LLM produces generic responses without codebase context"
+category: integration-issues
 date: 2026-03-12
-problem_type: integration_issue
-component: assistant
-symptoms:
-  - "Planner LLM asks generic questions like 'What web framework are you using?' instead of grounding in actual code"
-  - "Prompt is too long errors when full AST dump injected into LLM context"
-  - "No codebase awareness in handlePlanInterview or handlePlanDecompose endpoints"
-root_cause: wrong_api
-resolution_type: code_fix
-severity: medium
 tags: [planner, llm, context-injection, progressive-disclosure, ast, prompt-engineering]
+project: chum
+modules: [internal/codebase, internal/jarvis/plans_backend.go, internal/dag/plan_store.go]
+severity: medium
 ---
 
 # Planner LLM produces generic responses without codebase context

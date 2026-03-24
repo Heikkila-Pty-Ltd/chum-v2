@@ -1,17 +1,17 @@
 ---
-module: Plans View
+title: Missing Plan Document Rendering in CHUM Dashboard Plans Tab
+category: ui-bugs
 date: 2026-03-12
-problem_type: ui_bug
-component: assistant
-symptoms:
-  - "Plan document content (brief_markdown, working_markdown) not displayed in UI"
-  - "DraftTask fields mismatch between Go struct and JavaScript assumptions"
-  - "Task tree rendering fails silently due to nonexistent type/children fields"
-  - "No way to view structured plan spec separate from chat conversation"
-root_cause: logic_error
-resolution_type: code_fix
 severity: high
+component: chum-dashboard
+module: plans-view
 tags: [document-rendering, data-model-mismatch, frontend-backend-contract]
+symptoms:
+  - Plan document content (brief_markdown, working_markdown) not displayed in UI
+  - DraftTask fields mismatch between Go struct and JavaScript assumptions
+  - Task tree rendering fails silently due to nonexistent type/children fields
+  - No way to view structured plan spec separate from chat conversation
+root_cause: Plan document fields existed in backend data model but were never rendered in UI; JavaScript task rendering assumed struct fields that don't exist in Go backend
 ---
 
 # Missing Plan Document Rendering in CHUM Dashboard Plans Tab
