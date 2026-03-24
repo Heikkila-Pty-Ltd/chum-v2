@@ -1022,6 +1022,120 @@ func TestGlobalPauseState_SetAndRead(t *testing.T) {
 	}
 }
 
+// --- PauseProjectTasks / ResumeProjectTasks ---
+
+func TestDAG_PauseAndResumeProjectTasks(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	// Create tasks in different states.
+	d.CreateTask(ctx, Task{ID: "t-run", Title: "running", Project: "proj", Status: "running"})
+	d.CreateTask(ctx, Task{ID: "t-rdy", Title: "ready", Project: "proj", Status: "ready"})
+	d.CreateTask(ctx, Task{ID: "t-done", Title: "done", Project: "proj", Status: "completed"})
+	d.CreateTask(ctx, Task{ID: "t-other", Title: "other", Project: "other-proj", Status: "ready"})
+
+	// Pause project.
+	affected, err := d.PauseProjectTasks(ctx, "proj")
+	if err != nil {
+		t.Fatalf("PauseProjectTasks: %v", err)
+	}
+	if affected != 2 {
+		t.Fatalf("expected 2 affected, got %d", affected)
+	}
+
+	// Verify statuses changed.
+	tRun, _ := d.GetTask(ctx, "t-run")
+	tRdy, _ := d.GetTask(ctx, "t-rdy")
+	tDone, _ := d.GetTask(ctx, "t-done")
+	tOther, _ := d.GetTask(ctx, "t-other")
+	if tRun.Status != "paused" {
+		t.Fatalf("t-run: want paused, got %s", tRun.Status)
+	}
+	if tRdy.Status != "paused" {
+		t.Fatalf("t-rdy: want paused, got %s", tRdy.Status)
+	}
+	if tDone.Status != "completed" {
+		t.Fatalf("t-done should remain completed, got %s", tDone.Status)
+	}
+	if tOther.Status != "ready" {
+		t.Fatalf("t-other should remain ready, got %s", tOther.Status)
+	}
+
+	// Idempotent — re-pausing returns 0.
+	affected2, err := d.PauseProjectTasks(ctx, "proj")
+	if err != nil {
+		t.Fatalf("PauseProjectTasks (2nd): %v", err)
+	}
+	if affected2 != 0 {
+		t.Fatalf("expected 0 affected on re-pause, got %d", affected2)
+	}
+
+	// Resume.
+	resumed, err := d.ResumeProjectTasks(ctx, "proj")
+	if err != nil {
+		t.Fatalf("ResumeProjectTasks: %v", err)
+	}
+	if resumed != 2 {
+		t.Fatalf("expected 2 resumed, got %d", resumed)
+	}
+	tRun, _ = d.GetTask(ctx, "t-run")
+	tRdy, _ = d.GetTask(ctx, "t-rdy")
+	if tRun.Status != "ready" {
+		t.Fatalf("t-run: want ready after resume, got %s", tRun.Status)
+	}
+	if tRdy.Status != "ready" {
+		t.Fatalf("t-rdy: want ready after resume, got %s", tRdy.Status)
+	}
+}
+
+// --- ReorderTaskPriorities ---
+
+func TestDAG_ReorderTaskPriorities(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "a", Title: "A", Project: "p", Status: "ready", Priority: 10})
+	d.CreateTask(ctx, Task{ID: "b", Title: "B", Project: "p", Status: "ready", Priority: 20})
+	d.CreateTask(ctx, Task{ID: "c", Title: "C", Project: "p", Status: "ready", Priority: 30})
+
+	// Reorder: c, a, b
+	if err := d.ReorderTaskPriorities(ctx, []string{"c", "a", "b"}); err != nil {
+		t.Fatalf("ReorderTaskPriorities: %v", err)
+	}
+
+	tc, _ := d.GetTask(ctx, "c")
+	ta, _ := d.GetTask(ctx, "a")
+	tb, _ := d.GetTask(ctx, "b")
+	if tc.Priority != 0 {
+		t.Fatalf("c: want priority 0, got %d", tc.Priority)
+	}
+	if ta.Priority != 1 {
+		t.Fatalf("a: want priority 1, got %d", ta.Priority)
+	}
+	if tb.Priority != 2 {
+		t.Fatalf("b: want priority 2, got %d", tb.Priority)
+	}
+}
+
+func TestDAG_ReorderTaskPriorities_NonReadyFails(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "a", Title: "A", Project: "p", Status: "ready"})
+	d.CreateTask(ctx, Task{ID: "b", Title: "B", Project: "p", Status: "running"})
+
+	err := d.ReorderTaskPriorities(ctx, []string{"a", "b"})
+	if err == nil {
+		t.Fatal("expected error for non-ready task")
+	}
+	if !strings.Contains(err.Error(), "not found or not in ready status") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // --- helpers ---
 
 func taskIDs(tasks []Task) []string {
