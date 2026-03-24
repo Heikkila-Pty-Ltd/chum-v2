@@ -56,6 +56,8 @@ const App = (() => {
     projectPause: (name) => API.post(`/api/dashboard/project/${name}/pause`),
     projectResume: (name) => API.post(`/api/dashboard/project/${name}/resume`),
     queueReorder: (ids) => API.post('/api/dashboard/queue/reorder', { task_ids: ids }),
+    learningTrends: () => API.get('/api/dashboard/learning/trends'),
+    modelPerf: () => API.get('/api/dashboard/learning/model-perf'),
   };
 
   // --- Status Colors (read from CSS custom properties) ---

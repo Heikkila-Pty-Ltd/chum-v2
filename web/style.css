@@ -1890,3 +1890,218 @@ html, body {
 .proj-plan-row:hover { background: var(--surface-1); }
 .proj-plan-title { color: var(--text-primary); flex: 1; }
 .proj-plan-date { font-size: 11px; color: var(--text-secondary); }
+
+/* ============================================================
+   LEARN PAGE
+   ============================================================ */
+
+.learn-page { max-width: 900px; margin: 0 auto; }
+
+/* Metrics row */
+.learn-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-5);
+}
+.learn-metric-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--sp-3);
+}
+.learn-metric-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-bottom: 2px;
+}
+.learn-metric-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.learn-metric-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: var(--sp-2);
+}
+.learn-metric-trend {
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.learn-trend--up { color: var(--status-completed); }
+.learn-trend--down { color: var(--status-failed); }
+.learn-trend--flat { color: var(--text-secondary); }
+
+/* Sparkline */
+.learn-sparkline {
+  width: 100%;
+  height: 30px;
+  display: block;
+}
+
+/* Section */
+.learn-section {
+  margin-bottom: var(--sp-5);
+}
+.learn-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-3);
+}
+.learn-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+/* Lesson counts */
+.learn-lesson-counts {
+  display: flex;
+  gap: var(--sp-2);
+}
+.learn-count-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.learn-count-badge--pattern {
+  background: rgba(61, 154, 95, 0.15);
+  color: var(--status-completed);
+}
+.learn-count-badge--anti {
+  background: rgba(185, 58, 58, 0.15);
+  color: var(--status-failed);
+}
+
+/* Filters */
+.learn-filters {
+  display: flex;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+.learn-search {
+  flex: 1;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  padding: 6px 10px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-primary);
+  outline: none;
+}
+.learn-search:focus { border-color: var(--accent); }
+.learn-search::placeholder { color: var(--text-secondary); }
+.learn-filter-select {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  padding: 6px 10px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-primary);
+}
+
+/* Lesson list */
+.learn-lesson-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.learn-lesson-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 6px var(--sp-2);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.learn-lesson-row:hover { background: var(--surface-1); }
+.learn-lesson-cat {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: #fff;
+  white-space: nowrap;
+}
+.learn-lesson-count {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent);
+  background: rgba(74, 127, 212, 0.12);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.learn-lesson-summary {
+  color: var(--text-primary);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.learn-lesson-time {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Model table */
+.learn-table-wrap {
+  overflow-x: auto;
+}
+.learn-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.learn-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  padding: 6px var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+.learn-table td {
+  padding: 8px var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+.learn-table tr:hover td { background: var(--surface-1); }
+.learn-td-num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.learn-model-name {
+  font-weight: 500;
+}
+.learn-model-tier {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-left: var(--sp-1);
+}
+
+/* Success rate badges */
+.learn-rate {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.learn-rate--good { color: var(--status-completed); }
+.learn-rate--ok { color: var(--status-dod-failed); }
+.learn-rate--bad { color: var(--status-failed); }
+.learn-rate-label {
+  font-size: 10px;
+  font-weight: 400;
+}

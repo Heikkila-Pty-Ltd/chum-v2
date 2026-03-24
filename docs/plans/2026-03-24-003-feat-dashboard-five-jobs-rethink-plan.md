@@ -303,20 +303,20 @@ Portfolio view + per-project drill-in.
 System improvement observatory.
 
 **Backend:**
-- [ ] `GET /api/dashboard/learning/trends` endpoint
+- [x] `GET /api/dashboard/learning/trends` endpoint
   - `SELECT date(created_at) as day, COUNT(*) as total, SUM(success) as successes, CAST(SUM(success) AS REAL)/COUNT(*) as success_rate, AVG(duration_s) as avg_duration, SUM(cost_usd) as total_cost FROM perf_runs WHERE created_at >= date('now', '-30 days') GROUP BY date(created_at) ORDER BY day ASC`
   - Gap-fill in Go: days with no runs appear with zero values (sparklines need consistent x-axis spacing)
   - Response: `{trends: [{day, total_runs, successes, success_rate, avg_duration_s, total_cost_usd}], period_days: 30}`
   - Register route
-- [ ] `GET /api/dashboard/learning/model-perf` endpoint
+- [x] `GET /api/dashboard/learning/model-perf` endpoint
   - Reuse pattern from `perf.StatsForTier` but without tier filter
   - `SELECT agent, model, tier, COUNT(*), SUM(success), ... FROM perf_runs GROUP BY provider_key ORDER BY total_runs DESC`
   - Response: `{models: [{agent, model, tier, total_runs, success_rate, avg_cost_usd, avg_duration_s}]}`
   - Register route
-- [ ] Add API methods: `learningTrends()`, `modelPerf()`
+- [x] Add API methods: `learningTrends()`, `modelPerf()`
 
 **Frontend:**
-- [ ] Headline metrics row (3-4 metric cards with sparklines):
+- [x] Headline metrics row (3-4 metric cards with sparklines):
   - Success rate sparkline (30 days) — inline SVG polyline, `viewBox="0 0 100 30"`, `preserveAspectRatio="none"`
   - Cost per successful task sparkline
   - Average attempts sparkline
@@ -327,7 +327,7 @@ System improvement observatory.
   - Pre-compute points string in Alpine getter (not per-frame)
   - Use unique gradient IDs per sparkline (`'sg-' + Math.random().toString(36).slice(2,8)`)
 
-- [ ] Lesson feed:
+- [x] Lesson feed:
   - Fetch `/lessons/{project}` (or all projects)
   - Each lesson: category badge (color+text), summary, associated task link, timestamp (relative)
   - Group by exact `(category, summary)` pair — show count badge "x5" for repeated identical lessons. ~~Fuzzy text matching~~ **REMOVED** — exact dedup catches real repeat offenders without undefined heuristics
@@ -335,7 +335,7 @@ System improvement observatory.
   - Show pattern vs antipattern breakdown
   - Surface whether lessons are being consumed by agent executions (not just stored)
 
-- [ ] Model performance table:
+- [x] Model performance table:
   - Fetch `/learning/model-perf`
   - Columns: model, tasks, success%, avg cost, avg duration
   - Pre-sorted by task_count desc from backend. ~~Client-side sortable columns~~ **REMOVED** — with 3-5 models, scanning the table is faster than clicking sort headers

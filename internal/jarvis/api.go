@@ -68,6 +68,11 @@ func (a *API) Handler() http.Handler {
 		mux.HandleFunc("GET /api/dashboard/traces/{taskID}", a.handleDashboardTraces)
 		mux.HandleFunc("GET /api/dashboard/lessons/{project}", a.handleDashboardLessons)
 	}
+	// Learning endpoints — query perf_runs from traces DB.
+	if a.TracesDB != nil {
+		mux.HandleFunc("GET /api/dashboard/learning/trends", a.handleDashboardLearningTrends)
+		mux.HandleFunc("GET /api/dashboard/learning/model-perf", a.handleDashboardModelPerf)
+	}
 	// Activity feed — queries both DAG and traces DBs.
 	if a.DAG != nil {
 		mux.HandleFunc("GET /api/dashboard/activity", a.handleDashboardActivity)

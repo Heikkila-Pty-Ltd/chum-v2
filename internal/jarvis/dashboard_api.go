@@ -1527,6 +1527,117 @@ func (a *API) handleDashboardQueueReorder(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// handleDashboardLearningTrends returns daily aggregated perf metrics for the last 30 days.
+func (a *API) handleDashboardLearningTrends(w http.ResponseWriter, r *http.Request) {
+	if a.TracesDB == nil {
+		a.jsonError(w, "traces database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	rows, err := a.TracesDB.QueryContext(r.Context(),
+		`SELECT date(created_at) as day,
+		        COUNT(*) as total,
+		        SUM(success) as successes,
+		        CAST(SUM(success) AS REAL) / COUNT(*) as success_rate,
+		        AVG(duration_s) as avg_duration,
+		        SUM(cost_usd) as total_cost
+		 FROM perf_runs
+		 WHERE created_at >= date('now', '-30 days')
+		 GROUP BY date(created_at)
+		 ORDER BY day ASC`)
+	if err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type trendDay struct {
+		Day         string  `json:"day"`
+		TotalRuns   int     `json:"total_runs"`
+		Successes   int     `json:"successes"`
+		SuccessRate float64 `json:"success_rate"`
+		AvgDuration float64 `json:"avg_duration_s"`
+		TotalCost   float64 `json:"total_cost_usd"`
+	}
+
+	dayMap := make(map[string]trendDay)
+	for rows.Next() {
+		var d trendDay
+		if err := rows.Scan(&d.Day, &d.TotalRuns, &d.Successes, &d.SuccessRate, &d.AvgDuration, &d.TotalCost); err != nil {
+			a.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		dayMap[d.Day] = d
+	}
+
+	// Gap-fill: ensure every day in the 30-day window is present.
+	now := time.Now().UTC()
+	var trends []trendDay
+	for i := 29; i >= 0; i-- {
+		day := now.AddDate(0, 0, -i).Format("2006-01-02")
+		if d, ok := dayMap[day]; ok {
+			trends = append(trends, d)
+		} else {
+			trends = append(trends, trendDay{Day: day})
+		}
+	}
+
+	a.jsonOK(w, map[string]any{
+		"trends":      trends,
+		"period_days": 30,
+	})
+}
+
+// handleDashboardModelPerf returns per-model performance stats from perf_runs.
+func (a *API) handleDashboardModelPerf(w http.ResponseWriter, r *http.Request) {
+	if a.TracesDB == nil {
+		a.jsonError(w, "traces database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	rows, err := a.TracesDB.QueryContext(r.Context(),
+		`SELECT agent, model, tier,
+		        COUNT(*) as total_runs,
+		        SUM(success) as successes,
+		        CAST(SUM(success) AS REAL) / COUNT(*) as success_rate,
+		        AVG(cost_usd) as avg_cost,
+		        AVG(duration_s) as avg_duration
+		 FROM perf_runs
+		 GROUP BY agent, model, tier
+		 ORDER BY total_runs DESC`)
+	if err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type modelStat struct {
+		Agent       string  `json:"agent"`
+		Model       string  `json:"model"`
+		Tier        string  `json:"tier"`
+		TotalRuns   int     `json:"total_runs"`
+		Successes   int     `json:"successes"`
+		SuccessRate float64 `json:"success_rate"`
+		AvgCost     float64 `json:"avg_cost_usd"`
+		AvgDuration float64 `json:"avg_duration_s"`
+	}
+
+	var models []modelStat
+	for rows.Next() {
+		var m modelStat
+		if err := rows.Scan(&m.Agent, &m.Model, &m.Tier, &m.TotalRuns, &m.Successes, &m.SuccessRate, &m.AvgCost, &m.AvgDuration); err != nil {
+			a.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		models = append(models, m)
+	}
+	if models == nil {
+		models = []modelStat{}
+	}
+
+	a.jsonOK(w, map[string]any{"models": models})
+}
+
 // handleDashboardHealthMetrics returns system-wide health metrics.
 func (a *API) handleDashboardHealthMetrics(w http.ResponseWriter, r *http.Request) {
 	report, err := metrics.CollectHealth(r.Context(), a.DAG.DB(), a.TracesDB)
