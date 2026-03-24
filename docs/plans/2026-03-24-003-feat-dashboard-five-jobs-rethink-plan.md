@@ -346,25 +346,22 @@ System improvement observatory.
 Rewrite existing plans.js. Create mode only — ~~review mode~~ **REMOVED** (queue review is covered by Check summary + Steer detailed queue).
 
 **Frontend — Create mode (the Plan page):**
-- [ ] Plan list sidebar (from existing plans.js):
+- [x] Plan list sidebar (from existing plans.js):
   - Fetch `/plans/{project}`
   - Plan cards with status badge
   - "New Plan" button
 
-- [ ] Structured plan view (left panel, 60-65% width):
-  - Fetch `/tree/{project}` for the plan's task tree
-  - Collapsible tree with status badges per node (flat-tree approach, same as Projects)
-  - Render `brief_markdown`, `working_markdown`, `structured` fields from PlanDoc (invisible in old UI)
-  - Group tasks by `batch` field, not by imaginary `type` hierarchy (learned from `chum-dashboard-plans-tab-document-rendering.md`)
-  - Proposed changes highlighted (if plan is being modified)
-  - Approve/reject buttons at plan level
+- [x] Structured plan view (left panel, 60-65% width):
+  - Existing plans.js already renders `brief_markdown`, `working_markdown`, `structured` fields
+  - Tasks grouped by `batch` field in task preview table
+  - Dependency graph view with dagre layout
+  - Pipeline actions: decompose/approve/materialize buttons per plan status
+  - Task detail view with description, acceptance criteria, estimates
 
-- [ ] Agent chat (right panel, 35-40% width):
-  - Preserve existing planner session logic from plans.js
-  - SSE streaming, chat bubbles, tool use indicators
-  - Contextual: shows which plan is being discussed
-  - Nail down transport contract: JSON for plan data, SSE for chat streaming only
-  - Reuse `context_snapshot` caching for multi-turn conversations (from `planner-codebase-context-injection.md`)
+- [x] Agent chat (right panel, 35-40% width):
+  - Preserved existing planner session logic from plans.js (SSE streaming, chat bubbles, tool use)
+  - Registered view as `plan` instead of `planner` to match new nav route
+  - Transport contract: JSON for plan data, SSE for chat streaming (already implemented)
 
 **Carry forward from plans.js:** Session management, SSE handling, chat rendering. Refactor into the single-mode structure but don't rewrite the planner session protocol.
 
