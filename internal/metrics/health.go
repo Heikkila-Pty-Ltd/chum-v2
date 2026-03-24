@@ -9,13 +9,13 @@ import (
 
 // HealthReport contains feedback loop health metrics.
 type HealthReport struct {
-	BurnRate              float64            // total cost_usd in last 24h
-	AttemptDistribution   map[int]int        // attempt_count → task count
-	QuarantineCount       int                // active quarantine safety blocks
-	LessonCount           int                // total lessons stored
-	CostPerSuccessfulTask float64            // avg cost per completed task
-	FailureCategories     map[string]int     // sub_reason → count
-	TaskStatusCounts      map[string]int     // status → count
+	BurnRate              float64        // total cost_usd in last 24h
+	AttemptDistribution   map[int]int    // attempt_count → task count
+	QuarantineCount       int            // active quarantine safety blocks
+	LessonCount           int            // total lessons stored
+	CostPerSuccessfulTask float64        // avg cost per completed task
+	FailureCategories     map[string]int // sub_reason → count
+	TaskStatusCounts      map[string]int // status → count
 }
 
 // CollectHealth queries both the DAG and traces databases to produce a health report.
