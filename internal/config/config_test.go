@@ -89,7 +89,7 @@ func TestLoadMatrixConfigNormalization(t *testing.T) {
 	t.Parallel()
 	content := `
 [general]
-matrix_homeserver = " https://matrix.org/  "
+matrix_homeserver = " https://matrix.org///  "
 matrix_room_id = " !room:matrix.org "
 matrix_access_token = " secret-token "
 matrix_webhook_url = " https://hooks.example.com/matrix "

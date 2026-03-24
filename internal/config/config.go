@@ -281,11 +281,13 @@ func validate(cfg *Config) error {
 	}
 
 	// Matrix configuration validation and normalization.
-	cfg.General.MatrixHomeserver = strings.TrimSuffix(strings.TrimSpace(cfg.General.MatrixHomeserver), "/")
+	cfg.General.MatrixHomeserver = strings.TrimRight(strings.TrimSpace(cfg.General.MatrixHomeserver), "/")
 	cfg.General.MatrixAccessToken = strings.TrimSpace(cfg.General.MatrixAccessToken)
 	cfg.General.MatrixRoomID = strings.TrimSpace(cfg.General.MatrixRoomID)
 	cfg.General.MatrixWebhookURL = strings.TrimSpace(cfg.General.MatrixWebhookURL)
-
+    
+	// Bot-based Matrix configuration requires all three fields (homeserver, token, room ID).
+	// matrix_webhook_url is independent and does not trigger this validation.
 	if cfg.General.MatrixAccessToken != "" || cfg.General.MatrixRoomID != "" {
 		if cfg.General.MatrixHomeserver == "" {
 			return fmt.Errorf("matrix_homeserver is required when matrix configuration is provided")
