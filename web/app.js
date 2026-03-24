@@ -175,7 +175,8 @@ const App = (() => {
     closePanel();
 
     if (views[view]) {
-      views[view].render(viewport, currentProject);
+      const { param } = parseHash();
+      views[view].render(viewport, currentProject, param);
     }
 
     // Restart refresh timer
@@ -183,8 +184,8 @@ const App = (() => {
   }
 
   const ROUTE_REDIRECTS = {
-    overview: 'check', structure: 'projects', jarvis: 'check',
-    plans: 'plan', planner: 'plan', tasks: 'projects',
+    overview: 'check', structure: 'work', jarvis: 'check',
+    plans: 'plan', planner: 'plan', tasks: 'work', projects: 'work',
   };
 
   function parseHash() {
@@ -415,7 +416,7 @@ const App = (() => {
       else if (e.key === '2') navigate('plan');
       else if (e.key === '3') navigate('steer');
       else if (e.key === '4') navigate('learn');
-      else if (e.key === '5') navigate('projects');
+      else if (e.key === '5') navigate('work');
       else if (e.key === 'Escape') closePanel();
     });
   }

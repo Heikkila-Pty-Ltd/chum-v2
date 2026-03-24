@@ -350,7 +350,7 @@
                 <template x-if="currentTriageItem">
                   <div class="steer-triage-card">
                     <div class="steer-triage-header">
-                      <code class="steer-task-id" x-text="currentTriageItem.id.slice(0, 12)"></code>
+                      <a class="task-link steer-task-id" :href="'#/work/' + currentTriageItem.id" x-text="currentTriageItem.id.slice(0, 12)" @click.stop></a>
                       <span class="status-badge" :style="'background:' + statusColor(currentTriageItem.status)" x-text="currentTriageItem.status"></span>
                       <span class="steer-triage-age" x-text="timeAgo(currentTriageItem.updated_at)"></span>
                     </div>
@@ -417,7 +417,7 @@
                 <template x-for="task in runningTasks" :key="task.id">
                   <div class="steer-queue-item steer-queue-item--running">
                     <span class="steer-pulse"></span>
-                    <code class="steer-task-id" x-text="task.id.slice(0, 12)"></code>
+                    <a class="task-link steer-task-id" :href="'#/work/' + task.id" x-text="task.id.slice(0, 12)" @click.stop></a>
                     <span class="steer-queue-title" x-text="truncate(task.title, 60)"></span>
                     <span class="steer-queue-project" x-text="task.project"></span>
                   </div>
@@ -436,7 +436,7 @@
                       <button class="steer-arrow" @click="moveTask(idx, 1)" :disabled="idx === readyTasks.length - 1" title="Move down">\u25BC</button>
                     </div>
                     <span class="steer-queue-pos" x-text="idx + 1"></span>
-                    <code class="steer-task-id" x-text="task.id.slice(0, 12)"></code>
+                    <a class="task-link steer-task-id" :href="'#/work/' + task.id" x-text="task.id.slice(0, 12)" @click.stop></a>
                     <span class="steer-queue-title" x-text="truncate(task.title, 60)"></span>
                     <span class="steer-queue-project" x-text="task.project"></span>
                   </div>

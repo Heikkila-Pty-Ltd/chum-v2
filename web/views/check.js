@@ -202,7 +202,7 @@
                 <div class="check-event-body">
                   <div class="check-event-row">
                     <span class="check-event-type-badge" :class="'badge-' + ev.type" x-text="ev.type"></span>
-                    <code class="check-event-id" x-text="ev.task_id ? ev.task_id.slice(0, 12) : ''"></code>
+                    <a class="task-link" :href="ev.task_id ? '#/work/' + ev.task_id : '#'" x-text="ev.task_id ? ev.task_id.slice(0, 12) : ''" @click.stop></a>
                     <span class="check-event-title" x-text="ev.title || ev.summary || ''"></span>
                     <span class="check-event-project" x-text="ev.project"></span>
                     <span class="status-badge" :style="'background:' + statusColor(ev.status)" x-text="ev.status"></span>
