@@ -23,6 +23,7 @@ const taskTableSchema = `CREATE TABLE IF NOT EXISTS tasks (
 	metadata TEXT NOT NULL DEFAULT '{}',
 	actual_duration_sec INTEGER NOT NULL DEFAULT 0,
 	iterations_used INTEGER NOT NULL DEFAULT 0,
+	attempt_count INTEGER NOT NULL DEFAULT 0,
 	created_at DATETIME NOT NULL DEFAULT (datetime('now')),
 	updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );`
@@ -165,7 +166,7 @@ const indexPlanDocsProject = `CREATE INDEX IF NOT EXISTS idx_plan_docs_project O
 
 const taskColumns = `id, title, description, status, priority, type, assignee, labels,
 	estimate_minutes, parent_id, acceptance, project, error_log, metadata,
-	actual_duration_sec, iterations_used, created_at, updated_at`
+	actual_duration_sec, iterations_used, attempt_count, created_at, updated_at`
 
 // EnsureSchema creates the tasks, task_edges, and task_targets tables
 // if they don't exist, and runs any necessary migrations.
@@ -210,6 +211,9 @@ func (d *DAG) EnsureSchema(ctx context.Context) error {
 	}
 	if err := d.migratePlanContextSnapshot(ctx); err != nil {
 		return fmt.Errorf("migrate plan context_snapshot: %w", err)
+	}
+	if err := d.migrateTaskAttemptCount(ctx); err != nil {
+		return fmt.Errorf("migrate task attempt_count: %w", err)
 	}
 	return nil
 }
@@ -374,4 +378,9 @@ func (d *DAG) migrateTaskExecMetrics(ctx context.Context) error {
 		return err
 	}
 	return d.migrateAddColumn(ctx, "tasks", "iterations_used", "INTEGER NOT NULL DEFAULT 0")
+}
+
+// migrateTaskAttemptCount adds attempt_count column to tasks if it doesn't exist.
+func (d *DAG) migrateTaskAttemptCount(ctx context.Context) error {
+	return d.migrateAddColumn(ctx, "tasks", "attempt_count", "INTEGER NOT NULL DEFAULT 0")
 }

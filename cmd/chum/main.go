@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"net"
@@ -23,6 +24,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/engine"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/jarvis"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 
 	enumspb "go.temporal.io/api/enums/v1"
@@ -119,9 +121,21 @@ func main() {
 			if cfg.BeadsBridge.Enabled {
 				policy = cfg.BeadsBridge.IngressPolicy
 			}
+
+			// Open traces DB for health metrics endpoint (read-only, safe with WAL).
+			var tracesDB *sql.DB
+			tracesStore, err := store.Open(cfg.General.TracesDBPath)
+			if err != nil {
+				logger.Warn("Traces DB unavailable for health endpoint", "error", err)
+			} else {
+				tracesDB = tracesStore.DB()
+			}
+
 			api := &jarvis.API{
 				Engine:               eng,
 				DAG:                  d,
+				Store:                tracesStore,
+				TracesDB:             tracesDB,
 				Logger:               logger,
 				IngressPolicy:        policy,
 				PlanningDefaultAgent: defaultPlanningAgent,

@@ -5,6 +5,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"net"
@@ -26,8 +27,6 @@ func main() {
 	port := "9780"
 	webDir := "web"
 	configPath := "chum.toml"
-	jarvisDB := ""
-
 	for i, arg := range os.Args {
 		switch arg {
 		case "--config":
@@ -45,10 +44,6 @@ func main() {
 		case "--web":
 			if i+1 < len(os.Args) {
 				webDir = os.Args[i+1]
-			}
-		case "--jarvis-db":
-			if i+1 < len(os.Args) {
-				jarvisDB = os.Args[i+1]
 			}
 		}
 	}
@@ -101,11 +96,6 @@ func main() {
 		}
 		eng.ConfigureBeadsIngress(cfg.BeadsBridge.IngressPolicy, cfg.BeadsBridge.CanaryLabel, beadsClients)
 	}
-	// Resolve Jarvis KB path: CLI flag > config > default.
-	if jarvisDB == "" && cfg != nil && cfg.General.JarvisKBPath != "" {
-		jarvisDB = cfg.General.JarvisKBPath
-	}
-
 	runner := llm.CLIRunner{}
 	parser := ast.NewParser(logger)
 
@@ -113,7 +103,11 @@ func main() {
 	planSess := plansession.NewManager(logger, port, "")
 	planSess.Reconcile() // kill orphaned tmux sessions from previous runs
 
-	api := &jarvis.API{Engine: eng, DAG: d, Store: s, LLM: runner, AST: parser, Logger: logger, WebDir: webDir, JarvisKBPath: jarvisDB, PlanSession: planSess}
+	var tracesDB *sql.DB
+	if s != nil {
+		tracesDB = s.DB()
+	}
+	api := &jarvis.API{Engine: eng, DAG: d, Store: s, TracesDB: tracesDB, LLM: runner, AST: parser, Logger: logger, WebDir: webDir, PlanSession: planSess}
 
 	addr := fmt.Sprintf("0.0.0.0:%s", port)
 	ln, err := net.Listen("tcp", addr)

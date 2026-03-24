@@ -31,8 +31,8 @@ type API struct {
 
 	PlanSession *plansession.Manager // interactive planner session manager; nil disables session endpoints
 
-	JarvisKBPath string  // path to Jarvis knowledge base SQLite (read-only)
-	jarvisDB     *sql.DB // cached connection to Jarvis KB; opened on first use
+	TracesDB *sql.DB // traces database handle for health metrics; nil disables health endpoint
+
 }
 
 // Handler returns an http.Handler with all Jarvis API routes.
@@ -94,15 +94,9 @@ func (a *API) Handler() http.Handler {
 		mux.HandleFunc("DELETE /api/dashboard/plan/{id}/session", a.handlePlanSessionDestroy)
 	}
 
-	// Jarvis knowledge base endpoints (read-only).
-	if a.JarvisKBPath != "" {
-		mux.HandleFunc("GET /api/dashboard/jarvis/actions", a.handleJarvisActions)
-		mux.HandleFunc("POST /api/dashboard/jarvis/actions/resolve", a.handleJarvisResolve)
-		mux.HandleFunc("GET /api/dashboard/jarvis/summary", a.handleJarvisSummary)
-		mux.HandleFunc("GET /api/dashboard/jarvis/goals", a.handleJarvisGoals)
-		mux.HandleFunc("GET /api/dashboard/jarvis/facts", a.handleJarvisFacts)
-		mux.HandleFunc("GET /api/dashboard/jarvis/initiatives", a.handleJarvisInitiatives)
-		mux.HandleFunc("GET /api/dashboard/jarvis/state", a.handleJarvisState)
+	// Health metrics endpoint (queries both DAG and traces databases).
+	if a.DAG != nil && a.TracesDB != nil {
+		mux.HandleFunc("GET /api/dashboard/health", a.handleDashboardHealthMetrics)
 	}
 
 	// Static file serving for dashboard UI.

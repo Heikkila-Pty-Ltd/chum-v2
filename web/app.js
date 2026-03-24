@@ -35,13 +35,8 @@ const App = (() => {
     kill: (taskId, reason) => API.post(`/api/dashboard/task/${taskId}/kill`, { reason }),
     decompose: (taskId)   => API.post(`/api/dashboard/task/${taskId}/decompose`),
     suggest: (taskId)     => API.get(`/api/dashboard/suggest/${taskId}`),
-    jarvisActions: ()     => API.get('/api/dashboard/jarvis/actions'),
-    jarvisResolve: (body) => API.post('/api/dashboard/jarvis/actions/resolve', body),
-    jarvisSummary: ()     => API.get('/api/dashboard/jarvis/summary'),
-    jarvisGoals: ()       => API.get('/api/dashboard/jarvis/goals'),
-    jarvisFacts: (c)      => API.get(`/api/dashboard/jarvis/facts${c ? '?category=' + c : ''}`),
-    jarvisInitiatives: () => API.get('/api/dashboard/jarvis/initiatives'),
-    jarvisState: ()       => API.get('/api/dashboard/jarvis/state'),
+    health: ()            => API.get('/api/dashboard/health'),
+    traces: (id)          => API.get(`/api/dashboard/traces/${id}`),
     plans: (p)            => API.get(`/api/dashboard/plans/${p}`),
     plan: (id)            => API.get(`/api/dashboard/plan/${id}`),
     planCreate: (body)    => API.post('/api/dashboard/plans', body),
@@ -54,13 +49,15 @@ const App = (() => {
   const STATUS_NAMES = [
     'completed', 'running', 'ready', 'open', 'failed', 'decomposed',
     'dod_failed', 'needs_refinement', 'stale', 'needs_review', 'rejected', 'done',
+    'quarantined', 'budget_exceeded',
   ];
   const STATUS_COLORS = {};
   (() => {
     const styles = getComputedStyle(document.documentElement);
     const FALLBACK = { completed:'#3d9a5f', running:'#c75a3a', ready:'#4a7fd4', open:'#5c5f69',
       failed:'#b93a3a', decomposed:'#8b6cc1', dod_failed:'#c27a2a', needs_refinement:'#b5a030',
-      stale:'#4a4d56', needs_review:'#d4953a', rejected:'#9e3a5c', done:'#3d9a5f' };
+      stale:'#4a4d56', needs_review:'#d4953a', rejected:'#9e3a5c', done:'#3d9a5f',
+      quarantined:'#8b4a8b', budget_exceeded:'#c9843a' };
     STATUS_NAMES.forEach(name => {
       const cssName = '--status-' + name.replace(/_/g, '-');
       const val = styles.getPropertyValue(cssName).trim();
@@ -81,17 +78,7 @@ const App = (() => {
   }
 
   // --- Shared Constants ---
-  const ATTENTION_STATUSES = ['failed', 'dod_failed', 'rejected', 'needs_refinement', 'needs_review'];
-  const FAILED_STATUSES = ['failed', 'dod_failed', 'rejected'];
-
-  const STATUS_KANBAN_MAP = {
-    open: 'backlog', decomposed: 'backlog',
-    ready: 'ready',
-    running: 'running',
-    needs_review: 'review', needs_refinement: 'review', dod_failed: 'review',
-    completed: 'done', done: 'done',
-    failed: null, rejected: null, stale: null, // stay in current column with indicator
-  };
+  const ATTENTION_STATUSES = ['quarantined', 'budget_exceeded', 'failed', 'dod_failed', 'rejected', 'needs_refinement', 'needs_review'];
 
   // --- Shared Utilities ---
   function formatDuration(seconds) {
@@ -130,15 +117,9 @@ const App = (() => {
     return s.length > n ? s.slice(0, n) + '\u2026' : s;
   }
 
-  function healthColor(health) {
-    return health === 'failing' ? 'var(--status-failed)' :
-           health === 'degraded' ? 'var(--status-dod-failed)' :
-           'var(--status-completed)';
-  }
-
   function renderStatusBar(byStatus, total) {
     const statusOrder = ['completed', 'done', 'running', 'ready', 'open', 'decomposed',
-      'needs_refinement', 'needs_review', 'dod_failed', 'failed', 'rejected', 'stale'];
+      'needs_refinement', 'needs_review', 'dod_failed', 'failed', 'rejected', 'quarantined', 'budget_exceeded', 'stale'];
     const segments = statusOrder
       .filter(s => byStatus[s] > 0)
       .map(s => ({ status: s, count: byStatus[s], pct: total > 0 ? (byStatus[s] / total) * 100 : 0 }));
@@ -152,45 +133,6 @@ const App = (() => {
 
   function errorState(label, err) {
     return `<div class="empty-state">Failed to load ${escapeHtml(label)}<div class="empty-state-hint">${escapeHtml(err.message)}</div></div>`;
-  }
-
-  function bindActionButton(container, selector, apiFn, project, refreshFn) {
-    container.querySelectorAll(selector).forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const taskId = btn.dataset.taskId || btn.dataset.pause || btn.dataset.kill ||
-                       btn.dataset.decompose || btn.dataset.retry || btn.dataset.suggest;
-        btn.textContent = '\u2026';
-        btn.disabled = true;
-        apiFn(taskId).then(data => {
-          btn.textContent = 'sent';
-          if (data && data.suggestion) {
-            const childEl = btn.closest('.ov-child');
-            if (childEl) {
-              let existing = childEl.nextElementSibling;
-              if (existing && existing.classList.contains('ov-suggest-inline')) existing.remove();
-              const div = document.createElement('div');
-              div.className = 'ov-suggest-inline';
-              div.textContent = data.suggestion;
-              childEl.after(div);
-            }
-            btn.textContent = 'suggest';
-            btn.disabled = false;
-            return;
-          }
-          setTimeout(() => refreshFn(project), 1000);
-        }).catch(err => {
-          btn.textContent = 'err';
-          btn.title = err.message;
-          btn.disabled = false;
-        });
-      });
-    });
-  }
-
-  function renderTextList(items) {
-    if (!items || items.length === 0) return '';
-    return `<ul class="panel-dep-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
   }
 
   // --- Router ---
@@ -222,10 +164,14 @@ const App = (() => {
     startRefresh();
   }
 
+  const ROUTE_REDIRECTS = { structure: 'tasks', jarvis: 'overview', plans: 'planner' };
+
   function parseHash() {
     const hash = location.hash.slice(1) || '/overview';
     const parts = hash.split('/').filter(Boolean);
-    return { view: parts[0] || 'overview', param: parts[1] || '' };
+    let view = parts[0] || 'overview';
+    if (ROUTE_REDIRECTS[view]) view = ROUTE_REDIRECTS[view];
+    return { view, param: parts[1] || '' };
   }
 
   // --- Detail Panel ---
@@ -236,7 +182,11 @@ const App = (() => {
     panel.classList.add('panel-open');
     panel.setAttribute('aria-hidden', 'false');
 
-    API.task(taskId).then(data => {
+    Promise.all([
+      API.task(taskId),
+      API.traces(taskId).catch(() => ({ traces: [] })),
+    ]).then(([data, tracesData]) => {
+      data.traces = tracesData.traces || [];
       content.innerHTML = renderTaskDetail(data);
 
       // Bind dep links
@@ -244,6 +194,18 @@ const App = (() => {
         a.addEventListener('click', (e) => {
           e.preventDefault();
           openPanel(a.dataset.taskId);
+        });
+      });
+      // Bind trace toggles
+      content.querySelectorAll('.panel-trace-toggle').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const body = btn.nextElementSibling;
+          if (body) {
+            body.classList.toggle('panel-trace-visible');
+            btn.textContent = body.classList.contains('panel-trace-visible')
+              ? btn.textContent.replace('\u25b6', '\u25bc')
+              : btn.textContent.replace('\u25bc', '\u25b6');
+          }
         });
       });
     }).catch(err => {
@@ -284,6 +246,7 @@ const App = (() => {
           <span class="panel-meta-key">priority</span><span class="panel-meta-value">${t.priority}</span>
           <span class="panel-meta-key">estimate</span><span class="panel-meta-value">${formatMinutes(t.estimate_minutes)}</span>
           <span class="panel-meta-key">actual</span><span class="panel-meta-value">${formatDuration(t.actual_duration_sec)}</span>
+          <span class="panel-meta-key">attempts</span><span class="panel-meta-value">${t.attempt_count || 0}</span>
           <span class="panel-meta-key">iterations</span><span class="panel-meta-value">${t.iterations_used || '\u2014'}</span>
           <span class="panel-meta-key">assignee</span><span class="panel-meta-value">${t.assignee || '\u2014'}</span>
           <span class="panel-meta-key">created</span><span class="panel-meta-value">${timeAgo(t.created_at)}</span>
@@ -354,6 +317,24 @@ const App = (() => {
       `;
     }
 
+    // Execution traces
+    if (data.traces && data.traces.length > 0) {
+      html += `
+        <div class="panel-section">
+          <div class="panel-section-label">Execution Traces (${data.traces.length})</div>
+          ${data.traces.map((tr, i) => `
+            <div class="panel-trace">
+              <button class="panel-trace-toggle">\u25b6 Attempt ${i + 1} \u2014 ${escapeHtml(tr.outcome || tr.status || 'unknown')}${tr.duration_sec ? ' (' + formatDuration(tr.duration_sec) + ')' : ''}</button>
+              <div class="panel-trace-body">
+                ${tr.error_snippet ? `<pre class="panel-trace-error">${escapeHtml(tr.error_snippet)}</pre>` : ''}
+                ${tr.cost_usd ? `<span class="panel-trace-cost">$${Number(tr.cost_usd).toFixed(4)}</span>` : ''}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
     // PR / review link from error_log
     if (t.error_log) {
       try {
@@ -414,9 +395,8 @@ const App = (() => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
 
       if (e.key === '1') navigate('overview');
-      else if (e.key === '2') navigate('structure');
-      else if (e.key === '3') navigate('jarvis');
-      else if (e.key === '4') navigate('plans');
+      else if (e.key === '2') navigate('planner');
+      else if (e.key === '3') navigate('tasks');
       else if (e.key === 'Escape') closePanel();
     });
   }
@@ -486,13 +466,10 @@ const App = (() => {
     timeAgo,
     escapeHtml,
     truncate,
-    healthColor,
     renderStatusBar,
     errorState,
-    bindActionButton,
+    STATUS_NAMES,
     ATTENTION_STATUSES,
-    FAILED_STATUSES,
-    STATUS_KANBAN_MAP,
     get currentProject() { return currentProject; },
   };
 })();

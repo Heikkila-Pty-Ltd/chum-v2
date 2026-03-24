@@ -21,6 +21,7 @@ type Task struct {
 	Metadata        map[string]string `json:"metadata,omitempty"`
 	ActualDurationS int               `json:"actual_duration_sec,omitempty"` // recorded after execution
 	IterationsUsed  int               `json:"iterations_used,omitempty"`     // agent tool-call iterations used
+	AttemptCount    int               `json:"attempt_count"`                 // execution attempts (for circuit breaker visibility)
 	CreatedAt       time.Time         `json:"created_at"`
 	UpdatedAt       time.Time         `json:"updated_at"`
 }
