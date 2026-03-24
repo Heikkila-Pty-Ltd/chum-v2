@@ -1,7 +1,7 @@
 // Standalone preview server for the CHUM dashboard.
 // Serves the frontend + dashboard API endpoints without needing Temporal.
 //
-// Usage: go run ./cmd/dashboard-preview [--db chum.db] [--port 9780]
+// Usage: go run ./cmd/dashboard-preview [--db chum.db] [--traces-db chum-traces.db] [--port 9780]
 package main
 
 import (
@@ -24,6 +24,7 @@ import (
 
 func main() {
 	dbPath := "chum.db"
+	tracesDBPath := "chum-traces.db"
 	port := "9780"
 	webDir := "web"
 	configPath := "chum.toml"
@@ -36,6 +37,10 @@ func main() {
 		case "--db":
 			if i+1 < len(os.Args) {
 				dbPath = os.Args[i+1]
+			}
+		case "--traces-db":
+			if i+1 < len(os.Args) {
+				tracesDBPath = os.Args[i+1]
 			}
 		case "--port":
 			if i+1 < len(os.Args) {
@@ -104,8 +109,11 @@ func main() {
 	planSess.Reconcile() // kill orphaned tmux sessions from previous runs
 
 	var tracesDB *sql.DB
-	if s != nil {
-		tracesDB = s.DB()
+	if tdb, err := sql.Open("sqlite", tracesDBPath); err == nil {
+		tracesDB = tdb
+		defer tdb.Close()
+	} else {
+		logger.Warn("Failed to open traces DB; health endpoint will be unavailable", "path", tracesDBPath, "error", err)
 	}
 	api := &jarvis.API{Engine: eng, DAG: d, Store: s, TracesDB: tracesDB, LLM: runner, AST: parser, Logger: logger, WebDir: webDir, PlanSession: planSess}
 
