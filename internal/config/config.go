@@ -160,6 +160,9 @@ func Load(path string) (*Config, error) {
 	if cfg.General.DBPath == "" {
 		cfg.General.DBPath = "chum.db"
 	}
+	if cfg.General.MatrixHomeserver == "" {
+		cfg.General.MatrixHomeserver = "https://matrix.org"
+	}
 	if cfg.General.TracesDBPath == "" {
 		cfg.General.TracesDBPath = "chum-traces.db"
 	}
@@ -283,7 +286,7 @@ func validate(cfg *Config) error {
 	cfg.General.MatrixRoomID = strings.TrimSpace(cfg.General.MatrixRoomID)
 	cfg.General.MatrixWebhookURL = strings.TrimSpace(cfg.General.MatrixWebhookURL)
 
-	if cfg.General.MatrixHomeserver != "" || cfg.General.MatrixAccessToken != "" || cfg.General.MatrixRoomID != "" {
+	if cfg.General.MatrixAccessToken != "" || cfg.General.MatrixRoomID != "" {
 		if cfg.General.MatrixHomeserver == "" {
 			return fmt.Errorf("matrix_homeserver is required when matrix configuration is provided")
 		}

@@ -142,10 +142,9 @@ matrix_access_token = "secret"
 `,
 		},
 		{
-			name: "missing homeserver",
+			name: "missing access token with room id",
 			content: `
 [general]
-matrix_access_token = "secret"
 matrix_room_id = "!room:matrix.org"
 `,
 		},
@@ -188,8 +187,8 @@ func TestLoadMatrixConfigOptional(t *testing.T) {
 db_path = "test.db"
 `,
 			verify: func(t *testing.T, cfg *Config) {
-				if cfg.General.MatrixHomeserver != "" {
-					t.Errorf("expected empty homeserver, got %q", cfg.General.MatrixHomeserver)
+				if cfg.General.MatrixHomeserver != "https://matrix.org" {
+					t.Errorf("expected default homeserver, got %q", cfg.General.MatrixHomeserver)
 				}
 				if cfg.General.MatrixWebhookURL != "" {
 					t.Errorf("expected empty webhook, got %q", cfg.General.MatrixWebhookURL)
@@ -206,8 +205,23 @@ matrix_webhook_url = "https://hooks.example.com/matrix"
 				if cfg.General.MatrixWebhookURL != "https://hooks.example.com/matrix" {
 					t.Errorf("unexpected webhook url: %s", cfg.General.MatrixWebhookURL)
 				}
-				if cfg.General.MatrixHomeserver != "" {
-					t.Errorf("expected empty homeserver, got %q", cfg.General.MatrixHomeserver)
+				if cfg.General.MatrixHomeserver != "https://matrix.org" {
+					t.Errorf("expected default homeserver, got %q", cfg.General.MatrixHomeserver)
+				}
+			},
+		},
+		{
+			name: "only homeserver provided",
+			content: `
+[general]
+matrix_homeserver = "https://custom.org"
+`,
+			verify: func(t *testing.T, cfg *Config) {
+				if cfg.General.MatrixHomeserver != "https://custom.org" {
+					t.Errorf("expected custom homeserver, got %q", cfg.General.MatrixHomeserver)
+				}
+				if cfg.General.MatrixAccessToken != "" {
+					t.Errorf("expected empty access token, got %q", cfg.General.MatrixAccessToken)
 				}
 			},
 		},
