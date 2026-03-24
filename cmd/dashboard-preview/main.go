@@ -22,36 +22,56 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
 )
 
-func main() {
-	dbPath := "chum.db"
-	tracesDBPath := "chum-traces.db"
-	port := "9780"
-	webDir := "web"
-	configPath := "chum.toml"
-	for i, arg := range os.Args {
+type cliFlags struct {
+	dbPath       string
+	tracesDBPath string
+	port         string
+	webDir       string
+	configPath   string
+}
+
+func parseFlags(args []string) cliFlags {
+	f := cliFlags{
+		dbPath:       "chum.db",
+		tracesDBPath: "chum-traces.db",
+		port:         "9780",
+		webDir:       "web",
+		configPath:   "chum.toml",
+	}
+	for i, arg := range args {
 		switch arg {
 		case "--config":
-			if i+1 < len(os.Args) {
-				configPath = os.Args[i+1]
+			if i+1 < len(args) {
+				f.configPath = args[i+1]
 			}
 		case "--db":
-			if i+1 < len(os.Args) {
-				dbPath = os.Args[i+1]
+			if i+1 < len(args) {
+				f.dbPath = args[i+1]
 			}
 		case "--traces-db":
-			if i+1 < len(os.Args) {
-				tracesDBPath = os.Args[i+1]
+			if i+1 < len(args) {
+				f.tracesDBPath = args[i+1]
 			}
 		case "--port":
-			if i+1 < len(os.Args) {
-				port = os.Args[i+1]
+			if i+1 < len(args) {
+				f.port = args[i+1]
 			}
 		case "--web":
-			if i+1 < len(os.Args) {
-				webDir = os.Args[i+1]
+			if i+1 < len(args) {
+				f.webDir = args[i+1]
 			}
 		}
 	}
+	return f
+}
+
+func main() {
+	f := parseFlags(os.Args)
+	dbPath := f.dbPath
+	tracesDBPath := f.tracesDBPath
+	port := f.port
+	webDir := f.webDir
+	configPath := f.configPath
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	workDirs := map[string]string{"chum": "."}
