@@ -272,7 +272,7 @@ The write-heavy control surface. Highest operator value — this is where action
 Portfolio view + per-project drill-in.
 
 **Frontend:**
-- [ ] Project list view (default):
+- [x] Project list view (default):
   - Fetch `/projects` + `/stats/{project}` + `/overview-grouped/{project}` for each
   - Use `Promise.allSettled` — secondary project data is optional enrichment
   - Each project renders a health card (consistent anatomy):
@@ -283,7 +283,7 @@ Portfolio view + per-project drill-in.
   - Cards in responsive grid, compact enough for 3-5 to fit in a single row
   - ~~Comparison: side-by-side layout when 2+ projects selected~~ **REMOVED** — with 3-5 projects the card grid IS the comparison view
 
-- [ ] Project detail view (click into card):
+- [x] Project detail view (click into card):
   - Route: `#/projects/{name}`
   - Task tree from `/tree/{project}` — flat-tree approach (items with `depth` field, single Alpine reactive context) rather than recursive nested `x-data` for performance
   - Status rollup per tree node. Include `cancelled`, `stale`, `quarantined`, `budget_exceeded` with distinct visual treatment
@@ -294,7 +294,7 @@ Portfolio view + per-project drill-in.
   - Plan list (from `/plans/{project}`)
   - Reset all filter/search state on project switch
 
-- [ ] Add API method: `overviewGrouped(project)` if not already present
+- [x] Add API method: `overviewGrouped(project)` if not already present
 
 **Note:** DAG visualization from tasks.js is deferred — not rebuilt in this phase. Keep tasks.js alive until Phase 5 cleanup.
 
