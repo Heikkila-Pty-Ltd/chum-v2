@@ -37,8 +37,9 @@ type Activities struct {
 	BeadsClients map[string]beads.Store
 	ChatSend     notify.ChatSender
 	LLM          llm.Runner
-	Traces       store.TraceStore // execution trace recording (nil = no-op)
-	Perf         *perf.Tracker    // performance tracking (nil = no-op)
+	Traces       store.TraceStore  // execution trace recording (nil = no-op)
+	Perf         *perf.Tracker     // performance tracking (nil = no-op)
+	Lessons      store.LessonStore // lesson persistence (nil = no-op)
 }
 
 // --- 1. SetupWorktreeActivity ---
@@ -555,3 +556,48 @@ func (a *Activities) RecordTraceActivity(ctx context.Context, outcome TraceOutco
 }
 
 // --- helpers ---
+
+// --- Experiment Mode Activities ---
+
+// ResetWorktreeActivity discards all changes in the worktree and removes untracked files.
+// Used by experiment mode to give the agent a clean slate for retry.
+func (a *Activities) ResetWorktreeActivity(ctx context.Context, workDir string) error {
+	logger := activity.GetLogger(ctx)
+
+	// Discard all staged and unstaged changes
+	if err := exec.CommandContext(ctx, "git", "-C", workDir, "checkout", "--", ".").Run(); err != nil {
+		logger.Warn("git checkout failed during reset", "error", err)
+	}
+
+	// Remove untracked files and directories
+	if err := exec.CommandContext(ctx, "git", "-C", workDir, "clean", "-fd").Run(); err != nil {
+		logger.Warn("git clean failed during reset", "error", err)
+	}
+
+	logger.Info("Worktree reset", "dir", workDir)
+	return nil
+}
+
+// StoreLessonActivity persists a lesson learned from a DoD failure.
+// Called during experiment mode retries so future tasks avoid the same mistakes.
+func (a *Activities) StoreLessonActivity(ctx context.Context, params LessonParams) (int64, error) {
+	if a.Lessons == nil {
+		return 0, nil
+	}
+	return a.Lessons.StoreLesson(
+		params.TaskID, params.Project, params.Category,
+		params.Summary, params.Detail,
+		params.FilePaths, params.Labels,
+	)
+}
+
+// LessonParams holds the input for StoreLessonActivity.
+type LessonParams struct {
+	TaskID    string   `json:"task_id"`
+	Project   string   `json:"project"`
+	Category  string   `json:"category"`
+	Summary   string   `json:"summary"`
+	Detail    string   `json:"detail"`
+	FilePaths []string `json:"file_paths"`
+	Labels    []string `json:"labels"`
+}

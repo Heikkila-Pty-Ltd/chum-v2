@@ -14,6 +14,7 @@ import (
 
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/metrics"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
 	enumspb "go.temporal.io/api/enums/v1"
@@ -688,7 +689,7 @@ func (a *API) handleDashboardOverview(w http.ResponseWriter, r *http.Request) {
 			if now.Sub(t.UpdatedAt) < 24*time.Hour {
 				recent = append(recent, st)
 			}
-		case "failed", "dod_failed", "needs_refinement", "needs_review", "rejected":
+		case "failed", "dod_failed", "needs_refinement", "needs_review", "rejected", "quarantined", "budget_exceeded":
 			attention = append(attention, st)
 		}
 	}
@@ -740,7 +741,7 @@ func computeGoalDisplayStatus(rawStatus string, children []dag.Task) string {
 		switch c.Status {
 		case "completed", "done":
 			// terminal
-		case "failed", "dod_failed", "rejected":
+		case "failed", "dod_failed", "rejected", "quarantined", "budget_exceeded":
 			anyFailed = true
 		case "running":
 			anyRunning = true
@@ -870,7 +871,7 @@ func (a *API) handleDashboardOverviewGrouped(w http.ResponseWriter, r *http.Requ
 			switch c.Status {
 			case "completed", "done":
 				completed++
-			case "failed", "dod_failed", "rejected":
+			case "failed", "dod_failed", "rejected", "quarantined", "budget_exceeded":
 				failed++
 			case "running":
 				running++
@@ -1024,15 +1025,26 @@ func (a *API) handleDashboardTaskRetry(w http.ResponseWriter, r *http.Request) {
 		a.jsonError(w, "task not found", http.StatusNotFound)
 		return
 	}
-	terminal := map[string]bool{"failed": true, "dod_failed": true, "rejected": true, "needs_refinement": true}
-	if !terminal[task.Status] {
+	retryable := map[string]bool{
+		"failed": true, "dod_failed": true, "rejected": true, "needs_refinement": true,
+		"quarantined": true, "budget_exceeded": true,
+	}
+	if !retryable[task.Status] {
 		a.jsonError(w, "task is not in a retryable state", http.StatusBadRequest)
 		return
 	}
-	if err := a.DAG.UpdateTask(r.Context(), taskID, map[string]any{
+	updates := map[string]any{
 		"status":    "ready",
 		"error_log": "",
-	}); err != nil {
+	}
+	if task.Status == "quarantined" || task.Status == "budget_exceeded" {
+		updates["attempt_count"] = 0
+	}
+	// Clear safety block for quarantined tasks.
+	if task.Status == "quarantined" && a.Store != nil {
+		_ = a.Store.RemoveBlock(taskID, "quarantine")
+	}
+	if err := a.DAG.UpdateTask(r.Context(), taskID, updates); err != nil {
 		a.jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1180,4 +1192,14 @@ func (a *API) handleDashboardLessons(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.jsonOK(w, map[string]any{"lessons": lessons})
+}
+
+// handleDashboardHealthMetrics returns system-wide health metrics.
+func (a *API) handleDashboardHealthMetrics(w http.ResponseWriter, r *http.Request) {
+	report, err := metrics.CollectHealth(r.Context(), a.DAG.DB(), a.TracesDB)
+	if err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	a.jsonOK(w, report)
 }

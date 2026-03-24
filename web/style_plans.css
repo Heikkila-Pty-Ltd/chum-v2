@@ -237,6 +237,37 @@
   padding: var(--sp-2) 0;
 }
 
+.plans-msg-system {
+  align-self: center;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-style: italic;
+  padding: var(--sp-1) 0;
+}
+
+.plans-extract-btn {
+  margin-left: auto;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 3px 10px;
+  border-radius: 3px;
+  border: 1px solid var(--border-default);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.plans-extract-btn:hover {
+  background: var(--surface-3);
+  color: var(--text-primary);
+  border-color: var(--border-emphasis);
+}
+
+.plans-extract-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .plans-msg-assistant p {
   margin-bottom: var(--sp-2);
 }

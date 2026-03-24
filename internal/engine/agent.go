@@ -128,9 +128,15 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 				return fmt.Errorf("decompose failed: %w", err)
 			}
 			if !decompResult.Atomic && len(decompResult.Steps) > 0 {
+				// Re-decompose any steps exceeding the 15-min threshold.
+				steps, flattenErr := flattenDecomposedSteps(ctx, a, req, decompResult.Steps, 2, dodOpts)
+				if flattenErr != nil {
+					logger.Warn("Re-decomposition failed, using original steps", "error", flattenErr)
+					steps = decompResult.Steps
+				}
 				var subtaskIDs []string
 				if err := workflow.ExecuteActivity(decompCtx, a.CreateSubtasksActivity,
-					req.TaskID, req.Project, decompResult.Steps).Get(ctx, &subtaskIDs); err != nil {
+					req.TaskID, req.Project, steps).Get(ctx, &subtaskIDs); err != nil {
 					logger.Error("Failed to create subtasks", "error", err)
 					if cerr := closeAndTrace(CloseDetail{
 						Reason:    CloseNeedsReview,
@@ -150,52 +156,135 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		}
 	}
 
-	// === EXECUTE ===
-	execCtx := workflow.WithActivityOptions(ctx, execOpts)
-	reqAfterExec, execResult, err := executeWithProviderFallback(execCtx, req)
-	if err != nil {
-		logger.Error("Execute failed", "error", err)
-		if cerr := closeAndTrace(CloseDetail{
-			Reason:    CloseNeedsReview,
-			SubReason: "exec_failed",
-		}); cerr != nil {
-			return fmt.Errorf("execute failed: %w (close/notify failed: %v)", err, cerr)
-		}
-		return fmt.Errorf("execute failed: %w", err)
+	// === EXECUTE + EXPERIMENT MODE ===
+	// When MaxExperimentAttempts > 0, DoD failures trigger a retry loop:
+	// revert worktree, augment prompt with failure context, re-execute.
+	// Each failure is recorded as a lesson for future tasks.
+	experimentMode := req.MaxExperimentAttempts > 0
+	maxAttempts := req.MaxExperimentAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 1 // default: single attempt, no retry
 	}
-	req = reqAfterExec
-	totalInputTokens += execResult.InputTokens
-	totalOutputTokens += execResult.OutputTokens
-	totalCostUSD += execResult.CostUSD
-	logger.Info("Execute complete", "ExitCode", execResult.ExitCode)
 
-	// === DOD CHECK ===
-	dodCtx := workflow.WithActivityOptions(ctx, dodOpts)
+	var experimentLog []string
+	var dodPassed bool
 	var dodResult gitpkg.DoDResult
-	if err := workflow.ExecuteActivity(dodCtx, a.DoDCheckActivity, req.WorkDir, req.Project).Get(ctx, &dodResult); err != nil {
-		logger.Error("DoD check error", "error", err)
-		if cerr := closeAndTrace(CloseDetail{
-			Reason:    CloseNeedsReview,
-			SubReason: "dod_error",
-		}); cerr != nil {
-			return fmt.Errorf("DoD error: %w (close/notify failed: %v)", err, cerr)
-		}
-		return fmt.Errorf("DoD error: %w", err)
-	}
+	var experimentAttempt int
 
-	if !dodResult.Passed {
+	for experimentAttempt = 1; experimentAttempt <= maxAttempts; experimentAttempt++ {
+		if experimentAttempt > 1 {
+			logger.Info("Experiment retry", "Attempt", experimentAttempt, "Max", maxAttempts)
+		}
+
+		// Execute
+		execCtx := workflow.WithActivityOptions(ctx, execOpts)
+		reqAfterExec, execResult, err := executeWithProviderFallback(execCtx, req)
+		if err != nil {
+			logger.Error("Execute failed", "error", err)
+			if experimentAttempt < maxAttempts {
+				failMsg := fmt.Sprintf("Execute failed: %v", err)
+				experimentLog = append(experimentLog, failMsg)
+				if experimentMode {
+					storeExperimentLesson(ctx, shortOpts, a, req, "exec_failure", failMsg, "", nil)
+				}
+				// Reset worktree for retry
+				if resetErr := workflow.ExecuteActivity(
+					workflow.WithActivityOptions(ctx, shortOpts),
+					a.ResetWorktreeActivity, req.WorkDir,
+				).Get(ctx, nil); resetErr != nil {
+					logger.Error("Worktree reset failed", "error", resetErr)
+				}
+				req.Prompt = augmentPromptWithExperimentFailure(req.Prompt, experimentAttempt, failMsg, nil)
+				continue
+			}
+			if cerr := closeAndTrace(CloseDetail{
+				Reason:             CloseNeedsReview,
+				SubReason:          "exec_failed",
+				ExperimentAttempts: experimentAttempt,
+				ExperimentLog:      experimentLog,
+			}); cerr != nil {
+				return fmt.Errorf("execute failed: %w (close/notify failed: %v)", err, cerr)
+			}
+			return fmt.Errorf("execute failed: %w", err)
+		}
+		req = reqAfterExec
+		totalInputTokens += execResult.InputTokens
+		totalOutputTokens += execResult.OutputTokens
+		totalCostUSD += execResult.CostUSD
+		logger.Info("Execute complete", "ExitCode", execResult.ExitCode, "Attempt", experimentAttempt)
+
+		// DoD check
+		dodCtx := workflow.WithActivityOptions(ctx, dodOpts)
+		if err := workflow.ExecuteActivity(dodCtx, a.DoDCheckActivity, req.WorkDir, req.Project).Get(ctx, &dodResult); err != nil {
+			logger.Error("DoD check error", "error", err)
+			if experimentAttempt < maxAttempts {
+				failMsg := fmt.Sprintf("DoD check error: %v", err)
+				experimentLog = append(experimentLog, failMsg)
+				continue
+			}
+			if cerr := closeAndTrace(CloseDetail{
+				Reason:             CloseNeedsReview,
+				SubReason:          "dod_error",
+				ExperimentAttempts: experimentAttempt,
+				ExperimentLog:      experimentLog,
+			}); cerr != nil {
+				return fmt.Errorf("DoD error: %w (close/notify failed: %v)", err, cerr)
+			}
+			return fmt.Errorf("DoD error: %w", err)
+		}
+
+		if dodResult.Passed {
+			dodPassed = true
+			break
+		}
+
+		// DoD failed
 		failureMsg := BuildClassifierInput(dodResult)
 		category, summary := ClassifyFailure(failureMsg)
-		logger.Warn("DoD FAILED", "Category", category, "Summary", summary, "Failures", dodResult.Failures)
+		logger.Warn("DoD FAILED", "Category", category, "Summary", summary, "Attempt", experimentAttempt, "Failures", dodResult.Failures)
+
+		experimentLog = append(experimentLog, fmt.Sprintf("Attempt %d [%s]: %s", experimentAttempt, category, summary))
+
+		// Store lesson for future tasks (experiment mode only)
+		if experimentMode {
+			detail := fmt.Sprintf("DoD failures on attempt %d: %s", experimentAttempt, failureMsg)
+			storeExperimentLesson(ctx, shortOpts, a, req, string(category), summary, detail, nil)
+		}
+
+		if experimentAttempt < maxAttempts {
+			// Reset worktree and retry with augmented prompt
+			if resetErr := workflow.ExecuteActivity(
+				workflow.WithActivityOptions(ctx, shortOpts),
+				a.ResetWorktreeActivity, req.WorkDir,
+			).Get(ctx, nil); resetErr != nil {
+				logger.Error("Worktree reset failed", "error", resetErr)
+			}
+			req.Prompt = augmentPromptWithDoDFailure(req.Prompt, experimentAttempt, dodResult)
+			continue
+		}
+
+		// Final attempt failed
 		if cerr := closeAndTrace(CloseDetail{
-			Reason:    CloseDoDFailed,
-			SubReason: string(category),
-			Category:  string(category),
-			Summary:   summary,
+			Reason:             CloseDoDFailed,
+			SubReason:          string(category),
+			Category:           string(category),
+			Summary:            summary,
+			ExperimentAttempts: experimentAttempt,
+			ExperimentLog:      experimentLog,
 		}); cerr != nil {
 			return fmt.Errorf("DoD failed (%s): %v (close/notify failed: %v)", category, dodResult.Failures, cerr)
 		}
 		return fmt.Errorf("DoD failed (%s): %v", category, dodResult.Failures)
+	}
+
+	if !dodPassed {
+		// Should not reach here, but guard against it
+		return closeAndTrace(CloseDetail{
+			Reason:             CloseDoDFailed,
+			SubReason:          "unknown",
+			ExperimentAttempts: experimentAttempt,
+			ExperimentLog:      experimentLog,
+		})
 	}
 
 	// === Push + PR ===
@@ -304,6 +393,48 @@ func augmentPromptWithReviewFeedback(prompt string, round int, feedback string) 
 		wrapUserContent(fmt.Sprintf("REVIEWER FEEDBACK ROUND %d", round), feedback))
 }
 
+// augmentPromptWithDoDFailure adds DoD failure context to the prompt for experiment retries.
+func augmentPromptWithDoDFailure(prompt string, attempt int, dodResult gitpkg.DoDResult) string {
+	var failureDetails strings.Builder
+	for _, f := range dodResult.Failures {
+		failureDetails.WriteString(fmt.Sprintf("- %s\n", f))
+	}
+	return fmt.Sprintf("%s\n\n%s",
+		prompt,
+		wrapUserContent(fmt.Sprintf("EXPERIMENT MODE — Attempt %d/%d failed DoD check. Fix the failures below and retry.", attempt, attempt+1),
+			failureDetails.String()))
+}
+
+// augmentPromptWithExperimentFailure adds a generic experiment failure context to the prompt.
+func augmentPromptWithExperimentFailure(prompt string, attempt int, failureMsg string, _ interface{}) string {
+	return fmt.Sprintf("%s\n\n%s\nFailure: %s",
+		prompt,
+		wrapUserContent(fmt.Sprintf("EXPERIMENT MODE — Attempt %d failed. Fix and retry.", attempt), ""),
+		failureMsg)
+}
+
+// storeExperimentLesson persists a lesson from an experiment failure.
+// Returns nil on success or if lesson store is unavailable.
+func storeExperimentLesson(ctx workflow.Context, opts workflow.ActivityOptions, a *Activities, req TaskRequest, category, summary, detail string, filePaths []string) {
+	if a.Lessons == nil {
+		return
+	}
+	actCtx := workflow.WithActivityOptions(ctx, opts)
+	var labels []string
+	if category != "" {
+		labels = append(labels, "experiment-failure", category)
+	}
+	_ = workflow.ExecuteActivity(actCtx, a.StoreLessonActivity, LessonParams{
+		TaskID:    req.TaskID,
+		Project:   req.Project,
+		Category:  category,
+		Summary:   summary,
+		Detail:    detail,
+		FilePaths: filePaths,
+		Labels:    labels,
+	}).Get(ctx, nil)
+}
+
 func closeAndNotify(ctx workflow.Context, opts workflow.ActivityOptions, taskID string, detail CloseDetail) error {
 	var a *Activities
 	actCtx := workflow.WithActivityOptions(ctx, opts)
@@ -389,4 +520,49 @@ func nextFallbackExecutionProvider(agent string) (agentCLI string, model string,
 	default:
 		return "", "", false
 	}
+}
+
+// maxSingleStepMinutes is the threshold above which a decomposed step
+// should be re-decomposed into smaller units.
+const maxSingleStepMinutes = 15
+
+// flattenDecomposedSteps recursively re-decomposes any step whose estimate
+// exceeds maxSingleStepMinutes. depth limits recursion to prevent infinite loops.
+func flattenDecomposedSteps(ctx workflow.Context, a *Activities, req TaskRequest, steps []types.DecompStep, depth int, activityOpts workflow.ActivityOptions) ([]types.DecompStep, error) {
+	if depth <= 0 {
+		return steps, nil
+	}
+	var flat []types.DecompStep
+	for _, s := range steps {
+		if s.Estimate <= maxSingleStepMinutes {
+			flat = append(flat, s)
+			continue
+		}
+		subReq := TaskRequest{
+			TaskID:  req.TaskID,
+			Project: req.Project,
+			Prompt:  s.Title + "\n\n" + s.Description,
+			WorkDir: req.WorkDir,
+			Agent:   req.Agent,
+			Model:   req.Model,
+		}
+		var subResult *types.DecompResult
+		decompCtx := workflow.WithActivityOptions(ctx, activityOpts)
+		if err := workflow.ExecuteActivity(decompCtx, a.DecomposeActivity, subReq).Get(ctx, &subResult); err != nil {
+			s.Estimate = maxSingleStepMinutes
+			flat = append(flat, s)
+			continue
+		}
+		if subResult.Atomic || len(subResult.Steps) == 0 {
+			s.Estimate = maxSingleStepMinutes
+			flat = append(flat, s)
+			continue
+		}
+		subSteps, err := flattenDecomposedSteps(ctx, a, subReq, subResult.Steps, depth-1, activityOpts)
+		if err != nil {
+			subSteps = subResult.Steps
+		}
+		flat = append(flat, subSteps...)
+	}
+	return flat, nil
 }

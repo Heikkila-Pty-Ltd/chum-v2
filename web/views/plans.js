@@ -10,6 +10,8 @@
   let uiState = 'IDLE';
   let activePlanId = null;
   let activeStream = null; // { planId, controller }
+  let activeEventSource = null; // SSE connection to session stream
+  let activeStreamingBubble = null; // current streaming assistant bubble
   let plans = [];
   let currentPlan = null;
   let chatScrollEl = null;
@@ -110,6 +112,9 @@
   }
 
   async function openPlan(planId) {
+    // Clean up previous session connection.
+    disconnectSession();
+
     activePlanId = planId;
     selectedTaskRef = null;
     renderPlanList();
@@ -120,9 +125,102 @@
     try {
       currentPlan = await App.API.plan(planId);
       renderPlanMain(mainEl);
+
+      // Try to create/connect to an interactive session.
+      connectSession(planId);
     } catch (err) {
       mainEl.innerHTML = `<div class="plans-welcome"><div class="plans-welcome-hint">Failed to load plan: ${App.escapeHtml(err.message)}</div></div>`;
     }
+  }
+
+  // --- Session management ---
+
+  async function connectSession(planId) {
+    try {
+      // Create session (idempotent).
+      await fetch(`/api/dashboard/plan/${planId}/session`, { method: 'POST' });
+
+      // Connect SSE stream.
+      const es = new EventSource(`/api/dashboard/plan/${planId}/session/stream`);
+      activeEventSource = es;
+
+      es.addEventListener('token', (e) => {
+        const data = JSON.parse(e.data);
+        if (!activeStreamingBubble) {
+          activeStreamingBubble = appendStreamingBubble();
+          setUIState('STREAMING');
+        }
+        const contentEl = activeStreamingBubble.querySelector('.plans-msg-content');
+        if (contentEl) {
+          contentEl.innerHTML += App.escapeHtml(data.text);
+        }
+        if (!userScrolledUp) scrollToBottom();
+      });
+
+      es.addEventListener('turn_complete', () => {
+        if (activeStreamingBubble) {
+          activeStreamingBubble.classList.remove('plans-msg-streaming');
+          // Re-render with markdown.
+          const contentEl = activeStreamingBubble.querySelector('.plans-msg-content');
+          if (contentEl) {
+            contentEl.innerHTML = simpleMarkdown(contentEl.textContent || '');
+          }
+          activeStreamingBubble = null;
+        }
+        setUIState('IDLE');
+      });
+
+      es.addEventListener('session_error', (e) => {
+        const data = JSON.parse(e.data);
+        if (activeStreamingBubble) {
+          activeStreamingBubble.classList.remove('plans-msg-streaming');
+          activeStreamingBubble.querySelector('.plans-msg-content').textContent = 'Error: ' + data.message;
+          activeStreamingBubble = null;
+        }
+        if (data.recoverable === 'true') {
+          setUIState('IDLE');
+        }
+      });
+
+      es.addEventListener('session_destroyed', () => {
+        appendSystemMessage('Session ended.');
+        setUIState('IDLE');
+        disconnectSession();
+      });
+
+      es.addEventListener('heartbeat', () => {
+        // Keep-alive, no action needed.
+      });
+
+      es.onerror = () => {
+        if (es.readyState === EventSource.CLOSED) {
+          // Reconnect after a short delay.
+          setTimeout(() => {
+            if (activePlanId === planId) connectSession(planId);
+          }, 2000);
+        }
+      };
+    } catch (err) {
+      // Session creation failed — fall back to legacy interview mode.
+      console.warn('Session creation failed, using legacy mode:', err);
+    }
+  }
+
+  function disconnectSession() {
+    if (activeEventSource) {
+      activeEventSource.close();
+      activeEventSource = null;
+    }
+    activeStreamingBubble = null;
+  }
+
+  function appendSystemMessage(text) {
+    if (!chatScrollEl) return;
+    const div = document.createElement('div');
+    div.className = 'plans-msg plans-msg-system';
+    div.textContent = text;
+    chatScrollEl.appendChild(div);
+    scrollToBottom();
   }
 
   // Active main-area tab: 'chat' or 'document'
@@ -154,6 +252,7 @@
           <button class="plans-main-tab ${activeMainTab === 'chat' ? 'active' : ''}" data-main-tab="chat">Chat</button>
           <button class="plans-main-tab ${activeMainTab === 'document' ? 'active' : ''}" data-main-tab="document">Plan${hasDoc ? '' : ' (empty)'}</button>
         </div>
+        <button class="plans-extract-btn" data-plans-extract title="Extract structured plan from conversation">Extract Plan</button>
       </div>
 
       <div class="plans-main-pane ${activeMainTab === 'chat' ? 'active' : ''}" data-main-pane="chat">
@@ -252,6 +351,24 @@
         mainEl.querySelectorAll('.plans-main-pane').forEach(p => p.classList.toggle('active', p.dataset.mainPane === activeMainTab));
       });
     });
+
+    const extractBtn = mainEl.querySelector('[data-plans-extract]');
+    if (extractBtn) {
+      extractBtn.addEventListener('click', async () => {
+        if (!activePlanId || uiState !== 'IDLE') return;
+        extractBtn.disabled = true;
+        extractBtn.textContent = 'Extracting\u2026';
+        try {
+          await fetch(`/api/dashboard/plan/${activePlanId}/session/extract`, { method: 'POST' });
+          appendSystemMessage('Extracting structured plan\u2026');
+        } catch (err) {
+          appendSystemMessage('Failed to start extraction: ' + err.message);
+        } finally {
+          extractBtn.disabled = false;
+          extractBtn.textContent = 'Extract Plan';
+        }
+      });
+    }
   }
 
   // --- Re-render pipeline + preview + document in-place (called during streaming) ---
@@ -663,9 +780,37 @@
     input.style.height = 'auto';
 
     appendUserMessage(message);
-    const assistantEl = appendStreamingBubble();
     setUIState('SENDING');
 
+    // If we have an active session, use the session endpoint.
+    if (activeEventSource) {
+      try {
+        const res = await fetch(`/api/dashboard/plan/${activePlanId}/session/message`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message }),
+        });
+
+        if (res.status === 409) {
+          appendSystemMessage('Claude is currently responding\u2026');
+          setUIState('IDLE');
+          return;
+        }
+
+        if (!res.ok) {
+          throw new Error(`${res.status} ${res.statusText}`);
+        }
+
+        // Response will arrive via SSE — stay in SENDING state until token event.
+      } catch (err) {
+        appendSystemMessage('Error: ' + err.message);
+        setUIState('IDLE');
+      }
+      return;
+    }
+
+    // Fallback: legacy interview mode (no active session).
+    const assistantEl = appendStreamingBubble();
     try {
       const controller = new AbortController();
       activeStream = { planId: activePlanId, controller };
@@ -826,5 +971,5 @@
     loadPlanList(project);
   }
 
-  App.registerView('plans', { render, refresh });
+  App.registerView('planner', { render, refresh });
 })();

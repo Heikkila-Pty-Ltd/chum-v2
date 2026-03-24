@@ -10,6 +10,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/dag"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/llm"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/plansession"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
 )
 
@@ -28,8 +29,10 @@ type API struct {
 	PlanningDefaultAgent string                          // default planner agent for dashboard starts
 	PlanningCfg          planning.PlanningCeremonyConfig // dashboard planning ceremony config
 
-	JarvisKBPath string  // path to Jarvis knowledge base SQLite (read-only)
-	jarvisDB     *sql.DB // cached connection to Jarvis KB; opened on first use
+	PlanSession *plansession.Manager // interactive planner session manager; nil disables session endpoints
+
+	TracesDB *sql.DB // traces database handle for health metrics; nil disables health endpoint
+
 }
 
 // Handler returns an http.Handler with all Jarvis API routes.
@@ -82,15 +85,18 @@ func (a *API) Handler() http.Handler {
 		mux.HandleFunc("POST /api/dashboard/plan/{id}/materialize", a.handlePlanMaterialize)
 	}
 
-	// Jarvis knowledge base endpoints (read-only).
-	if a.JarvisKBPath != "" {
-		mux.HandleFunc("GET /api/dashboard/jarvis/actions", a.handleJarvisActions)
-		mux.HandleFunc("POST /api/dashboard/jarvis/actions/resolve", a.handleJarvisResolve)
-		mux.HandleFunc("GET /api/dashboard/jarvis/summary", a.handleJarvisSummary)
-		mux.HandleFunc("GET /api/dashboard/jarvis/goals", a.handleJarvisGoals)
-		mux.HandleFunc("GET /api/dashboard/jarvis/facts", a.handleJarvisFacts)
-		mux.HandleFunc("GET /api/dashboard/jarvis/initiatives", a.handleJarvisInitiatives)
-		mux.HandleFunc("GET /api/dashboard/jarvis/state", a.handleJarvisState)
+	// Interactive planner session endpoints.
+	if a.PlanSession != nil {
+		mux.HandleFunc("POST /api/dashboard/plan/{id}/session", a.handlePlanSessionCreate)
+		mux.HandleFunc("GET /api/dashboard/plan/{id}/session/stream", a.handlePlanSessionStream)
+		mux.HandleFunc("POST /api/dashboard/plan/{id}/session/message", a.handlePlanSessionMessage)
+		mux.HandleFunc("POST /api/dashboard/plan/{id}/session/extract", a.handlePlanSessionExtract)
+		mux.HandleFunc("DELETE /api/dashboard/plan/{id}/session", a.handlePlanSessionDestroy)
+	}
+
+	// Health metrics endpoint (queries both DAG and traces databases).
+	if a.DAG != nil && a.TracesDB != nil {
+		mux.HandleFunc("GET /api/dashboard/health", a.handleDashboardHealthMetrics)
 	}
 
 	// Static file serving for dashboard UI.
