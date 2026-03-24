@@ -16,14 +16,20 @@
       <div class="masthead-left">
         <h1 class="wordmark">CHUM<span class="wordmark-version">v2</span></h1>
         <nav id="main-nav" role="navigation">
-          <a href="#/overview" data-view="overview" class="nav-link active">
-            <span class="nav-key">1</span> Overview
+          <a href="#/check" data-view="check" class="nav-link active">
+            <span class="nav-key">1</span> Check
           </a>
-          <a href="#/planner" data-view="planner" class="nav-link">
-            <span class="nav-key">2</span> Planner
+          <a href="#/plan" data-view="plan" class="nav-link">
+            <span class="nav-key">2</span> Plan
           </a>
-          <a href="#/tasks" data-view="tasks" class="nav-link">
-            <span class="nav-key">3</span> Tasks
+          <a href="#/steer" data-view="steer" class="nav-link">
+            <span class="nav-key">3</span> Steer
+          </a>
+          <a href="#/learn" data-view="learn" class="nav-link">
+            <span class="nav-key">4</span> Learn
+          </a>
+          <a href="#/projects" data-view="projects" class="nav-link">
+            <span class="nav-key">5</span> Projects
           </a>
         </nav>
       </div>
@@ -46,10 +52,13 @@
 
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@dagrejs/dagre@1.1.4/dist/dagre.min.js"></script>
+  <script>document.addEventListener('alpine:init', () => { window.__alpineReady = true; });</script>
+  <script defer src="/vendor/alpine.min.js"></script>
   <script src="/app.js"></script>
   <script src="/views/overview.js"></script>
   <script src="/views/tasks.js"></script>
   <script src="/views/plans.js"></script>
+  <script src="/views/check.js"></script>
   <script>App.init();</script>
 </body>
 </html>

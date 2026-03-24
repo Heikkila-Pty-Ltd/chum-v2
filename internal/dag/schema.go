@@ -163,6 +163,8 @@ const planDocsTableSchema = `CREATE TABLE IF NOT EXISTS plan_docs (
 );`
 
 const indexPlanDocsProject = `CREATE INDEX IF NOT EXISTS idx_plan_docs_project ON plan_docs(project, updated_at DESC);`
+const indexTaskEdgesTo = `CREATE INDEX IF NOT EXISTS idx_task_edges_to ON task_edges(to_task);`
+const indexTasksProject = `CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project, priority, created_at);`
 
 const taskColumns = `id, title, description, status, priority, type, assignee, labels,
 	estimate_minutes, parent_id, acceptance, project, error_log, metadata,
@@ -192,6 +194,8 @@ func (d *DAG) EnsureSchema(ctx context.Context) error {
 		indexBeadsSyncAuditIssue,
 		planDocsTableSchema,
 		indexPlanDocsProject,
+		indexTaskEdgesTo,
+		indexTasksProject,
 	} {
 		if _, err := d.db.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("ensure schema: %w", err)

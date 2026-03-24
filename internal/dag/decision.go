@@ -127,6 +127,57 @@ func (d *DAG) ListAlternatives(ctx context.Context, decisionID string) ([]Altern
 	return alts, rows.Err()
 }
 
+// ListDecisionsForProject returns all decisions for tasks in a project,
+// grouped by task ID. Uses a single query instead of per-task lookups.
+func (d *DAG) ListDecisionsForProject(ctx context.Context, project string) (map[string][]Decision, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT d.id, d.task_id, d.title, d.context, d.outcome, d.created_at
+		 FROM decisions d
+		 WHERE d.task_id IN (SELECT id FROM tasks WHERE project = ?)
+		 ORDER BY d.created_at`, project)
+	if err != nil {
+		return nil, fmt.Errorf("list decisions for project %s: %w", project, err)
+	}
+	defer rows.Close()
+	result := make(map[string][]Decision)
+	for rows.Next() {
+		var dec Decision
+		if err := rows.Scan(&dec.ID, &dec.TaskID, &dec.Title, &dec.Context, &dec.Outcome, &dec.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan decision: %w", err)
+		}
+		result[dec.TaskID] = append(result[dec.TaskID], dec)
+	}
+	return result, rows.Err()
+}
+
+// ListAlternativesForProject returns all alternatives for decisions belonging
+// to tasks in a project, grouped by decision ID. Single query.
+func (d *DAG) ListAlternativesForProject(ctx context.Context, project string) (map[string][]Alternative, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT a.id, a.decision_id, a.label, a.reasoning, a.selected,
+		        a.uct_score, a.visits, a.reward, a.created_at
+		 FROM decision_alternatives a
+		 WHERE a.decision_id IN (
+		   SELECT d.id FROM decisions d
+		   WHERE d.task_id IN (SELECT id FROM tasks WHERE project = ?)
+		 )
+		 ORDER BY a.uct_score DESC, a.created_at`, project)
+	if err != nil {
+		return nil, fmt.Errorf("list alternatives for project %s: %w", project, err)
+	}
+	defer rows.Close()
+	result := make(map[string][]Alternative)
+	for rows.Next() {
+		var alt Alternative
+		if err := rows.Scan(&alt.ID, &alt.DecisionID, &alt.Label, &alt.Reasoning,
+			&alt.Selected, &alt.UCTScore, &alt.Visits, &alt.Reward, &alt.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan alternative: %w", err)
+		}
+		result[alt.DecisionID] = append(result[alt.DecisionID], alt)
+	}
+	return result, rows.Err()
+}
+
 // GetSelectedAlternative returns the chosen alternative for a decision, if any.
 func (d *DAG) GetSelectedAlternative(ctx context.Context, decisionID string) (Alternative, error) {
 	var alt Alternative

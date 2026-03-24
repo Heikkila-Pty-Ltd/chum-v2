@@ -43,6 +43,16 @@ const App = (() => {
     planDecompose: (id)   => API.post(`/api/dashboard/plan/${id}/decompose`, {}),
     planApprove: (id)     => API.post(`/api/dashboard/plan/${id}/approve`, {}),
     planMaterialize: (id) => API.post(`/api/dashboard/plan/${id}/materialize`, {}),
+    // New dashboard endpoints
+    overview: (p)         => API.get(`/api/dashboard/overview/${p}`),
+    stats: (p)            => API.get(`/api/dashboard/stats/${p}`),
+    timeline: (p)         => API.get(`/api/dashboard/timeline/${p}`),
+    lessons: (p)          => API.get(`/api/dashboard/lessons/${p}`),
+    activity: (hours, project) => {
+      let url = `/api/dashboard/activity?hours=${hours || 24}`;
+      if (project) url += `&project=${encodeURIComponent(project)}`;
+      return API.get(url);
+    },
   };
 
   // --- Status Colors (read from CSS custom properties) ---
@@ -151,8 +161,11 @@ const App = (() => {
       a.classList.toggle('active', a.dataset.view === view);
     });
 
-    // Render
+    // Destroy any Alpine.js trees before clearing DOM to prevent leaked state.
     const viewport = document.getElementById('viewport');
+    if (window.Alpine && viewport.children.length) {
+      Alpine.destroyTree(viewport);
+    }
     viewport.innerHTML = '<div class="loading-state">loading\u2026</div>';
     closePanel();
 
@@ -164,12 +177,15 @@ const App = (() => {
     startRefresh();
   }
 
-  const ROUTE_REDIRECTS = { structure: 'tasks', jarvis: 'overview', plans: 'planner' };
+  const ROUTE_REDIRECTS = {
+    overview: 'check', structure: 'projects', jarvis: 'check',
+    plans: 'plan', planner: 'plan', tasks: 'projects',
+  };
 
   function parseHash() {
-    const hash = location.hash.slice(1) || '/overview';
+    const hash = location.hash.slice(1) || '/check';
     const parts = hash.split('/').filter(Boolean);
-    let view = parts[0] || 'overview';
+    let view = parts[0] || 'check';
     if (ROUTE_REDIRECTS[view]) view = ROUTE_REDIRECTS[view];
     return { view, param: parts[1] || '' };
   }
@@ -221,142 +237,138 @@ const App = (() => {
 
   function renderTaskDetail(data) {
     const t = data.task;
-    let html = `
-      <div class="panel-task-id">${escapeHtml(t.id)}</div>
-      <div class="panel-task-title">${escapeHtml(t.title)}</div>
-      <div class="panel-section">
-        ${statusBadge(t.status)}
-      </div>
-    `;
 
-    if (t.description) {
-      html += `
-        <div class="panel-section">
-          <div class="panel-section-label">Description</div>
-          <div class="panel-description">${escapeHtml(t.description)}</div>
-        </div>
-      `;
-    }
-
-    html += `
-      <div class="panel-section">
-        <div class="panel-section-label">Details</div>
-        <div class="panel-meta-grid">
-          <span class="panel-meta-key">type</span><span class="panel-meta-value">${t.type || 'task'}</span>
-          <span class="panel-meta-key">priority</span><span class="panel-meta-value">${t.priority}</span>
-          <span class="panel-meta-key">estimate</span><span class="panel-meta-value">${formatMinutes(t.estimate_minutes)}</span>
-          <span class="panel-meta-key">actual</span><span class="panel-meta-value">${formatDuration(t.actual_duration_sec)}</span>
-          <span class="panel-meta-key">attempts</span><span class="panel-meta-value">${t.attempt_count || 0}</span>
-          <span class="panel-meta-key">iterations</span><span class="panel-meta-value">${t.iterations_used || '\u2014'}</span>
-          <span class="panel-meta-key">assignee</span><span class="panel-meta-value">${t.assignee || '\u2014'}</span>
-          <span class="panel-meta-key">created</span><span class="panel-meta-value">${timeAgo(t.created_at)}</span>
-          <span class="panel-meta-key">updated</span><span class="panel-meta-value">${timeAgo(t.updated_at)}</span>
-        </div>
-      </div>
-    `;
-
-    if (t.acceptance) {
-      html += `
-        <div class="panel-section">
-          <div class="panel-section-label">Acceptance</div>
-          <div class="panel-description">${escapeHtml(t.acceptance)}</div>
-        </div>
-      `;
-    }
-
-    if (data.dependencies.length > 0) {
-      html += `
-        <div class="panel-section">
-          <div class="panel-section-label">Depends On (${data.dependencies.length})</div>
-          <ul class="panel-dep-list">${data.dependencies.map(id =>
-            `<li><a class="panel-dep-link" data-task-id="${escapeHtml(id)}" href="#">${escapeHtml(id)}</a></li>`
-          ).join('')}</ul>
-        </div>
-      `;
-    }
-
-    if (data.dependents.length > 0) {
-      html += `
-        <div class="panel-section">
-          <div class="panel-section-label">Dependents (${data.dependents.length})</div>
-          <ul class="panel-dep-list">${data.dependents.map(id =>
-            `<li><a class="panel-dep-link" data-task-id="${escapeHtml(id)}" href="#">${escapeHtml(id)}</a></li>`
-          ).join('')}</ul>
-        </div>
-      `;
-    }
-
-    if (data.targets.length > 0) {
-      html += `
-        <div class="panel-section">
-          <div class="panel-section-label">Code Targets (${data.targets.length})</div>
-          ${data.targets.map(tgt =>
-            `<div class="panel-target">${escapeHtml(tgt.file_path)}${tgt.symbol_name ? `:<span class="panel-target-symbol">${escapeHtml(tgt.symbol_name)}</span>` : ''}</div>`
-          ).join('')}
-        </div>
-      `;
-    }
-
-    if (data.decisions.length > 0) {
-      html += `
-        <div class="panel-section">
-          <div class="panel-section-label">Decisions (${data.decisions.length})</div>
-          ${data.decisions.map(dec => `
-            <div style="margin-bottom:var(--sp-3)">
-              <div style="font-size:12px;font-weight:500;margin-bottom:var(--sp-1)">${escapeHtml(dec.title)}</div>
-              ${dec.alternatives.map(alt => `
-                <div style="font-size:11px;color:var(--text-secondary);padding:2px 0;display:flex;gap:var(--sp-2);align-items:baseline">
-                  <span style="color:${alt.selected ? 'var(--accent)' : 'var(--text-tertiary)'}">${alt.selected ? '\u25c9' : '\u25cb'}</span>
-                  <span>${escapeHtml(alt.label)}</span>
-                  ${alt.uct_score > 0 ? `<span style="font-family:var(--font-mono);font-size:10px;color:var(--text-tertiary)">uct:${alt.uct_score.toFixed(2)}</span>` : ''}
-                </div>
-              `).join('')}
-            </div>
-          `).join('')}
-        </div>
-      `;
-    }
-
-    // Execution traces
-    if (data.traces && data.traces.length > 0) {
-      html += `
-        <div class="panel-section">
-          <div class="panel-section-label">Execution Traces (${data.traces.length})</div>
-          ${data.traces.map((tr, i) => `
-            <div class="panel-trace">
-              <button class="panel-trace-toggle">\u25b6 Attempt ${i + 1} \u2014 ${escapeHtml(tr.outcome || tr.status || 'unknown')}${tr.duration_sec ? ' (' + formatDuration(tr.duration_sec) + ')' : ''}</button>
-              <div class="panel-trace-body">
-                ${tr.error_snippet ? `<pre class="panel-trace-error">${escapeHtml(tr.error_snippet)}</pre>` : ''}
-                ${tr.cost_usd ? `<span class="panel-trace-cost">$${Number(tr.cost_usd).toFixed(4)}</span>` : ''}
-              </div>
-            </div>
-          `).join('')}
-        </div>
-      `;
-    }
-
-    // PR / review link from error_log
+    // --- Header: id + status + PR link ---
+    let prLink = '';
     if (t.error_log) {
       try {
         const errInfo = JSON.parse(t.error_log);
         if (errInfo.review_url || errInfo.pr_number) {
           const prUrl = errInfo.review_url || `https://github.com/pulls/${errInfo.pr_number}`;
           const label = errInfo.pr_number ? `PR #${errInfo.pr_number}` : 'Review';
-          const reason = errInfo.sub_reason ? ` \u2014 ${errInfo.sub_reason.replace(/_/g, ' ')}` : '';
-          html += `
-            <div class="panel-section">
-              <div class="panel-section-label">Pull Request</div>
-              <a class="panel-pr-link" href="${escapeHtml(prUrl)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>${reason ? `<span class="panel-pr-reason">${escapeHtml(reason)}</span>` : ''}
-            </div>
-          `;
+          prLink = `<a class="panel-pr-chip" href="${escapeHtml(prUrl)}" target="_blank" rel="noopener">${escapeHtml(label)}</a>`;
         }
-      } catch (_) {
+      } catch (_) {}
+    }
+
+    let html = `
+      <div class="panel-header">
+        <div class="panel-header-top">
+          <span class="panel-task-id">${escapeHtml(t.id)}</span>
+          ${statusBadge(t.status)}
+          ${prLink}
+        </div>
+        <div class="panel-task-title">${escapeHtml(t.title)}</div>
+      </div>
+    `;
+
+    // --- Stats: compact chips, only show non-empty values ---
+    const stats = [];
+    if (t.priority) stats.push(`P${t.priority}`);
+    if (t.attempt_count) stats.push(`${t.attempt_count} attempt${t.attempt_count > 1 ? 's' : ''}`);
+    if (t.estimate_minutes) stats.push(`est ${formatMinutes(t.estimate_minutes)}`);
+    if (t.actual_duration_sec) stats.push(`took ${formatDuration(t.actual_duration_sec)}`);
+    stats.push(timeAgo(t.created_at));
+
+    html += `<div class="panel-stats">${stats.map(s => `<span class="panel-stat">${s}</span>`).join('')}</div>`;
+
+    // --- Graph: deps + dependents inline ---
+    if (data.dependencies.length > 0 || data.dependents.length > 0) {
+      html += `<div class="panel-graph">`;
+      if (data.dependencies.length > 0) {
+        html += `<span class="panel-graph-label">\u2190</span>${data.dependencies.map(id =>
+          `<a class="panel-dep-link" data-task-id="${escapeHtml(id)}" href="#">${escapeHtml(id)}</a>`
+        ).join('')}`;
+      }
+      if (data.dependents.length > 0) {
+        if (data.dependencies.length > 0) html += `<span class="panel-graph-sep"></span>`;
+        html += `<span class="panel-graph-label">\u2192</span>${data.dependents.map(id =>
+          `<a class="panel-dep-link" data-task-id="${escapeHtml(id)}" href="#">${escapeHtml(id)}</a>`
+        ).join('')}`;
+      }
+      html += `</div>`;
+    }
+
+    // --- Description: collapsible ---
+    if (t.description) {
+      html += `
+        <details class="panel-details">
+          <summary class="panel-section-label">Description</summary>
+          <div class="panel-description">${escapeHtml(t.description)}</div>
+        </details>
+      `;
+    }
+
+    // --- Acceptance: collapsible ---
+    if (t.acceptance) {
+      html += `
+        <details class="panel-details">
+          <summary class="panel-section-label">Acceptance</summary>
+          <div class="panel-description">${escapeHtml(t.acceptance)}</div>
+        </details>
+      `;
+    }
+
+    // --- Code targets: just filename:symbol ---
+    if (data.targets.length > 0) {
+      html += `
+        <details class="panel-details">
+          <summary class="panel-section-label">Files (${data.targets.length})</summary>
+          ${data.targets.map(tgt => {
+            const short = tgt.file_path.split('/').slice(-2).join('/');
+            return `<div class="panel-target">${escapeHtml(short)}${tgt.symbol_name ? `:<span class="panel-target-symbol">${escapeHtml(tgt.symbol_name)}</span>` : ''}</div>`;
+          }).join('')}
+        </details>
+      `;
+    }
+
+    // --- Decisions ---
+    if (data.decisions.length > 0) {
+      html += `
+        <details class="panel-details">
+          <summary class="panel-section-label">Decisions (${data.decisions.length})</summary>
+          ${data.decisions.map(dec => `
+            <div class="panel-decision">
+              <div class="panel-decision-title">${escapeHtml(dec.title)}</div>
+              ${dec.alternatives.map(alt => `
+                <div class="panel-decision-alt">
+                  <span style="color:${alt.selected ? 'var(--accent)' : 'var(--text-tertiary)'}">${alt.selected ? '\u25c9' : '\u25cb'}</span>
+                  <span>${escapeHtml(alt.label)}</span>
+                  ${alt.uct_score > 0 ? `<span class="panel-decision-uct">uct:${alt.uct_score.toFixed(2)}</span>` : ''}
+                </div>
+              `).join('')}
+            </div>
+          `).join('')}
+        </details>
+      `;
+    }
+
+    // --- Execution traces ---
+    if (data.traces && data.traces.length > 0) {
+      html += `
+        <details class="panel-details">
+          <summary class="panel-section-label">Traces (${data.traces.length})</summary>
+          ${data.traces.map((tr, i) => `
+            <div class="panel-trace">
+              <button class="panel-trace-toggle">\u25b6 #${i + 1} ${escapeHtml(tr.outcome || tr.status || '?')}${tr.duration_sec ? ' \u00b7 ' + formatDuration(tr.duration_sec) : ''}${tr.cost_usd ? ' \u00b7 $' + Number(tr.cost_usd).toFixed(4) : ''}</button>
+              <div class="panel-trace-body">
+                ${tr.error_snippet ? `<pre class="panel-trace-error">${escapeHtml(tr.error_snippet)}</pre>` : '<span class="panel-trace-cost">No error details</span>'}
+              </div>
+            </div>
+          `).join('')}
+        </details>
+      `;
+    }
+
+    // --- Error (non-JSON error_log) ---
+    if (t.error_log && !prLink) {
+      try { JSON.parse(t.error_log); } catch (_) {
         if (t.error_log.trim()) {
           html += `
-            <div class="panel-section">
-              <div class="panel-section-label">Error</div>
-              <div class="panel-description">${escapeHtml(t.error_log)}</div>
-            </div>
+            <details class="panel-details" open>
+              <summary class="panel-section-label">Error</summary>
+              <pre class="panel-trace-error">${escapeHtml(t.error_log)}</pre>
+            </details>
           `;
         }
       }
@@ -394,9 +406,11 @@ const App = (() => {
     document.addEventListener('keydown', (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
 
-      if (e.key === '1') navigate('overview');
-      else if (e.key === '2') navigate('planner');
-      else if (e.key === '3') navigate('tasks');
+      if (e.key === '1') navigate('check');
+      else if (e.key === '2') navigate('plan');
+      else if (e.key === '3') navigate('steer');
+      else if (e.key === '4') navigate('learn');
+      else if (e.key === '5') navigate('projects');
       else if (e.key === 'Escape') closePanel();
     });
   }

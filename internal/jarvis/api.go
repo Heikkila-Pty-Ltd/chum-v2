@@ -68,6 +68,10 @@ func (a *API) Handler() http.Handler {
 		mux.HandleFunc("GET /api/dashboard/traces/{taskID}", a.handleDashboardTraces)
 		mux.HandleFunc("GET /api/dashboard/lessons/{project}", a.handleDashboardLessons)
 	}
+	// Activity feed — queries both DAG and traces DBs.
+	if a.DAG != nil {
+		mux.HandleFunc("GET /api/dashboard/activity", a.handleDashboardActivity)
+	}
 	if a.LLM != nil {
 		mux.HandleFunc("GET /api/dashboard/suggest/{taskID}", a.handleDashboardSuggest)
 
