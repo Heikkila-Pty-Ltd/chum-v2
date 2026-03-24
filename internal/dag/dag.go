@@ -461,6 +461,62 @@ func (d *DAG) CountChildrenByParent(ctx context.Context, project string) (map[st
 	return m, rows.Err()
 }
 
+// PauseProjectTasks sets all running/ready tasks in a project to "paused".
+// Returns the number of affected rows. Idempotent — re-calling returns 0.
+func (d *DAG) PauseProjectTasks(ctx context.Context, project string) (int64, error) {
+	res, err := execWithBusyRetry(ctx, func() (sql.Result, error) {
+		return d.db.ExecContext(ctx,
+			`UPDATE tasks SET status = 'paused', updated_at = datetime('now')
+			 WHERE project = ? AND status IN ('running', 'ready')`, project)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("pause project tasks: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// ResumeProjectTasks sets all paused tasks in a project back to "ready".
+// Returns the number of affected rows.
+func (d *DAG) ResumeProjectTasks(ctx context.Context, project string) (int64, error) {
+	res, err := execWithBusyRetry(ctx, func() (sql.Result, error) {
+		return d.db.ExecContext(ctx,
+			`UPDATE tasks SET status = 'ready', updated_at = datetime('now')
+			 WHERE project = ? AND status = 'paused'`, project)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("resume project tasks: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// ReorderTaskPriorities updates the priority field of the given tasks to match
+// their position in the slice (0 = highest priority). All tasks must exist and
+// be in "ready" status. Uses a transaction for atomicity.
+func (d *DAG) ReorderTaskPriorities(ctx context.Context, taskIDs []string) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx,
+		`UPDATE tasks SET priority = ?, updated_at = datetime('now') WHERE id = ? AND status = 'ready'`)
+	if err != nil {
+		return fmt.Errorf("prepare reorder stmt: %w", err)
+	}
+	defer stmt.Close()
+	for i, id := range taskIDs {
+		res, err := stmt.ExecContext(ctx, i, id)
+		if err != nil {
+			return fmt.Errorf("reorder task %s: %w", id, err)
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return fmt.Errorf("task %q not found or not in ready status", id)
+		}
+	}
+	return tx.Commit()
+}
+
 // sqlPlaceholders returns a comma-separated string of N question marks for use
 // in SQL IN clauses. The caller must ensure n > 0.
 // Safety: this generates only literal "?" characters — no user input is interpolated.

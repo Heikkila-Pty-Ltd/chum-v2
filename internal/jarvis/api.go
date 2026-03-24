@@ -71,6 +71,9 @@ func (a *API) Handler() http.Handler {
 	// Activity feed — queries both DAG and traces DBs.
 	if a.DAG != nil {
 		mux.HandleFunc("GET /api/dashboard/activity", a.handleDashboardActivity)
+		mux.HandleFunc("POST /api/dashboard/project/{name}/pause", a.handleDashboardProjectPause)
+		mux.HandleFunc("POST /api/dashboard/project/{name}/resume", a.handleDashboardProjectResume)
+		mux.HandleFunc("POST /api/dashboard/queue/reorder", a.handleDashboardQueueReorder)
 	}
 	if a.LLM != nil {
 		mux.HandleFunc("GET /api/dashboard/suggest/{taskID}", a.handleDashboardSuggest)

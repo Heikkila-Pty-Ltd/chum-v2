@@ -1442,6 +1442,91 @@ func (a *API) handleDashboardActivity(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleDashboardProjectPause pauses all running/ready tasks in a project.
+// Idempotent — re-calling when already paused returns affected: 0.
+func (a *API) handleDashboardProjectPause(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("name")
+	if !validParam(project) {
+		a.jsonError(w, "invalid project name", http.StatusBadRequest)
+		return
+	}
+	affected, err := a.DAG.PauseProjectTasks(r.Context(), project)
+	if err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	a.jsonOK(w, map[string]any{
+		"project":    project,
+		"affected":   affected,
+		"new_status": "paused",
+	})
+}
+
+// handleDashboardProjectResume resumes all paused tasks in a project.
+func (a *API) handleDashboardProjectResume(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("name")
+	if !validParam(project) {
+		a.jsonError(w, "invalid project name", http.StatusBadRequest)
+		return
+	}
+	affected, err := a.DAG.ResumeProjectTasks(r.Context(), project)
+	if err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if a.Engine != nil {
+		_ = a.Engine.TriggerDispatch(r.Context())
+	}
+	a.jsonOK(w, map[string]any{
+		"project":    project,
+		"affected":   affected,
+		"new_status": "ready",
+	})
+}
+
+// handleDashboardQueueReorder reorders task execution priorities.
+// Body: {"task_ids": ["id1", "id2", ...]} in desired order.
+func (a *API) handleDashboardQueueReorder(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TaskIDs []string `json:"task_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(body.TaskIDs) == 0 {
+		a.jsonError(w, "task_ids must not be empty", http.StatusBadRequest)
+		return
+	}
+	if len(body.TaskIDs) > 1000 {
+		a.jsonError(w, "too many task IDs (max 1000)", http.StatusBadRequest)
+		return
+	}
+	// Validate no duplicates.
+	seen := make(map[string]bool, len(body.TaskIDs))
+	for _, id := range body.TaskIDs {
+		if !validParam(id) {
+			a.jsonError(w, fmt.Sprintf("invalid task ID: %s", id), http.StatusBadRequest)
+			return
+		}
+		if seen[id] {
+			a.jsonError(w, fmt.Sprintf("duplicate task ID: %s", id), http.StatusBadRequest)
+			return
+		}
+		seen[id] = true
+	}
+	if err := a.DAG.ReorderTaskPriorities(r.Context(), body.TaskIDs); err != nil {
+		a.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if a.Engine != nil {
+		_ = a.Engine.TriggerDispatch(r.Context())
+	}
+	a.jsonOK(w, map[string]any{
+		"reordered": len(body.TaskIDs),
+	})
+}
+
 // handleDashboardHealthMetrics returns system-wide health metrics.
 func (a *API) handleDashboardHealthMetrics(w http.ResponseWriter, r *http.Request) {
 	report, err := metrics.CollectHealth(r.Context(), a.DAG.DB(), a.TracesDB)

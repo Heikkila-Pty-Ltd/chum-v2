@@ -53,13 +53,16 @@ const App = (() => {
       if (project) url += `&project=${encodeURIComponent(project)}`;
       return API.get(url);
     },
+    projectPause: (name) => API.post(`/api/dashboard/project/${name}/pause`),
+    projectResume: (name) => API.post(`/api/dashboard/project/${name}/resume`),
+    queueReorder: (ids) => API.post('/api/dashboard/queue/reorder', { task_ids: ids }),
   };
 
   // --- Status Colors (read from CSS custom properties) ---
   const STATUS_NAMES = [
     'completed', 'running', 'ready', 'open', 'failed', 'decomposed',
     'dod_failed', 'needs_refinement', 'stale', 'needs_review', 'rejected', 'done',
-    'quarantined', 'budget_exceeded',
+    'quarantined', 'budget_exceeded', 'paused',
   ];
   const STATUS_COLORS = {};
   (() => {
@@ -67,7 +70,7 @@ const App = (() => {
     const FALLBACK = { completed:'#3d9a5f', running:'#c75a3a', ready:'#4a7fd4', open:'#5c5f69',
       failed:'#b93a3a', decomposed:'#8b6cc1', dod_failed:'#c27a2a', needs_refinement:'#b5a030',
       stale:'#4a4d56', needs_review:'#d4953a', rejected:'#9e3a5c', done:'#3d9a5f',
-      quarantined:'#8b4a8b', budget_exceeded:'#c9843a' };
+      quarantined:'#8b4a8b', budget_exceeded:'#c9843a', paused:'#6b7280' };
     STATUS_NAMES.forEach(name => {
       const cssName = '--status-' + name.replace(/_/g, '-');
       const val = styles.getPropertyValue(cssName).trim();
