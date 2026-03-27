@@ -285,7 +285,7 @@ func validate(cfg *Config) error {
 	cfg.General.MatrixAccessToken = strings.TrimSpace(cfg.General.MatrixAccessToken)
 	cfg.General.MatrixRoomID = strings.TrimSpace(cfg.General.MatrixRoomID)
 	cfg.General.MatrixWebhookURL = strings.TrimSpace(cfg.General.MatrixWebhookURL)
-    
+
 	// Bot-based Matrix configuration requires all three fields (homeserver, token, room ID).
 	// matrix_webhook_url is independent and does not trigger this validation.
 	if cfg.General.MatrixAccessToken != "" || cfg.General.MatrixRoomID != "" {
