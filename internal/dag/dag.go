@@ -442,7 +442,8 @@ func (d *DAG) GetReadyNodes(ctx context.Context, project string) ([]Task, error)
 }
 
 // GetApprovedNodes returns tasks with status="approved" whose dependencies are satisfied.
-// Same dependency semantics as GetReadyNodes but for the approved dispatch gate.
+// Same dependency semantics as GetReadyNodes but approved AST prerequisites still
+// count as active blockers until they reach a terminal state.
 func (d *DAG) GetApprovedNodes(ctx context.Context, project string) ([]Task, error) {
 	query := `SELECT ` + taskColumns + ` FROM tasks t
 		WHERE t.project = ? AND t.status = ?
@@ -454,7 +455,7 @@ func (d *DAG) GetApprovedNodes(ctx context.Context, project string) ([]Task, err
 				dep.id IS NULL OR (
 					CASE
 						WHEN lower(trim(COALESCE(e.source, ''))) = 'ast'
-							THEN lower(trim(COALESCE(dep.status, ''))) IN (?, ?)
+							THEN lower(trim(COALESCE(dep.status, ''))) IN (?, ?, ?)
 						ELSE
 							lower(trim(COALESCE(dep.status, ''))) NOT IN (?, ?)
 					END
@@ -467,6 +468,7 @@ func (d *DAG) GetApprovedNodes(ctx context.Context, project string) ([]Task, err
 		types.StatusApproved,
 		types.StatusReady,
 		types.StatusRunning,
+		types.StatusApproved,
 		types.StatusCompleted,
 		types.StatusDone,
 	)

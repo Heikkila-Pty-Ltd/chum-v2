@@ -501,4 +501,5 @@
   }
 
   App.registerView('steer', { render, refresh });
+  App.registerView('monitor', { render, refresh });
 })();

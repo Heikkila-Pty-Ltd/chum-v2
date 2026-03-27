@@ -808,6 +808,36 @@ func TestGetReadyNodes_FiltersByProject(t *testing.T) {
 	}
 }
 
+func TestGetApprovedNodes_ASTFenceBlocksApprovedDeps(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	_, _ = d.CreateTask(ctx, Task{
+		ID:      "approved-dep",
+		Project: "p",
+		Status:  string(types.StatusApproved),
+	})
+	_, _ = d.CreateTask(ctx, Task{
+		ID:      "approved-main",
+		Project: "p",
+		Status:  string(types.StatusApproved),
+	})
+	if err := d.AddEdgeWithSource(ctx, "approved-main", "approved-dep", "ast"); err != nil {
+		t.Fatalf("AddEdgeWithSource(ast): %v", err)
+	}
+
+	approved, err := d.GetApprovedNodes(ctx, "p")
+	if err != nil {
+		t.Fatalf("GetApprovedNodes: %v", err)
+	}
+	for _, task := range approved {
+		if task.ID == "approved-main" {
+			t.Fatalf("approved-main should be blocked by approved AST dependency, got %v", taskIDs(approved))
+		}
+	}
+}
+
 // --- TaskTargets ---
 
 func TestSetAndGetTaskTargets(t *testing.T) {

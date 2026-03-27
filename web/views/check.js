@@ -246,4 +246,5 @@
   }
 
   App.registerView('check', { render, refresh });
+  App.registerView('review', { render, refresh });
 })();
