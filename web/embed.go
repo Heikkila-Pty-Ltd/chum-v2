@@ -3,5 +3,5 @@ package web
 
 import "embed"
 
-//go:embed *.html *.css *.js views/*.js
+//go:embed *.html *.css *.js views/*.js vendor/*.js
 var Assets embed.FS
