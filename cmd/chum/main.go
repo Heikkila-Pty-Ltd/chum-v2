@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -26,6 +27,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/web"
 
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
@@ -644,8 +646,41 @@ func main() {
 			fmt.Printf("  Planning complete. %d subtasks created.\n", len(result.SubtaskIDs))
 		}
 
+	case "serve-ui":
+		addr := "127.0.0.1:8080"
+		for i := 2; i < len(os.Args); i++ {
+			switch os.Args[i] {
+			case "--addr":
+				addr = requireFlagValue(os.Args, i)
+				i++
+			}
+		}
+		fmt.Printf("CHUM v2 — starting UI server on %s\n", addr)
+
+		uiFS, err := fs.Sub(web.Assets, ".")
+		if err != nil {
+			logger.Error("Failed to create sub-filesystem for web assets", "error", err)
+			os.Exit(1)
+		}
+
+		uiServer := &planning.UIServer{
+			WebFS:  uiFS,
+			Logger: logger,
+		}
+		srv := &http.Server{Addr: addr, Handler: uiServer.Handler()}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			logger.Error("Failed to listen", "addr", addr, "error", err)
+			os.Exit(1)
+		}
+		logger.Info("UI server listening", "addr", addr)
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			logger.Error("UI server error", "error", err)
+			os.Exit(1)
+		}
+
 	default:
-		fmt.Fprintf(os.Stderr, "Usage: chum [serve|sync|tasks|task create|submit|reconcile|plan|init|shutdown|resume] [--config path]\n")
+		fmt.Fprintf(os.Stderr, "Usage: chum [serve|serve-ui|sync|tasks|task create|submit|reconcile|plan|init|shutdown|resume] [--config path]\n")
 		os.Exit(1)
 	}
 }
