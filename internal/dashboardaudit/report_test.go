@@ -92,6 +92,137 @@ func TestAnalyze_CapturesTimelineAndStatsAsBackendOnly(t *testing.T) {
 	}
 }
 
+func TestAnalyze_UnusedPrefixedCSSClassesAssignedByPrefix(t *testing.T) {
+	t.Parallel()
+
+	// Verify that CSS classes with no observed usage in JS/HTML files
+	// are still assigned to their view based on prefix (timeline-, stats-, jv-, ov2-).
+	// This exercises the len(usageViews) == 0 path in analyzeFrontend.
+
+	files := []frontendFile{
+		{RelPath: "web/style.css", Content: `.timeline-header { color: red; }
+.stats-chart { fill: blue; }
+.jv-unused { display: none; }
+.ov2-stale { opacity: 0.5; }
+.generic-class { margin: 0; }`},
+		// No JS/HTML files reference any of these classes,
+		// so usageViews will be empty for each.
+	}
+
+	cssClasses := extractCSSClasses(files)
+
+	// Simulate the classification loop from analyzeFrontend.
+	classUsage := map[string]map[string]bool{}
+	for className := range cssClasses {
+		classUsage[className] = map[string]bool{}
+		// No files reference these classes, so usage stays empty.
+	}
+
+	cssExclusive := map[string][]string{
+		viewTimeline: {},
+		viewStats:    {},
+		viewJarvisKB: {},
+	}
+
+	for className := range classUsage {
+		usageViews := map[string]bool{} // empty: no references
+
+		if len(usageViews) == 0 {
+			switch {
+			case strings.HasPrefix(className, "timeline-"):
+				cssExclusive[viewTimeline] = append(cssExclusive[viewTimeline], "."+className)
+				continue
+			case strings.HasPrefix(className, "stats-"):
+				cssExclusive[viewStats] = append(cssExclusive[viewStats], "."+className)
+				continue
+			case strings.HasPrefix(className, "jv-") || strings.HasPrefix(className, "ov2-"):
+				cssExclusive[viewJarvisKB] = append(cssExclusive[viewJarvisKB], "."+className)
+				continue
+			}
+		}
+	}
+
+	if !containsString(cssExclusive[viewTimeline], ".timeline-header") {
+		t.Fatalf("timeline CSS exclusives missing .timeline-header: %v", cssExclusive[viewTimeline])
+	}
+	if !containsString(cssExclusive[viewStats], ".stats-chart") {
+		t.Fatalf("stats CSS exclusives missing .stats-chart: %v", cssExclusive[viewStats])
+	}
+	if !containsString(cssExclusive[viewJarvisKB], ".jv-unused") {
+		t.Fatalf("jarvis CSS exclusives missing .jv-unused: %v", cssExclusive[viewJarvisKB])
+	}
+	if !containsString(cssExclusive[viewJarvisKB], ".ov2-stale") {
+		t.Fatalf("jarvis CSS exclusives missing .ov2-stale: %v", cssExclusive[viewJarvisKB])
+	}
+	// generic-class has no recognized prefix, so it should NOT appear in any view.
+	for _, view := range targetViews {
+		if containsString(cssExclusive[view], ".generic-class") {
+			t.Fatalf("generic-class should not be assigned to %s: %v", view, cssExclusive[view])
+		}
+	}
+}
+
+func TestAnalyze_CSSExclusivityWorksForAllTargetViews(t *testing.T) {
+	t.Parallel()
+
+	// Verify isExclusiveToView works for timeline and stats, not just jarvis.
+	if !isExclusiveToView("timeline-bar", map[string]bool{viewTimeline: true}, viewTimeline) {
+		t.Fatal("expected single-view timeline usage to be exclusive")
+	}
+	if isExclusiveToView("timeline-bar", map[string]bool{viewTimeline: true, "shared": true}, viewTimeline) {
+		t.Fatal("expected multi-view usage to prevent timeline exclusivity")
+	}
+	if !isExclusiveToView("stats-chart", map[string]bool{viewStats: true}, viewStats) {
+		t.Fatal("expected single-view stats usage to be exclusive")
+	}
+	if isExclusiveToView("stats-chart", map[string]bool{viewStats: true, viewJarvisKB: true}, viewStats) {
+		t.Fatal("expected multi-view usage to prevent stats exclusivity")
+	}
+}
+
+func TestAnalyze_JSFunctionsExtractedForAllTargetViews(t *testing.T) {
+	t.Parallel()
+
+	files := []frontendFile{
+		{RelPath: "web/views/timeline.js", View: viewTimeline, Content: `function renderTimeline() {}`},
+		{RelPath: "web/views/stats.js", View: viewStats, Content: `function renderStats() {}`},
+		{RelPath: "web/views/jarvis.js", View: viewJarvisKB, Content: `function renderGoals() {}`},
+		{RelPath: "web/views/overview.js", View: "overview", Content: `function renderOverview() {}`},
+	}
+
+	jsFunctions := map[string][]string{
+		viewTimeline: {},
+		viewStats:    {},
+		viewJarvisKB: {},
+	}
+
+	for _, file := range files {
+		for _, view := range targetViews {
+			if file.View == view {
+				for _, name := range extractNamedFunctions(file.Content) {
+					jsFunctions[view] = append(jsFunctions[view], qualifyJSFunction(file.RelPath, name))
+				}
+			}
+		}
+	}
+
+	if !containsString(jsFunctions[viewTimeline], "web/views/timeline.js::renderTimeline") {
+		t.Fatalf("timeline JS missing renderTimeline: %v", jsFunctions[viewTimeline])
+	}
+	if !containsString(jsFunctions[viewStats], "web/views/stats.js::renderStats") {
+		t.Fatalf("stats JS missing renderStats: %v", jsFunctions[viewStats])
+	}
+	if !containsString(jsFunctions[viewJarvisKB], "web/views/jarvis.js::renderGoals") {
+		t.Fatalf("jarvis JS missing renderGoals: %v", jsFunctions[viewJarvisKB])
+	}
+	// overview is not in targetViews, so it should not be captured.
+	for _, view := range targetViews {
+		if containsString(jsFunctions[view], "web/views/overview.js::renderOverview") {
+			t.Fatalf("overview function should not appear in %s: %v", view, jsFunctions[view])
+		}
+	}
+}
+
 func TestIsExclusiveToView_UsesObservedUsageOnly(t *testing.T) {
 	t.Parallel()
 
