@@ -96,6 +96,36 @@ func (s *Store) ListExecutionTraces(taskID string) ([]ExecutionTrace, error) {
 	return traces, rows.Err()
 }
 
+// TaskIDsWithTraces returns the set of task IDs (from the given slice) that
+// have at least one execution trace. Uses a single query instead of per-task lookups.
+func (s *Store) TaskIDsWithTraces(taskIDs []string) (map[string]bool, error) {
+	if len(taskIDs) == 0 {
+		return map[string]bool{}, nil
+	}
+	placeholders := make([]string, len(taskIDs))
+	args := make([]interface{}, len(taskIDs))
+	for i, id := range taskIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := s.db.Query(
+		`SELECT DISTINCT task_id FROM execution_traces WHERE task_id IN (`+strings.Join(placeholders, ",")+`)`,
+		args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: task ids with traces: %w", err)
+	}
+	defer rows.Close()
+	result := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("store: scan task id: %w", err)
+		}
+		result[id] = true
+	}
+	return result, rows.Err()
+}
+
 // GetTraceEvents returns all events for a trace, oldest first.
 func (s *Store) GetTraceEvents(traceID int64) ([]TraceEvent, error) {
 	rows, err := s.db.Query(`

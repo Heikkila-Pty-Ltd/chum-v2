@@ -12,6 +12,7 @@ type TaskStore interface {
 	CloseTask(ctx context.Context, id, status string) error
 	ListTasks(ctx context.Context, project string, statuses ...string) ([]Task, error)
 	GetReadyNodes(ctx context.Context, project string) ([]Task, error)
+	GetApprovedNodes(ctx context.Context, project string) ([]Task, error)
 	CountChildrenByParent(ctx context.Context, project string) (map[string]int, error)
 	CreateSubtasksAtomic(ctx context.Context, parentID string, tasks []Task) ([]string, error)
 	SetGlobalPaused(ctx context.Context, paused bool) error

@@ -103,6 +103,34 @@ func (d *DAG) GetEdgeSource(ctx context.Context, from, to string) (string, error
 	return source, nil
 }
 
+// GetProjectEdges returns all edges for tasks in a project as two maps:
+// deps (from_task → []to_task) and dependents (to_task → []from_task).
+// Uses a single query instead of per-task lookups.
+func (d *DAG) GetProjectEdges(ctx context.Context, project string) (deps map[string][]string, dependents map[string][]string, err error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT e.from_task, e.to_task
+		 FROM task_edges e
+		 WHERE e.from_task IN (SELECT id FROM tasks WHERE project = ?)
+		    OR e.to_task IN (SELECT id FROM tasks WHERE project = ?)`,
+		project, project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get project edges: %w", err)
+	}
+	defer rows.Close()
+
+	deps = make(map[string][]string)
+	dependents = make(map[string][]string)
+	for rows.Next() {
+		var from, to string
+		if err := rows.Scan(&from, &to); err != nil {
+			return nil, nil, fmt.Errorf("scan edge: %w", err)
+		}
+		deps[from] = append(deps[from], to)
+		dependents[to] = append(dependents[to], from)
+	}
+	return deps, dependents, rows.Err()
+}
+
 // RemoveEdge removes a dependency.
 func (d *DAG) RemoveEdge(ctx context.Context, from, to string) error {
 	_, err := d.db.ExecContext(ctx,

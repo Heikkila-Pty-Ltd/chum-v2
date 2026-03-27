@@ -808,6 +808,36 @@ func TestGetReadyNodes_FiltersByProject(t *testing.T) {
 	}
 }
 
+func TestGetApprovedNodes_ASTFenceBlocksApprovedDeps(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	_, _ = d.CreateTask(ctx, Task{
+		ID:      "approved-dep",
+		Project: "p",
+		Status:  string(types.StatusApproved),
+	})
+	_, _ = d.CreateTask(ctx, Task{
+		ID:      "approved-main",
+		Project: "p",
+		Status:  string(types.StatusApproved),
+	})
+	if err := d.AddEdgeWithSource(ctx, "approved-main", "approved-dep", "ast"); err != nil {
+		t.Fatalf("AddEdgeWithSource(ast): %v", err)
+	}
+
+	approved, err := d.GetApprovedNodes(ctx, "p")
+	if err != nil {
+		t.Fatalf("GetApprovedNodes: %v", err)
+	}
+	for _, task := range approved {
+		if task.ID == "approved-main" {
+			t.Fatalf("approved-main should be blocked by approved AST dependency, got %v", taskIDs(approved))
+		}
+	}
+}
+
 // --- TaskTargets ---
 
 func TestSetAndGetTaskTargets(t *testing.T) {
@@ -1019,6 +1049,147 @@ func TestGlobalPauseState_SetAndRead(t *testing.T) {
 	}
 	if paused {
 		t.Fatal("expected paused=false")
+	}
+}
+
+// --- PauseProjectTasks / ResumeProjectTasks ---
+
+func TestDAG_PauseAndResumeProjectTasks(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	// Create tasks in different states.
+	d.CreateTask(ctx, Task{ID: "t-run", Title: "running", Project: "proj", Status: "running"})
+	d.CreateTask(ctx, Task{ID: "t-rdy", Title: "ready", Project: "proj", Status: "ready"})
+	d.CreateTask(ctx, Task{ID: "t-apr", Title: "approved", Project: "proj", Status: "approved", Metadata: map[string]string{"owner": "review"}})
+	d.CreateTask(ctx, Task{ID: "t-done", Title: "done", Project: "proj", Status: "completed"})
+	d.CreateTask(ctx, Task{ID: "t-other", Title: "other", Project: "other-proj", Status: "ready"})
+
+	// Pause project.
+	affected, err := d.PauseProjectTasks(ctx, "proj")
+	if err != nil {
+		t.Fatalf("PauseProjectTasks: %v", err)
+	}
+	if affected != 3 {
+		t.Fatalf("expected 3 affected, got %d", affected)
+	}
+
+	// Verify statuses changed.
+	tRun, _ := d.GetTask(ctx, "t-run")
+	tRdy, _ := d.GetTask(ctx, "t-rdy")
+	tApr, _ := d.GetTask(ctx, "t-apr")
+	tDone, _ := d.GetTask(ctx, "t-done")
+	tOther, _ := d.GetTask(ctx, "t-other")
+	if tRun.Status != "paused" {
+		t.Fatalf("t-run: want paused, got %s", tRun.Status)
+	}
+	if tRdy.Status != "paused" {
+		t.Fatalf("t-rdy: want paused, got %s", tRdy.Status)
+	}
+	if tApr.Status != "paused" {
+		t.Fatalf("t-apr: want paused, got %s", tApr.Status)
+	}
+	if got := tRdy.Metadata["paused_from_status"]; got != "ready" {
+		t.Fatalf("t-rdy paused_from_status = %q, want ready", got)
+	}
+	if got := tApr.Metadata["paused_from_status"]; got != "approved" {
+		t.Fatalf("t-apr paused_from_status = %q, want approved", got)
+	}
+	if _, ok := tRun.Metadata["paused_from_status"]; ok {
+		t.Fatal("t-run should not record paused_from_status")
+	}
+	if tDone.Status != "completed" {
+		t.Fatalf("t-done should remain completed, got %s", tDone.Status)
+	}
+	if tOther.Status != "ready" {
+		t.Fatalf("t-other should remain ready, got %s", tOther.Status)
+	}
+
+	// Idempotent — re-pausing returns 0.
+	affected2, err := d.PauseProjectTasks(ctx, "proj")
+	if err != nil {
+		t.Fatalf("PauseProjectTasks (2nd): %v", err)
+	}
+	if affected2 != 0 {
+		t.Fatalf("expected 0 affected on re-pause, got %d", affected2)
+	}
+
+	// Resume.
+	resumed, err := d.ResumeProjectTasks(ctx, "proj")
+	if err != nil {
+		t.Fatalf("ResumeProjectTasks: %v", err)
+	}
+	if resumed != 3 {
+		t.Fatalf("expected 3 resumed, got %d", resumed)
+	}
+	tRun, _ = d.GetTask(ctx, "t-run")
+	tRdy, _ = d.GetTask(ctx, "t-rdy")
+	tApr, _ = d.GetTask(ctx, "t-apr")
+	if tRun.Status != "ready" {
+		t.Fatalf("t-run: want ready after resume, got %s", tRun.Status)
+	}
+	if tRdy.Status != "ready" {
+		t.Fatalf("t-rdy: want ready after resume, got %s", tRdy.Status)
+	}
+	if tApr.Status != "approved" {
+		t.Fatalf("t-apr: want approved after resume, got %s", tApr.Status)
+	}
+	if _, ok := tRdy.Metadata["paused_from_status"]; ok {
+		t.Fatal("t-rdy paused_from_status should be cleared on resume")
+	}
+	if _, ok := tApr.Metadata["paused_from_status"]; ok {
+		t.Fatal("t-apr paused_from_status should be cleared on resume")
+	}
+	if got := tApr.Metadata["owner"]; got != "review" {
+		t.Fatalf("t-apr owner metadata = %q, want review", got)
+	}
+}
+
+// --- ReorderTaskPriorities ---
+
+func TestDAG_ReorderTaskPriorities(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "a", Title: "A", Project: "p", Status: "ready", Priority: 10})
+	d.CreateTask(ctx, Task{ID: "b", Title: "B", Project: "p", Status: "approved", Priority: 20})
+	d.CreateTask(ctx, Task{ID: "c", Title: "C", Project: "p", Status: "ready", Priority: 30})
+
+	// Reorder: c, a, b
+	if err := d.ReorderTaskPriorities(ctx, []string{"c", "a", "b"}); err != nil {
+		t.Fatalf("ReorderTaskPriorities: %v", err)
+	}
+
+	tc, _ := d.GetTask(ctx, "c")
+	ta, _ := d.GetTask(ctx, "a")
+	tb, _ := d.GetTask(ctx, "b")
+	if tc.Priority != 0 {
+		t.Fatalf("c: want priority 0, got %d", tc.Priority)
+	}
+	if ta.Priority != 1 {
+		t.Fatalf("a: want priority 1, got %d", ta.Priority)
+	}
+	if tb.Priority != 2 {
+		t.Fatalf("b: want priority 2, got %d", tb.Priority)
+	}
+}
+
+func TestDAG_ReorderTaskPriorities_NonDispatchableFails(t *testing.T) {
+	t.Parallel()
+	d := newTestDAG(t)
+	ctx := context.Background()
+
+	d.CreateTask(ctx, Task{ID: "a", Title: "A", Project: "p", Status: "ready"})
+	d.CreateTask(ctx, Task{ID: "b", Title: "B", Project: "p", Status: "running"})
+
+	err := d.ReorderTaskPriorities(ctx, []string{"a", "b"})
+	if err == nil {
+		t.Fatal("expected error for non-dispatchable task")
+	}
+	if !strings.Contains(err.Error(), "not found or not in ready/approved status") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
