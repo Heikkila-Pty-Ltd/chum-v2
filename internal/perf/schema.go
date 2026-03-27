@@ -31,6 +31,16 @@ var v2Columns = []string{
 	"ALTER TABLE perf_runs ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0",
 }
 
+// v3 adds task_id column and performance indexes.
+var v3Migrations = []string{
+	"ALTER TABLE perf_runs ADD COLUMN task_id TEXT NOT NULL DEFAULT ''",
+}
+
+var v3Indexes = []string{
+	"CREATE INDEX IF NOT EXISTS idx_perf_runs_created ON perf_runs(created_at)",
+	"CREATE INDEX IF NOT EXISTS idx_perf_runs_task ON perf_runs(task_id)",
+}
+
 // Migrate creates the perf_runs table and applies all schema migrations.
 func Migrate(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {
@@ -42,6 +52,21 @@ func Migrate(db *sql.DB) error {
 			if strings.Contains(err.Error(), "duplicate column") {
 				continue
 			}
+			return fmt.Errorf("perf migration: %w", err)
+		}
+	}
+	// v3: add task_id column (ignore "duplicate column" errors).
+	for _, alter := range v3Migrations {
+		if _, err := db.Exec(alter); err != nil {
+			if strings.Contains(err.Error(), "duplicate column") {
+				continue
+			}
+			return fmt.Errorf("perf migration: %w", err)
+		}
+	}
+	// v3: add performance indexes.
+	for _, idx := range v3Indexes {
+		if _, err := db.Exec(idx); err != nil {
 			return fmt.Errorf("perf migration: %w", err)
 		}
 	}

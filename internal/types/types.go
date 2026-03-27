@@ -22,11 +22,13 @@ type Status string
 const (
 	StatusOpen            Status = "open"
 	StatusReady           Status = "ready"
+	StatusApproved        Status = "approved"
 	StatusRunning         Status = "running"
 	StatusCompleted       Status = "completed"
 	StatusDone            Status = "done" // legacy synonym for completed
 	StatusFailed          Status = "failed"
 	StatusNeedsReview     Status = "needs_review"
+	StatusRejected        Status = "rejected"
 	StatusDecomposed      Status = "decomposed"
 	StatusDoDFailed       Status = "dod_failed"
 	StatusNeedsRefinement Status = "needs_refinement"

@@ -17,16 +17,45 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/metrics"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 )
 
-// suggestCache caches LLM suggestions to avoid redundant calls.
+// suggestCache caches LLM suggestions with a TTL to avoid redundant calls.
 var suggestCache = struct {
 	sync.RWMutex
-	m map[string]string
-}{m: make(map[string]string)}
+	m   map[string]suggestEntry
+	ttl time.Duration
+}{m: make(map[string]suggestEntry), ttl: 10 * time.Minute}
+
+type suggestEntry struct {
+	value   string
+	created time.Time
+}
+
+// suggestLimiter enforces a minimum interval between LLM suggest calls.
+var suggestLimiter = struct {
+	sync.Mutex
+	lastCall time.Time
+	interval time.Duration
+}{interval: 2 * time.Second}
+
+// validParam checks that a path parameter contains only safe characters
+// (alphanumeric, hyphens, underscores, dots, colons).
+func validParam(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, ch := range s {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
+			ch == '-' || ch == '_' || ch == '.' || ch == ':') {
+			return false
+		}
+	}
+	return true
+}
 
 // --- Dashboard API handlers (read-only) ---
 
@@ -535,6 +564,10 @@ func (a *API) handleDashboardTimeline(w http.ResponseWriter, r *http.Request) {
 // a navigable tree structure showing how goals decomposed into tasks.
 func (a *API) handleDashboardTree(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("project")
+	if !validParam(project) {
+		a.jsonError(w, "invalid project name", http.StatusBadRequest)
+		return
+	}
 
 	tasks, err := a.DAG.ListTasks(r.Context(), project)
 	if err != nil {
@@ -568,6 +601,38 @@ func (a *API) handleDashboardTree(w http.ResponseWriter, r *http.Request) {
 		HasTraces       bool           `json:"has_traces"`
 	}
 
+	// Bulk-fetch edges, decisions, alternatives, and trace existence
+	// to avoid N+1 queries per task.
+	depsMap, dependentsMap, _ := a.DAG.GetProjectEdges(r.Context(), project)
+	if depsMap == nil {
+		depsMap = map[string][]string{}
+	}
+	if dependentsMap == nil {
+		dependentsMap = map[string][]string{}
+	}
+
+	decisionsMap, _ := a.DAG.ListDecisionsForProject(r.Context(), project)
+	if decisionsMap == nil {
+		decisionsMap = map[string][]dag.Decision{}
+	}
+
+	altsMap, _ := a.DAG.ListAlternativesForProject(r.Context(), project)
+	if altsMap == nil {
+		altsMap = map[string][]dag.Alternative{}
+	}
+
+	traceSet := map[string]bool{}
+	if a.Store != nil {
+		taskIDs := make([]string, len(tasks))
+		for i, t := range tasks {
+			taskIDs[i] = t.ID
+		}
+		traceSet, _ = a.Store.TaskIDsWithTraces(taskIDs)
+		if traceSet == nil {
+			traceSet = map[string]bool{}
+		}
+	}
+
 	// Build parent→children map
 	childMap := map[string][]string{}
 	for _, t := range tasks {
@@ -578,11 +643,11 @@ func (a *API) handleDashboardTree(w http.ResponseWriter, r *http.Request) {
 
 	nodes := make([]treeNode, 0, len(tasks))
 	for _, t := range tasks {
-		deps, _ := a.DAG.GetDependencies(r.Context(), t.ID)
+		deps := depsMap[t.ID]
 		if deps == nil {
 			deps = []string{}
 		}
-		dependents, _ := a.DAG.GetDependents(r.Context(), t.ID)
+		dependents := dependentsMap[t.ID]
 		if dependents == nil {
 			dependents = []string{}
 		}
@@ -591,11 +656,9 @@ func (a *API) handleDashboardTree(w http.ResponseWriter, r *http.Request) {
 			children = []string{}
 		}
 
-		// Get decisions for this task
 		var decs []treeDecision
-		decisions, _ := a.DAG.ListDecisionsForTask(r.Context(), t.ID)
-		for _, d := range decisions {
-			alts, _ := a.DAG.ListAlternatives(r.Context(), d.ID)
+		for _, d := range decisionsMap[t.ID] {
+			alts := altsMap[d.ID]
 			if alts == nil {
 				alts = []dag.Alternative{}
 			}
@@ -608,13 +671,6 @@ func (a *API) handleDashboardTree(w http.ResponseWriter, r *http.Request) {
 		}
 		if decs == nil {
 			decs = []treeDecision{}
-		}
-
-		// Check for traces
-		hasTraces := false
-		if a.Store != nil {
-			traces, _ := a.Store.ListExecutionTraces(t.ID)
-			hasTraces = len(traces) > 0
 		}
 
 		nodes = append(nodes, treeNode{
@@ -633,7 +689,7 @@ func (a *API) handleDashboardTree(w http.ResponseWriter, r *http.Request) {
 			Dependencies:    deps,
 			Dependents:      dependents,
 			Decisions:       decs,
-			HasTraces:       hasTraces,
+			HasTraces:       traceSet[t.ID],
 		})
 	}
 
@@ -767,6 +823,10 @@ func computeGoalDisplayStatus(rawStatus string, children []dag.Task) string {
 
 func (a *API) handleDashboardOverviewGrouped(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("project")
+	if !validParam(project) {
+		a.jsonError(w, "invalid project name", http.StatusBadRequest)
+		return
+	}
 
 	tasks, err := a.DAG.ListTasks(r.Context(), project)
 	if err != nil {
@@ -810,10 +870,15 @@ func (a *API) handleDashboardOverviewGrouped(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
+	// Bulk-fetch edges to avoid N+1 per-task dependency lookups.
+	depsMap, _, _ := a.DAG.GetProjectEdges(r.Context(), project)
+	if depsMap == nil {
+		depsMap = map[string][]string{}
+	}
+
 	toChild := func(t dag.Task) childTask {
-		deps, _ := a.DAG.GetDependencies(r.Context(), t.ID)
 		var names []string
-		for _, depID := range deps {
+		for _, depID := range depsMap[t.ID] {
 			if dep, ok := taskMap[depID]; ok {
 				names = append(names, dep.Title)
 			}
@@ -1071,6 +1136,144 @@ func (a *API) handleDashboardTaskDecompose(w http.ResponseWriter, r *http.Reques
 	a.jsonOK(w, map[string]string{"task_id": taskID, "status": "needs_refinement"})
 }
 
+// handleDashboardTaskApprove transitions a ready task to approved for dispatch,
+// or accepts a needs_review task into completed.
+func (a *API) handleDashboardTaskApprove(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskID")
+	task, err := a.DAG.GetTask(r.Context(), taskID)
+	if err != nil {
+		a.jsonError(w, "task not found", http.StatusNotFound)
+		return
+	}
+	approvable := map[string]string{
+		string(types.StatusReady):       string(types.StatusApproved),
+		string(types.StatusNeedsReview): string(types.StatusCompleted),
+	}
+	nextStatus, ok := approvable[task.Status]
+	if !ok {
+		a.jsonError(w, "task is not in an approvable state", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Notes string `json:"notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		a.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	updates := map[string]any{
+		"status": nextStatus,
+	}
+	// Store approval notes in task metadata if provided.
+	if body.Notes != "" {
+		meta := task.Metadata
+		if meta == nil {
+			meta = make(map[string]string)
+		}
+		meta["approval_notes"] = body.Notes
+		updates["metadata"] = meta
+	}
+	if err := a.DAG.UpdateTask(r.Context(), taskID, updates); err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	a.jsonOK(w, map[string]string{"task_id": taskID, "status": nextStatus})
+}
+
+// handleDashboardTaskReject rejects review-gated work or returns approval-gated
+// work to ready with feedback.
+func (a *API) handleDashboardTaskReject(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskID")
+	task, err := a.DAG.GetTask(r.Context(), taskID)
+	if err != nil {
+		a.jsonError(w, "task not found", http.StatusNotFound)
+		return
+	}
+	rejectable := map[string]string{
+		string(types.StatusReady):       string(types.StatusReady),
+		string(types.StatusApproved):    string(types.StatusReady),
+		string(types.StatusNeedsReview): string(types.StatusRejected),
+	}
+	nextStatus, ok := rejectable[task.Status]
+	if !ok {
+		a.jsonError(w, "task is not in a rejectable state", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		a.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	updates := map[string]any{
+		"status": nextStatus,
+	}
+	if body.Reason != "" {
+		meta := task.Metadata
+		if meta == nil {
+			meta = make(map[string]string)
+		}
+		meta["rejection_reason"] = body.Reason
+		updates["metadata"] = meta
+	}
+	if err := a.DAG.UpdateTask(r.Context(), taskID, updates); err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	a.jsonOK(w, map[string]string{"task_id": taskID, "status": nextStatus})
+}
+
+// handleDashboardTasksBulkApprove approves multiple ready tasks at once.
+func (a *API) handleDashboardTasksBulkApprove(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TaskIDs []string `json:"task_ids"`
+		Notes   string   `json:"notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(body.TaskIDs) == 0 {
+		a.jsonError(w, "task_ids required", http.StatusBadRequest)
+		return
+	}
+
+	approved := make([]string, 0, len(body.TaskIDs))
+	skipped := make([]string, 0)
+	for _, id := range body.TaskIDs {
+		if !validParam(id) {
+			skipped = append(skipped, id)
+			continue
+		}
+		task, err := a.DAG.GetTask(r.Context(), id)
+		if err != nil || task.Status != string(types.StatusReady) {
+			skipped = append(skipped, id)
+			continue
+		}
+		updates := map[string]any{
+			"status": string(types.StatusApproved),
+		}
+		if body.Notes != "" {
+			meta := task.Metadata
+			if meta == nil {
+				meta = make(map[string]string)
+			}
+			meta["approval_notes"] = body.Notes
+			updates["metadata"] = meta
+		}
+		if err := a.DAG.UpdateTask(r.Context(), id, updates); err != nil {
+			skipped = append(skipped, id)
+			continue
+		}
+		approved = append(approved, id)
+	}
+	a.jsonOK(w, map[string]any{
+		"approved": approved,
+		"skipped":  skipped,
+	})
+}
+
 // handleDashboardTraces returns execution traces and graph events for a task.
 func (a *API) handleDashboardTraces(w http.ResponseWriter, r *http.Request) {
 	taskID := r.PathValue("taskID")
@@ -1113,15 +1316,29 @@ func (a *API) handleDashboardTraces(w http.ResponseWriter, r *http.Request) {
 // handleDashboardSuggest uses a cheap LLM call to suggest next actions for a stuck task.
 func (a *API) handleDashboardSuggest(w http.ResponseWriter, r *http.Request) {
 	taskID := r.PathValue("taskID")
+	if !validParam(taskID) {
+		a.jsonError(w, "invalid task ID", http.StatusBadRequest)
+		return
+	}
 
-	// Check cache first.
+	// Check cache first (with TTL).
 	suggestCache.RLock()
-	if cached, ok := suggestCache.m[taskID]; ok {
+	if entry, ok := suggestCache.m[taskID]; ok && time.Since(entry.created) < suggestCache.ttl {
 		suggestCache.RUnlock()
-		a.jsonOK(w, map[string]any{"task_id": taskID, "suggestion": cached})
+		a.jsonOK(w, map[string]any{"task_id": taskID, "suggestion": entry.value})
 		return
 	}
 	suggestCache.RUnlock()
+
+	// Rate limit LLM calls.
+	suggestLimiter.Lock()
+	if time.Since(suggestLimiter.lastCall) < suggestLimiter.interval {
+		suggestLimiter.Unlock()
+		a.jsonError(w, "rate limited, try again shortly", http.StatusTooManyRequests)
+		return
+	}
+	suggestLimiter.lastCall = time.Now()
+	suggestLimiter.Unlock()
 
 	task, err := a.DAG.GetTask(r.Context(), taskID)
 	if err != nil {
@@ -1163,9 +1380,9 @@ Focus on: what went wrong, what to do next, whether to retry/refine/abandon.`,
 		suggestion = suggestion[:1000]
 	}
 
-	// Cache the result.
+	// Cache the result with TTL.
 	suggestCache.Lock()
-	suggestCache.m[taskID] = suggestion
+	suggestCache.m[taskID] = suggestEntry{value: suggestion, created: time.Now()}
 	suggestCache.Unlock()
 
 	a.jsonOK(w, map[string]any{"task_id": taskID, "suggestion": suggestion})
@@ -1192,6 +1409,373 @@ func (a *API) handleDashboardLessons(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.jsonOK(w, map[string]any{"lessons": lessons})
+}
+
+// handleDashboardActivity returns a reverse-chronological activity feed
+// for the Check page. Merges recent task state changes with recent lessons
+// across all projects (or filtered by project via ?project= param).
+func (a *API) handleDashboardActivity(w http.ResponseWriter, r *http.Request) {
+	hoursStr := r.URL.Query().Get("hours")
+	hours := 24
+	if hoursStr != "" {
+		if h, err := fmt.Sscanf(hoursStr, "%d", &hours); err != nil || h == 0 {
+			hours = 24
+		}
+		if hours < 1 {
+			hours = 1
+		}
+		if hours > 8760 {
+			hours = 8760
+		}
+	}
+	projectFilter := r.URL.Query().Get("project")
+
+	type activityEvent struct {
+		Type      string    `json:"type"`
+		TaskID    string    `json:"task_id"`
+		Title     string    `json:"title"`
+		Project   string    `json:"project"`
+		Status    string    `json:"status"`
+		Outcome   string    `json:"outcome,omitempty"`
+		Timestamp time.Time `json:"timestamp"`
+		CostUSD   float64   `json:"cost_usd,omitempty"`
+		Summary   string    `json:"summary,omitempty"`
+		Category  string    `json:"category,omitempty"`
+	}
+
+	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour)
+	var events []activityEvent
+
+	// 1. Recent task changes from DAG db.
+	taskQuery := `SELECT id, title, project, status, error_log, updated_at
+		FROM tasks WHERE updated_at >= ?`
+	args := []any{cutoff.UTC().Format("2006-01-02 15:04:05")}
+	if projectFilter != "" {
+		taskQuery += " AND project = ?"
+		args = append(args, projectFilter)
+	}
+	taskQuery += " ORDER BY updated_at DESC LIMIT 200"
+
+	rows, err := a.DAG.DB().QueryContext(r.Context(), taskQuery, args...)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id, title, project, status, errorLog string
+			var updatedAt time.Time
+			if err := rows.Scan(&id, &title, &project, &status, &errorLog, &updatedAt); err != nil {
+				continue
+			}
+			ev := activityEvent{
+				Type:      "task",
+				TaskID:    id,
+				Title:     title,
+				Project:   project,
+				Status:    status,
+				Timestamp: updatedAt,
+			}
+			if errorLog != "" {
+				ev.Outcome = truncateStr(errorLog, 200)
+			}
+			events = append(events, ev)
+		}
+	}
+
+	// 2. Cost rollup per task from perf_runs (tracesDB).
+	costByTask := map[string]float64{}
+	if a.TracesDB != nil {
+		costRows, err := a.TracesDB.QueryContext(r.Context(),
+			`SELECT task_id, SUM(cost_usd) FROM perf_runs
+			 WHERE task_id != '' AND created_at >= ?
+			 GROUP BY task_id`,
+			cutoff.UTC().Format("2006-01-02 15:04:05"))
+		if err == nil {
+			defer costRows.Close()
+			for costRows.Next() {
+				var tid string
+				var cost float64
+				if err := costRows.Scan(&tid, &cost); err == nil {
+					costByTask[tid] = cost
+				}
+			}
+		}
+	}
+	// Merge cost into task events.
+	for i := range events {
+		if c, ok := costByTask[events[i].TaskID]; ok {
+			events[i].CostUSD = c
+		}
+	}
+
+	// 3. Recent lessons from tracesDB.
+	if a.TracesDB != nil {
+		lessonQuery := `SELECT task_id, project, category, summary, created_at
+			FROM lessons WHERE created_at >= ?`
+		largs := []any{cutoff.UTC().Format("2006-01-02 15:04:05")}
+		if projectFilter != "" {
+			lessonQuery += " AND project = ?"
+			largs = append(largs, projectFilter)
+		}
+		lessonQuery += " ORDER BY created_at DESC LIMIT 100"
+
+		lrows, err := a.TracesDB.QueryContext(r.Context(), lessonQuery, largs...)
+		if err == nil {
+			defer lrows.Close()
+			for lrows.Next() {
+				var taskID, project, category, summary string
+				var createdAt time.Time
+				if err := lrows.Scan(&taskID, &project, &category, &summary, &createdAt); err != nil {
+					continue
+				}
+				events = append(events, activityEvent{
+					Type:      "lesson",
+					TaskID:    taskID,
+					Project:   project,
+					Status:    "lesson",
+					Category:  category,
+					Summary:   summary,
+					Timestamp: createdAt,
+				})
+			}
+		}
+	}
+
+	// Sort merged events reverse-chronological.
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Timestamp.After(events[j].Timestamp)
+	})
+	if len(events) > 300 {
+		events = events[:300]
+	}
+
+	// Compute summary counts.
+	var completedCount, failedCount, runningCount int
+	var totalCost float64
+	for _, ev := range events {
+		if ev.Type != "task" {
+			continue
+		}
+		switch ev.Status {
+		case "completed", "done":
+			completedCount++
+		case "failed", "dod_failed", "rejected", "quarantined", "budget_exceeded":
+			failedCount++
+		case "running":
+			runningCount++
+		}
+		totalCost += ev.CostUSD
+	}
+
+	if events == nil {
+		events = []activityEvent{}
+	}
+
+	a.jsonOK(w, map[string]any{
+		"events": events,
+		"summary": map[string]any{
+			"completed":  completedCount,
+			"failed":     failedCount,
+			"running":    runningCount,
+			"total_cost": totalCost,
+		},
+		"hours": hours,
+	})
+}
+
+// handleDashboardProjectPause pauses all running/ready/approved tasks in a project.
+// Idempotent — re-calling when already paused returns affected: 0.
+func (a *API) handleDashboardProjectPause(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("name")
+	if !validParam(project) {
+		a.jsonError(w, "invalid project name", http.StatusBadRequest)
+		return
+	}
+	affected, err := a.DAG.PauseProjectTasks(r.Context(), project)
+	if err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	a.jsonOK(w, map[string]any{
+		"project":    project,
+		"affected":   affected,
+		"new_status": "paused",
+	})
+}
+
+// handleDashboardProjectResume resumes all paused tasks in a project back to
+// their prior dispatch state.
+func (a *API) handleDashboardProjectResume(w http.ResponseWriter, r *http.Request) {
+	project := r.PathValue("name")
+	if !validParam(project) {
+		a.jsonError(w, "invalid project name", http.StatusBadRequest)
+		return
+	}
+	affected, err := a.DAG.ResumeProjectTasks(r.Context(), project)
+	if err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if a.Engine != nil {
+		_ = a.Engine.TriggerDispatch(r.Context())
+	}
+	a.jsonOK(w, map[string]any{
+		"project":    project,
+		"affected":   affected,
+		"new_status": "restored",
+	})
+}
+
+// handleDashboardQueueReorder reorders task execution priorities.
+// Body: {"task_ids": ["id1", "id2", ...]} in desired order.
+func (a *API) handleDashboardQueueReorder(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TaskIDs []string `json:"task_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(body.TaskIDs) == 0 {
+		a.jsonError(w, "task_ids must not be empty", http.StatusBadRequest)
+		return
+	}
+	if len(body.TaskIDs) > 1000 {
+		a.jsonError(w, "too many task IDs (max 1000)", http.StatusBadRequest)
+		return
+	}
+	// Validate no duplicates.
+	seen := make(map[string]bool, len(body.TaskIDs))
+	for _, id := range body.TaskIDs {
+		if !validParam(id) {
+			a.jsonError(w, fmt.Sprintf("invalid task ID: %s", id), http.StatusBadRequest)
+			return
+		}
+		if seen[id] {
+			a.jsonError(w, fmt.Sprintf("duplicate task ID: %s", id), http.StatusBadRequest)
+			return
+		}
+		seen[id] = true
+	}
+	if err := a.DAG.ReorderTaskPriorities(r.Context(), body.TaskIDs); err != nil {
+		a.jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if a.Engine != nil {
+		_ = a.Engine.TriggerDispatch(r.Context())
+	}
+	a.jsonOK(w, map[string]any{
+		"reordered": len(body.TaskIDs),
+	})
+}
+
+// handleDashboardLearningTrends returns daily aggregated perf metrics for the last 30 days.
+func (a *API) handleDashboardLearningTrends(w http.ResponseWriter, r *http.Request) {
+	if a.TracesDB == nil {
+		a.jsonError(w, "traces database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	rows, err := a.TracesDB.QueryContext(r.Context(),
+		`SELECT date(created_at) as day,
+		        COUNT(*) as total,
+		        SUM(success) as successes,
+		        CAST(SUM(success) AS REAL) / COUNT(*) as success_rate,
+		        AVG(duration_s) as avg_duration,
+		        SUM(cost_usd) as total_cost
+		 FROM perf_runs
+		 WHERE created_at >= date('now', '-30 days')
+		 GROUP BY date(created_at)
+		 ORDER BY day ASC`)
+	if err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type trendDay struct {
+		Day         string  `json:"day"`
+		TotalRuns   int     `json:"total_runs"`
+		Successes   int     `json:"successes"`
+		SuccessRate float64 `json:"success_rate"`
+		AvgDuration float64 `json:"avg_duration_s"`
+		TotalCost   float64 `json:"total_cost_usd"`
+	}
+
+	dayMap := make(map[string]trendDay)
+	for rows.Next() {
+		var d trendDay
+		if err := rows.Scan(&d.Day, &d.TotalRuns, &d.Successes, &d.SuccessRate, &d.AvgDuration, &d.TotalCost); err != nil {
+			a.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		dayMap[d.Day] = d
+	}
+
+	// Gap-fill: ensure every day in the 30-day window is present.
+	now := time.Now().UTC()
+	var trends []trendDay
+	for i := 29; i >= 0; i-- {
+		day := now.AddDate(0, 0, -i).Format("2006-01-02")
+		if d, ok := dayMap[day]; ok {
+			trends = append(trends, d)
+		} else {
+			trends = append(trends, trendDay{Day: day})
+		}
+	}
+
+	a.jsonOK(w, map[string]any{
+		"trends":      trends,
+		"period_days": 30,
+	})
+}
+
+// handleDashboardModelPerf returns per-model performance stats from perf_runs.
+func (a *API) handleDashboardModelPerf(w http.ResponseWriter, r *http.Request) {
+	if a.TracesDB == nil {
+		a.jsonError(w, "traces database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	rows, err := a.TracesDB.QueryContext(r.Context(),
+		`SELECT agent, model, tier,
+		        COUNT(*) as total_runs,
+		        SUM(success) as successes,
+		        CAST(SUM(success) AS REAL) / COUNT(*) as success_rate,
+		        AVG(cost_usd) as avg_cost,
+		        AVG(duration_s) as avg_duration
+		 FROM perf_runs
+		 GROUP BY agent, model, tier
+		 ORDER BY total_runs DESC`)
+	if err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type modelStat struct {
+		Agent       string  `json:"agent"`
+		Model       string  `json:"model"`
+		Tier        string  `json:"tier"`
+		TotalRuns   int     `json:"total_runs"`
+		Successes   int     `json:"successes"`
+		SuccessRate float64 `json:"success_rate"`
+		AvgCost     float64 `json:"avg_cost_usd"`
+		AvgDuration float64 `json:"avg_duration_s"`
+	}
+
+	var models []modelStat
+	for rows.Next() {
+		var m modelStat
+		if err := rows.Scan(&m.Agent, &m.Model, &m.Tier, &m.TotalRuns, &m.Successes, &m.SuccessRate, &m.AvgCost, &m.AvgDuration); err != nil {
+			a.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		models = append(models, m)
+	}
+	if models == nil {
+		models = []modelStat{}
+	}
+
+	a.jsonOK(w, map[string]any{"models": models})
 }
 
 // handleDashboardHealthMetrics returns system-wide health metrics.

@@ -40,3 +40,9 @@ func TestParseFlags_AllFlags(t *testing.T) {
 		t.Errorf("configPath = %q, want c.toml", f.configPath)
 	}
 }
+
+func TestListenAddress_LocalhostOnly(t *testing.T) {
+	if got := listenAddress("1234"); got != "127.0.0.1:1234" {
+		t.Fatalf("listenAddress = %q, want %q", got, "127.0.0.1:1234")
+	}
+}

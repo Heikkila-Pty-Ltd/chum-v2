@@ -971,5 +971,5 @@
     loadPlanList(project);
   }
 
-  App.registerView('planner', { render, refresh });
+  App.registerView('plan', { render, refresh });
 })();

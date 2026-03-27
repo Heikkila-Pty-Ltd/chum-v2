@@ -61,12 +61,27 @@ func (a *API) Handler() http.Handler {
 		mux.HandleFunc("POST /api/dashboard/task/{taskID}/kill", a.handleDashboardTaskKill)
 		mux.HandleFunc("POST /api/dashboard/task/{taskID}/retry", a.handleDashboardTaskRetry)
 		mux.HandleFunc("POST /api/dashboard/task/{taskID}/decompose", a.handleDashboardTaskDecompose)
+		mux.HandleFunc("POST /api/dashboard/task/{taskID}/approve", a.handleDashboardTaskApprove)
+		mux.HandleFunc("POST /api/dashboard/task/{taskID}/reject", a.handleDashboardTaskReject)
+		mux.HandleFunc("POST /api/dashboard/tasks/approve", a.handleDashboardTasksBulkApprove)
 		mux.HandleFunc("POST /api/system/pause", a.handleSystemPause)
 		mux.HandleFunc("POST /api/system/resume", a.handleSystemResume)
 	}
 	if a.Store != nil {
 		mux.HandleFunc("GET /api/dashboard/traces/{taskID}", a.handleDashboardTraces)
 		mux.HandleFunc("GET /api/dashboard/lessons/{project}", a.handleDashboardLessons)
+	}
+	// Learning endpoints — query perf_runs from traces DB.
+	if a.TracesDB != nil {
+		mux.HandleFunc("GET /api/dashboard/learning/trends", a.handleDashboardLearningTrends)
+		mux.HandleFunc("GET /api/dashboard/learning/model-perf", a.handleDashboardModelPerf)
+	}
+	// Activity feed — queries both DAG and traces DBs.
+	if a.DAG != nil {
+		mux.HandleFunc("GET /api/dashboard/activity", a.handleDashboardActivity)
+		mux.HandleFunc("POST /api/dashboard/project/{name}/pause", a.handleDashboardProjectPause)
+		mux.HandleFunc("POST /api/dashboard/project/{name}/resume", a.handleDashboardProjectResume)
+		mux.HandleFunc("POST /api/dashboard/queue/reorder", a.handleDashboardQueueReorder)
 	}
 	if a.LLM != nil {
 		mux.HandleFunc("GET /api/dashboard/suggest/{taskID}", a.handleDashboardSuggest)

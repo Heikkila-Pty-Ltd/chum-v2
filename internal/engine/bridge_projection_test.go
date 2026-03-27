@@ -458,16 +458,17 @@ func TestCreateSubtasksActivity_LegacyIngressFallsBackToDAGOnlySubtasks(t *testi
 	}
 }
 
-func TestScanProjectReadyTasks_LegacyIngressAllowsUnmappedReadyTasks(t *testing.T) {
+func TestScanProjectReadyTasks_LegacyIngressAllowsUnmappedApprovedTasks(t *testing.T) {
 	t.Parallel()
 	d := newEngineBridgeTestDAG(t)
 	ctx := context.Background()
 
+	// Dispatcher now picks "approved" tasks (not "ready") — the approval gate.
 	if _, err := d.CreateTask(ctx, dag.Task{
 		ID:      "legacy-unmapped-1",
 		Title:   "Legacy unmapped",
 		Project: "proj",
-		Status:  string(types.StatusReady),
+		Status:  string(types.StatusApproved),
 	}); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
@@ -494,7 +495,7 @@ func TestScanProjectReadyTasks_LegacyIngressAllowsUnmappedReadyTasks(t *testing.
 		t.Fatalf("scan project ready tasks: %v", err)
 	}
 	if len(ready) != 1 || ready[0].ID != "legacy-unmapped-1" {
-		t.Fatalf("expected legacy unmapped task to remain dispatchable, got %+v", ready)
+		t.Fatalf("expected legacy unmapped approved task to remain dispatchable, got %+v", ready)
 	}
 }
 

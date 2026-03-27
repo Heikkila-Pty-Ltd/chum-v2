@@ -72,7 +72,7 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 	}
 
 	if len(candidates) == 0 {
-		logger.Info("No ready tasks")
+		logger.Info("No approved tasks")
 	} else {
 		logger.Info("Found candidates", "count", len(candidates))
 
@@ -375,15 +375,15 @@ func (da *DispatchActivities) scanProjectReadyTasks(ctx context.Context, project
 		}
 	}
 
-	tasks, err := da.DAG.GetReadyNodes(ctx, projectName)
+	tasks, err := da.DAG.GetApprovedNodes(ctx, projectName)
 	if err != nil {
-		return nil, fmt.Errorf("get ready nodes for %s: %w", projectName, err)
+		return nil, fmt.Errorf("get approved nodes for %s: %w", projectName, err)
 	}
 	if len(tasks) == 0 {
 		return nil, nil
 	}
 
-	// If a parent is ready but already has children, it has already been
+	// If a parent is approved but already has children, it has already been
 	// decomposed at least once. Re-running it causes duplicate decomposition
 	// attempts and churn.
 	tasks = da.suppressRedundantParentDispatch(ctx, projectName, tasks)

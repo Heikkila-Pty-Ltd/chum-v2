@@ -40,6 +40,13 @@ func (m *mockTaskStore) GetReadyNodes(ctx context.Context, project string) ([]da
 	return m.tasks[project], nil
 }
 
+func (m *mockTaskStore) GetApprovedNodes(ctx context.Context, project string) ([]dag.Task, error) {
+	if m.readyNodes != nil {
+		return m.readyNodes[project], nil
+	}
+	return m.tasks[project], nil
+}
+
 func (m *mockTaskStore) GetTask(ctx context.Context, id string) (dag.Task, error) {
 	return dag.Task{}, nil
 }
