@@ -34,6 +34,9 @@ const App = (() => {
     pause: (taskId)       => API.post(`/api/dashboard/task/${taskId}/pause`),
     kill: (taskId, reason) => API.post(`/api/dashboard/task/${taskId}/kill`, { reason }),
     decompose: (taskId)   => API.post(`/api/dashboard/task/${taskId}/decompose`),
+    approve: (taskId, notes) => API.post(`/api/dashboard/task/${taskId}/approve`, { notes: notes || '' }),
+    reject: (taskId, reason) => API.post(`/api/dashboard/task/${taskId}/reject`, { reason: reason || '' }),
+    bulkApprove: (ids, notes) => API.post('/api/dashboard/tasks/approve', { task_ids: ids, notes: notes || '' }),
     suggest: (taskId)     => API.get(`/api/dashboard/suggest/${taskId}`),
     health: ()            => API.get('/api/dashboard/health'),
     traces: (id)          => API.get(`/api/dashboard/traces/${id}`),
@@ -62,14 +65,14 @@ const App = (() => {
 
   // --- Status Colors (read from CSS custom properties) ---
   const STATUS_NAMES = [
-    'completed', 'running', 'ready', 'open', 'failed', 'decomposed',
+    'completed', 'running', 'approved', 'ready', 'open', 'failed', 'decomposed',
     'dod_failed', 'needs_refinement', 'stale', 'needs_review', 'rejected', 'done',
     'quarantined', 'budget_exceeded', 'paused',
   ];
   const STATUS_COLORS = {};
   (() => {
     const styles = getComputedStyle(document.documentElement);
-    const FALLBACK = { completed:'#3d9a5f', running:'#c75a3a', ready:'#4a7fd4', open:'#5c5f69',
+    const FALLBACK = { completed:'#3d9a5f', running:'#c75a3a', approved:'#2d8a4e', ready:'#4a7fd4', open:'#5c5f69',
       failed:'#b93a3a', decomposed:'#8b6cc1', dod_failed:'#c27a2a', needs_refinement:'#b5a030',
       stale:'#4a4d56', needs_review:'#d4953a', rejected:'#9e3a5c', done:'#3d9a5f',
       quarantined:'#8b4a8b', budget_exceeded:'#c9843a', paused:'#6b7280' };
@@ -127,13 +130,18 @@ const App = (() => {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
+  function escapeAttr(s) {
+    if (!s) return '';
+    return escapeHtml(s).replace(/'/g, '&#39;');
+  }
+
   function truncate(s, n) {
     if (!s) return '';
     return s.length > n ? s.slice(0, n) + '\u2026' : s;
   }
 
   function renderStatusBar(byStatus, total) {
-    const statusOrder = ['completed', 'done', 'running', 'ready', 'open', 'decomposed',
+    const statusOrder = ['completed', 'done', 'running', 'approved', 'ready', 'open', 'decomposed',
       'needs_refinement', 'needs_review', 'dod_failed', 'failed', 'rejected', 'quarantined', 'budget_exceeded', 'stale'];
     const segments = statusOrder
       .filter(s => byStatus[s] > 0)
@@ -184,14 +192,15 @@ const App = (() => {
   }
 
   const ROUTE_REDIRECTS = {
-    overview: 'check', structure: 'work', jarvis: 'check',
-    plans: 'plan', planner: 'plan', tasks: 'work', projects: 'work',
+    check: 'review', overview: 'review', steer: 'monitor', learn: 'review',
+    structure: 'plan', jarvis: 'review',
+    plans: 'plan', planner: 'plan', tasks: 'plan', projects: 'plan',
   };
 
   function parseHash() {
-    const hash = location.hash.slice(1) || '/check';
+    const hash = location.hash.slice(1) || '/review';
     const parts = hash.split('/').filter(Boolean);
-    let view = parts[0] || 'check';
+    let view = parts[0] || 'review';
     if (ROUTE_REDIRECTS[view]) view = ROUTE_REDIRECTS[view];
     return { view, param: parts[1] || '' };
   }
@@ -412,11 +421,9 @@ const App = (() => {
     document.addEventListener('keydown', (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
 
-      if (e.key === '1') navigate('check');
+      if (e.key === '1') navigate('review');
       else if (e.key === '2') navigate('plan');
-      else if (e.key === '3') navigate('steer');
-      else if (e.key === '4') navigate('learn');
-      else if (e.key === '5') navigate('work');
+      else if (e.key === '3') navigate('monitor');
       else if (e.key === 'Escape') closePanel();
     });
   }
@@ -485,6 +492,7 @@ const App = (() => {
     formatMinutes,
     timeAgo,
     escapeHtml,
+    escapeAttr,
     truncate,
     renderStatusBar,
     errorState,

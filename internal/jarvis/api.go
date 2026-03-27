@@ -61,6 +61,11 @@ func (a *API) Handler() http.Handler {
 		mux.HandleFunc("POST /api/dashboard/task/{taskID}/kill", a.handleDashboardTaskKill)
 		mux.HandleFunc("POST /api/dashboard/task/{taskID}/retry", a.handleDashboardTaskRetry)
 		mux.HandleFunc("POST /api/dashboard/task/{taskID}/decompose", a.handleDashboardTaskDecompose)
+		mux.HandleFunc("POST /api/dashboard/task/{taskID}/approve", a.handleDashboardTaskApprove)
+		mux.HandleFunc("POST /api/dashboard/task/{taskID}/reject", a.handleDashboardTaskReject)
+		mux.HandleFunc("POST /api/dashboard/task/{taskID}/chat", a.handleTaskChat)
+		mux.HandleFunc("POST /api/dashboard/task/{taskID}/apply-decomposition", a.handleApplyDecomposition)
+		mux.HandleFunc("POST /api/dashboard/tasks/approve", a.handleDashboardTasksBulkApprove)
 		mux.HandleFunc("POST /api/system/pause", a.handleSystemPause)
 		mux.HandleFunc("POST /api/system/resume", a.handleSystemResume)
 	}

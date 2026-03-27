@@ -9,6 +9,8 @@
   const FAILED = new Set([
     'failed', 'dod_failed', 'rejected', 'quarantined', 'budget_exceeded',
   ]);
+  const APPROVABLE = new Set(['ready']);
+  const REJECTABLE = new Set(['ready', 'approved']);
 
   document.addEventListener('alpine:init', () => {
     Alpine.data('workPage', () => ({
@@ -323,6 +325,38 @@
         }
       },
 
+      // --- Task actions ---
+      async approveTask(id) {
+        try {
+          await App.API.approve(id, this.approvalNotes);
+          this.approvalNotes = '';
+          this.showApprovalInput = false;
+          await this.refresh();
+        } catch (err) {
+          this.detailError = 'Approve failed: ' + err.message;
+        }
+      },
+
+      async rejectTask(id) {
+        try {
+          await App.API.reject(id, this.rejectionReason);
+          this.rejectionReason = '';
+          this.showRejectionInput = false;
+          await this.refresh();
+        } catch (err) {
+          this.detailError = 'Reject failed: ' + err.message;
+        }
+      },
+
+      isApprovable(status) { return APPROVABLE.has(status); },
+      isRejectable(status) { return REJECTABLE.has(status); },
+
+      // Inline input state
+      showApprovalInput: false,
+      approvalNotes: '',
+      showRejectionInput: false,
+      rejectionReason: '',
+
       // --- Detail rendering helpers ---
       get t() { return this.taskDetail ? this.taskDetail.task : null; },
       get deps() { return this.taskDetail ? (this.taskDetail.dependencies || []) : []; },
@@ -357,9 +391,10 @@
   });
 
   function render(viewport, project, param) {
+    const pendingTaskAttr = param ? ` data-pending-task="${App.escapeAttr(param)}"` : '';
     viewport.innerHTML = `
-    <div x-data="workPage" class="work-page view-enter" x-init="
-      ${param ? `_pendingTaskId = '${param.replace(/'/g, "\\'")}';` : ''}
+    <div x-data="workPage" class="work-page view-enter"${pendingTaskAttr} x-init="
+      _pendingTaskId = $el.dataset.pendingTask || '';
       init();
     ">
       <!-- Loading -->
@@ -396,6 +431,7 @@
               <select class="work-filter-status" x-model="filterStatus" @keydown.stop>
                 <option value="">All statuses</option>
                 <option value="running">running</option>
+                <option value="approved">approved</option>
                 <option value="ready">ready</option>
                 <option value="failed">failed</option>
                 <option value="completed">completed</option>
@@ -474,6 +510,38 @@
                   <code class="work-detail-id" x-text="t.id"></code>
                 </div>
                 <h2 class="work-detail-title" x-text="t.title"></h2>
+
+                <!-- === Approval actions === -->
+                <template x-if="isApprovable(t.status) || isRejectable(t.status)">
+                  <div class="work-actions">
+                    <template x-if="isApprovable(t.status)">
+                      <div class="work-action-group">
+                        <button class="work-btn work-btn-approve" @click="showApprovalInput ? approveTask(t.id) : (showApprovalInput = true)"
+                                x-text="showApprovalInput ? 'Confirm Approve' : 'Approve'"></button>
+                        <template x-if="showApprovalInput">
+                          <input type="text" class="work-action-input" placeholder="Notes for agent (optional)"
+                                 x-model="approvalNotes" @keydown.stop @keydown.enter="approveTask(t.id)">
+                        </template>
+                        <template x-if="showApprovalInput">
+                          <button class="work-btn work-btn-muted" @click="showApprovalInput = false; approvalNotes = ''">Cancel</button>
+                        </template>
+                      </div>
+                    </template>
+                    <template x-if="isRejectable(t.status)">
+                      <div class="work-action-group">
+                        <button class="work-btn work-btn-reject" @click="showRejectionInput ? rejectTask(t.id) : (showRejectionInput = true)"
+                                x-text="showRejectionInput ? 'Confirm Reject' : 'Reject'"></button>
+                        <template x-if="showRejectionInput">
+                          <input type="text" class="work-action-input" placeholder="Reason for rejection"
+                                 x-model="rejectionReason" @keydown.stop @keydown.enter="rejectTask(t.id)">
+                        </template>
+                        <template x-if="showRejectionInput">
+                          <button class="work-btn work-btn-muted" @click="showRejectionInput = false; rejectionReason = ''">Cancel</button>
+                        </template>
+                      </div>
+                    </template>
+                  </div>
+                </template>
 
                 <!-- === PRIMARY: Narrative === -->
                 <template x-if="t.description">

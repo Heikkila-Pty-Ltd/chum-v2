@@ -1032,6 +1032,7 @@ func TestDAG_PauseAndResumeProjectTasks(t *testing.T) {
 	// Create tasks in different states.
 	d.CreateTask(ctx, Task{ID: "t-run", Title: "running", Project: "proj", Status: "running"})
 	d.CreateTask(ctx, Task{ID: "t-rdy", Title: "ready", Project: "proj", Status: "ready"})
+	d.CreateTask(ctx, Task{ID: "t-apr", Title: "approved", Project: "proj", Status: "approved", Metadata: map[string]string{"owner": "review"}})
 	d.CreateTask(ctx, Task{ID: "t-done", Title: "done", Project: "proj", Status: "completed"})
 	d.CreateTask(ctx, Task{ID: "t-other", Title: "other", Project: "other-proj", Status: "ready"})
 
@@ -1040,13 +1041,14 @@ func TestDAG_PauseAndResumeProjectTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PauseProjectTasks: %v", err)
 	}
-	if affected != 2 {
-		t.Fatalf("expected 2 affected, got %d", affected)
+	if affected != 3 {
+		t.Fatalf("expected 3 affected, got %d", affected)
 	}
 
 	// Verify statuses changed.
 	tRun, _ := d.GetTask(ctx, "t-run")
 	tRdy, _ := d.GetTask(ctx, "t-rdy")
+	tApr, _ := d.GetTask(ctx, "t-apr")
 	tDone, _ := d.GetTask(ctx, "t-done")
 	tOther, _ := d.GetTask(ctx, "t-other")
 	if tRun.Status != "paused" {
@@ -1054,6 +1056,18 @@ func TestDAG_PauseAndResumeProjectTasks(t *testing.T) {
 	}
 	if tRdy.Status != "paused" {
 		t.Fatalf("t-rdy: want paused, got %s", tRdy.Status)
+	}
+	if tApr.Status != "paused" {
+		t.Fatalf("t-apr: want paused, got %s", tApr.Status)
+	}
+	if got := tRdy.Metadata["paused_from_status"]; got != "ready" {
+		t.Fatalf("t-rdy paused_from_status = %q, want ready", got)
+	}
+	if got := tApr.Metadata["paused_from_status"]; got != "approved" {
+		t.Fatalf("t-apr paused_from_status = %q, want approved", got)
+	}
+	if _, ok := tRun.Metadata["paused_from_status"]; ok {
+		t.Fatal("t-run should not record paused_from_status")
 	}
 	if tDone.Status != "completed" {
 		t.Fatalf("t-done should remain completed, got %s", tDone.Status)
@@ -1076,16 +1090,29 @@ func TestDAG_PauseAndResumeProjectTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeProjectTasks: %v", err)
 	}
-	if resumed != 2 {
-		t.Fatalf("expected 2 resumed, got %d", resumed)
+	if resumed != 3 {
+		t.Fatalf("expected 3 resumed, got %d", resumed)
 	}
 	tRun, _ = d.GetTask(ctx, "t-run")
 	tRdy, _ = d.GetTask(ctx, "t-rdy")
+	tApr, _ = d.GetTask(ctx, "t-apr")
 	if tRun.Status != "ready" {
 		t.Fatalf("t-run: want ready after resume, got %s", tRun.Status)
 	}
 	if tRdy.Status != "ready" {
 		t.Fatalf("t-rdy: want ready after resume, got %s", tRdy.Status)
+	}
+	if tApr.Status != "approved" {
+		t.Fatalf("t-apr: want approved after resume, got %s", tApr.Status)
+	}
+	if _, ok := tRdy.Metadata["paused_from_status"]; ok {
+		t.Fatal("t-rdy paused_from_status should be cleared on resume")
+	}
+	if _, ok := tApr.Metadata["paused_from_status"]; ok {
+		t.Fatal("t-apr paused_from_status should be cleared on resume")
+	}
+	if got := tApr.Metadata["owner"]; got != "review" {
+		t.Fatalf("t-apr owner metadata = %q, want review", got)
 	}
 }
 
@@ -1097,7 +1124,7 @@ func TestDAG_ReorderTaskPriorities(t *testing.T) {
 	ctx := context.Background()
 
 	d.CreateTask(ctx, Task{ID: "a", Title: "A", Project: "p", Status: "ready", Priority: 10})
-	d.CreateTask(ctx, Task{ID: "b", Title: "B", Project: "p", Status: "ready", Priority: 20})
+	d.CreateTask(ctx, Task{ID: "b", Title: "B", Project: "p", Status: "approved", Priority: 20})
 	d.CreateTask(ctx, Task{ID: "c", Title: "C", Project: "p", Status: "ready", Priority: 30})
 
 	// Reorder: c, a, b
@@ -1119,7 +1146,7 @@ func TestDAG_ReorderTaskPriorities(t *testing.T) {
 	}
 }
 
-func TestDAG_ReorderTaskPriorities_NonReadyFails(t *testing.T) {
+func TestDAG_ReorderTaskPriorities_NonDispatchableFails(t *testing.T) {
 	t.Parallel()
 	d := newTestDAG(t)
 	ctx := context.Background()
@@ -1129,9 +1156,9 @@ func TestDAG_ReorderTaskPriorities_NonReadyFails(t *testing.T) {
 
 	err := d.ReorderTaskPriorities(ctx, []string{"a", "b"})
 	if err == nil {
-		t.Fatal("expected error for non-ready task")
+		t.Fatal("expected error for non-dispatchable task")
 	}
-	if !strings.Contains(err.Error(), "not found or not in ready status") {
+	if !strings.Contains(err.Error(), "not found or not in ready/approved status") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

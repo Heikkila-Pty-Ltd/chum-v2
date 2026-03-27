@@ -441,6 +441,50 @@ func (d *DAG) GetReadyNodes(ctx context.Context, project string) ([]Task, error)
 	return tasks, rows.Err()
 }
 
+// GetApprovedNodes returns tasks with status="approved" whose dependencies are satisfied.
+// Same dependency semantics as GetReadyNodes but for the approved dispatch gate.
+func (d *DAG) GetApprovedNodes(ctx context.Context, project string) ([]Task, error) {
+	query := `SELECT ` + taskColumns + ` FROM tasks t
+		WHERE t.project = ? AND t.status = ?
+		AND NOT EXISTS (
+			SELECT 1 FROM task_edges e
+			LEFT JOIN tasks dep ON dep.id = e.to_task
+			WHERE e.from_task = t.id
+			AND (
+				dep.id IS NULL OR (
+					CASE
+						WHEN lower(trim(COALESCE(e.source, ''))) = 'ast'
+							THEN lower(trim(COALESCE(dep.status, ''))) IN (?, ?)
+						ELSE
+							lower(trim(COALESCE(dep.status, ''))) NOT IN (?, ?)
+					END
+				)
+			)
+		)
+		ORDER BY t.priority ASC, t.created_at ASC`
+	rows, err := d.db.QueryContext(ctx, query,
+		project,
+		types.StatusApproved,
+		types.StatusReady,
+		types.StatusRunning,
+		types.StatusCompleted,
+		types.StatusDone,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get approved nodes: %w", err)
+	}
+	defer rows.Close()
+	var tasks []Task
+	for rows.Next() {
+		t, err := scanTaskRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
 // CountChildrenByParent returns a map from parent_id to child count for a project.
 func (d *DAG) CountChildrenByParent(ctx context.Context, project string) (map[string]int, error) {
 	rows, err := d.db.QueryContext(ctx,
@@ -461,37 +505,146 @@ func (d *DAG) CountChildrenByParent(ctx context.Context, project string) (map[st
 	return m, rows.Err()
 }
 
-// PauseProjectTasks sets all running/ready tasks in a project to "paused".
-// Returns the number of affected rows. Idempotent — re-calling returns 0.
+// PauseProjectTasks sets all running/ready/approved tasks in a project to "paused".
+// Ready and approved tasks remember their prior state in metadata so resume can
+// restore the approval gate correctly. Returns the number of affected rows.
 func (d *DAG) PauseProjectTasks(ctx context.Context, project string) (int64, error) {
-	res, err := execWithBusyRetry(ctx, func() (sql.Result, error) {
-		return d.db.ExecContext(ctx,
-			`UPDATE tasks SET status = 'paused', updated_at = datetime('now')
-			 WHERE project = ? AND status IN ('running', 'ready')`, project)
-	})
+	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("pause project tasks: %w", err)
+		return 0, fmt.Errorf("begin pause project tasks tx: %w", err)
 	}
-	return res.RowsAffected()
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT `+taskColumns+` FROM tasks
+		 WHERE project = ? AND status IN ('running', 'ready', 'approved')`,
+		project,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("query pause project tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var tasks []Task
+	for rows.Next() {
+		task, scanErr := scanTaskRows(rows)
+		if scanErr != nil {
+			return 0, fmt.Errorf("scan pause project task: %w", scanErr)
+		}
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate pause project tasks: %w", err)
+	}
+	if len(tasks) == 0 {
+		return 0, nil
+	}
+
+	stmt, err := tx.PrepareContext(ctx,
+		`UPDATE tasks SET status = 'paused', metadata = ?, updated_at = datetime('now') WHERE id = ?`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare pause project task stmt: %w", err)
+	}
+	defer stmt.Close()
+
+	var affected int64
+	for _, task := range tasks {
+		meta := cloneMetadata(task.Metadata)
+		switch task.Status {
+		case string(types.StatusReady), string(types.StatusApproved):
+			meta["paused_from_status"] = task.Status
+		default:
+			delete(meta, "paused_from_status")
+		}
+		metaJSON, err := json.Marshal(meta)
+		if err != nil {
+			return 0, fmt.Errorf("marshal pause metadata for %s: %w", task.ID, err)
+		}
+		res, err := stmt.ExecContext(ctx, string(metaJSON), task.ID)
+		if err != nil {
+			return 0, fmt.Errorf("pause task %s: %w", task.ID, err)
+		}
+		n, _ := res.RowsAffected()
+		affected += n
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit pause project tasks: %w", err)
+	}
+	return affected, nil
 }
 
-// ResumeProjectTasks sets all paused tasks in a project back to "ready".
-// Returns the number of affected rows.
+// ResumeProjectTasks sets paused tasks back to their prior dispatch state.
+// Tasks paused from ready or approved are restored to that state; other paused
+// tasks fall back to ready.
 func (d *DAG) ResumeProjectTasks(ctx context.Context, project string) (int64, error) {
-	res, err := execWithBusyRetry(ctx, func() (sql.Result, error) {
-		return d.db.ExecContext(ctx,
-			`UPDATE tasks SET status = 'ready', updated_at = datetime('now')
-			 WHERE project = ? AND status = 'paused'`, project)
-	})
+	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("resume project tasks: %w", err)
+		return 0, fmt.Errorf("begin resume project tasks tx: %w", err)
 	}
-	return res.RowsAffected()
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT `+taskColumns+` FROM tasks WHERE project = ? AND status = 'paused'`,
+		project,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("query resume project tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var tasks []Task
+	for rows.Next() {
+		task, scanErr := scanTaskRows(rows)
+		if scanErr != nil {
+			return 0, fmt.Errorf("scan resume project task: %w", scanErr)
+		}
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate resume project tasks: %w", err)
+	}
+	if len(tasks) == 0 {
+		return 0, nil
+	}
+
+	stmt, err := tx.PrepareContext(ctx,
+		`UPDATE tasks SET status = ?, metadata = ?, updated_at = datetime('now') WHERE id = ?`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare resume project task stmt: %w", err)
+	}
+	defer stmt.Close()
+
+	var affected int64
+	for _, task := range tasks {
+		meta := cloneMetadata(task.Metadata)
+		resumeStatus := string(types.StatusReady)
+		switch meta["paused_from_status"] {
+		case string(types.StatusReady), string(types.StatusApproved):
+			resumeStatus = meta["paused_from_status"]
+		}
+		delete(meta, "paused_from_status")
+		metaJSON, err := json.Marshal(meta)
+		if err != nil {
+			return 0, fmt.Errorf("marshal resume metadata for %s: %w", task.ID, err)
+		}
+		res, err := stmt.ExecContext(ctx, resumeStatus, string(metaJSON), task.ID)
+		if err != nil {
+			return 0, fmt.Errorf("resume task %s: %w", task.ID, err)
+		}
+		n, _ := res.RowsAffected()
+		affected += n
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit resume project tasks: %w", err)
+	}
+	return affected, nil
 }
 
 // ReorderTaskPriorities updates the priority field of the given tasks to match
 // their position in the slice (0 = highest priority). All tasks must exist and
-// be in "ready" status. Uses a transaction for atomicity.
+// be in "ready" or "approved" status. Uses a transaction for atomicity.
 func (d *DAG) ReorderTaskPriorities(ctx context.Context, taskIDs []string) error {
 	tx, err := d.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -499,7 +652,7 @@ func (d *DAG) ReorderTaskPriorities(ctx context.Context, taskIDs []string) error
 	}
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx,
-		`UPDATE tasks SET priority = ?, updated_at = datetime('now') WHERE id = ? AND status = 'ready'`)
+		`UPDATE tasks SET priority = ?, updated_at = datetime('now') WHERE id = ? AND status IN ('ready', 'approved')`)
 	if err != nil {
 		return fmt.Errorf("prepare reorder stmt: %w", err)
 	}
@@ -511,10 +664,21 @@ func (d *DAG) ReorderTaskPriorities(ctx context.Context, taskIDs []string) error
 		}
 		n, _ := res.RowsAffected()
 		if n == 0 {
-			return fmt.Errorf("task %q not found or not in ready status", id)
+			return fmt.Errorf("task %q not found or not in ready/approved status", id)
 		}
 	}
 	return tx.Commit()
+}
+
+func cloneMetadata(meta map[string]string) map[string]string {
+	if len(meta) == 0 {
+		return map[string]string{}
+	}
+	cloned := make(map[string]string, len(meta))
+	for k, v := range meta {
+		cloned[k] = v
+	}
+	return cloned
 }
 
 // sqlPlaceholders returns a comma-separated string of N question marks for use

@@ -65,6 +65,10 @@ func parseFlags(args []string) cliFlags {
 	return f
 }
 
+func listenAddress(port string) string {
+	return fmt.Sprintf("127.0.0.1:%s", port)
+}
+
 func main() {
 	f := parseFlags(os.Args)
 	dbPath := f.dbPath
@@ -137,7 +141,7 @@ func main() {
 	}
 	api := &jarvis.API{Engine: eng, DAG: d, Store: s, TracesDB: tracesDB, LLM: runner, AST: parser, Logger: logger, WebDir: webDir, PlanSession: planSess}
 
-	addr := fmt.Sprintf("127.0.0.1:%s", port)
+	addr := listenAddress(port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to listen on %s: %v\n", addr, err)

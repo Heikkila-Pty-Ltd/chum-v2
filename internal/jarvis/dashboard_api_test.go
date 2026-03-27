@@ -779,6 +779,213 @@ func TestDashboardTaskDecompose(t *testing.T) {
 	}
 }
 
+func TestDashboardTaskApprove(t *testing.T) {
+	api, d := testDashboardAPI(t)
+	ctx := context.Background()
+
+	readyID, _ := d.CreateTask(ctx, dag.Task{Title: "Ready task", Project: "chum", Status: "ready"})
+	reviewID, _ := d.CreateTask(ctx, dag.Task{Title: "Review task", Project: "chum", Status: "needs_review"})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/dashboard/task/"+readyID+"/approve", strings.NewReader(`{"notes":"ship it"}`))
+	w := httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ready approve status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	readyTask, _ := d.GetTask(ctx, readyID)
+	if readyTask.Status != "approved" {
+		t.Fatalf("ready task status = %q, want approved", readyTask.Status)
+	}
+	if readyTask.Metadata["approval_notes"] != "ship it" {
+		t.Fatalf("ready task approval_notes = %q, want ship it", readyTask.Metadata["approval_notes"])
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/dashboard/task/"+reviewID+"/approve", strings.NewReader(`{"notes":"looks good"}`))
+	w = httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("review approve status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	reviewTask, _ := d.GetTask(ctx, reviewID)
+	if reviewTask.Status != "completed" {
+		t.Fatalf("review task status = %q, want completed", reviewTask.Status)
+	}
+	if reviewTask.Metadata["approval_notes"] != "looks good" {
+		t.Fatalf("review task approval_notes = %q, want looks good", reviewTask.Metadata["approval_notes"])
+	}
+}
+
+func TestDashboardTaskReject(t *testing.T) {
+	api, d := testDashboardAPI(t)
+	ctx := context.Background()
+
+	approvedID, _ := d.CreateTask(ctx, dag.Task{Title: "Approved task", Project: "chum", Status: "approved"})
+	reviewID, _ := d.CreateTask(ctx, dag.Task{Title: "Review task", Project: "chum", Status: "needs_review"})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/dashboard/task/"+approvedID+"/reject", strings.NewReader(`{"reason":"needs changes"}`))
+	w := httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("approved reject status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	approvedTask, _ := d.GetTask(ctx, approvedID)
+	if approvedTask.Status != "ready" {
+		t.Fatalf("approved task status = %q, want ready", approvedTask.Status)
+	}
+	if approvedTask.Metadata["rejection_reason"] != "needs changes" {
+		t.Fatalf("approved task rejection_reason = %q, want needs changes", approvedTask.Metadata["rejection_reason"])
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/dashboard/task/"+reviewID+"/reject", strings.NewReader(`{"reason":"failing review"}`))
+	w = httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("review reject status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	reviewTask, _ := d.GetTask(ctx, reviewID)
+	if reviewTask.Status != "rejected" {
+		t.Fatalf("review task status = %q, want rejected", reviewTask.Status)
+	}
+	if reviewTask.Metadata["rejection_reason"] != "failing review" {
+		t.Fatalf("review task rejection_reason = %q, want failing review", reviewTask.Metadata["rejection_reason"])
+	}
+}
+
+func TestDashboardTasksBulkApprove(t *testing.T) {
+	api, d := testDashboardAPI(t)
+	ctx := context.Background()
+
+	readyID, _ := d.CreateTask(ctx, dag.Task{Title: "Ready task", Project: "chum", Status: "ready"})
+	approvedID, _ := d.CreateTask(ctx, dag.Task{Title: "Approved task", Project: "chum", Status: "approved"})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/dashboard/tasks/approve", strings.NewReader(
+		`{"task_ids":["`+readyID+`","`+approvedID+`","bad id"],"notes":"batch approved"}`,
+	))
+	w := httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("bulk approve status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	var result struct {
+		Approved []string `json:"approved"`
+		Skipped  []string `json:"skipped"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode bulk approve: %v", err)
+	}
+	if len(result.Approved) != 1 || result.Approved[0] != readyID {
+		t.Fatalf("approved = %v, want [%s]", result.Approved, readyID)
+	}
+	if len(result.Skipped) != 2 {
+		t.Fatalf("skipped = %v, want 2 entries", result.Skipped)
+	}
+
+	readyTask, _ := d.GetTask(ctx, readyID)
+	if readyTask.Status != "approved" {
+		t.Fatalf("ready task status = %q, want approved", readyTask.Status)
+	}
+	if readyTask.Metadata["approval_notes"] != "batch approved" {
+		t.Fatalf("ready task approval_notes = %q, want batch approved", readyTask.Metadata["approval_notes"])
+	}
+}
+
+func TestDashboardProjectPauseResume_RestoresApprovedTasks(t *testing.T) {
+	api, d := testDashboardAPI(t)
+	ctx := context.Background()
+
+	readyID, _ := d.CreateTask(ctx, dag.Task{Title: "Ready task", Project: "chum", Status: "ready"})
+	approvedID, _ := d.CreateTask(ctx, dag.Task{
+		Title:    "Approved task",
+		Project:  "chum",
+		Status:   "approved",
+		Metadata: map[string]string{"ticket": "BD-1"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/dashboard/project/chum/pause", nil)
+	w := httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("project pause status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	readyTask, _ := d.GetTask(ctx, readyID)
+	approvedTask, _ := d.GetTask(ctx, approvedID)
+	if readyTask.Status != "paused" {
+		t.Fatalf("ready task status after pause = %q, want paused", readyTask.Status)
+	}
+	if approvedTask.Status != "paused" {
+		t.Fatalf("approved task status after pause = %q, want paused", approvedTask.Status)
+	}
+	if approvedTask.Metadata["paused_from_status"] != "approved" {
+		t.Fatalf("approved task paused_from_status = %q, want approved", approvedTask.Metadata["paused_from_status"])
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/dashboard/project/chum/resume", nil)
+	w = httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("project resume status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	var resumeResult struct {
+		NewStatus string `json:"new_status"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resumeResult); err != nil {
+		t.Fatalf("decode project resume: %v", err)
+	}
+	if resumeResult.NewStatus != "restored" {
+		t.Fatalf("new_status = %q, want restored", resumeResult.NewStatus)
+	}
+
+	readyTask, _ = d.GetTask(ctx, readyID)
+	approvedTask, _ = d.GetTask(ctx, approvedID)
+	if readyTask.Status != "ready" {
+		t.Fatalf("ready task status after resume = %q, want ready", readyTask.Status)
+	}
+	if approvedTask.Status != "approved" {
+		t.Fatalf("approved task status after resume = %q, want approved", approvedTask.Status)
+	}
+	if _, ok := approvedTask.Metadata["paused_from_status"]; ok {
+		t.Fatal("approved task paused_from_status should be cleared on resume")
+	}
+	if approvedTask.Metadata["ticket"] != "BD-1" {
+		t.Fatalf("approved task ticket metadata = %q, want BD-1", approvedTask.Metadata["ticket"])
+	}
+}
+
+func TestDashboardQueueReorder_AcceptsApprovedTasks(t *testing.T) {
+	api, d := testDashboardAPI(t)
+	ctx := context.Background()
+
+	if _, err := d.CreateTask(ctx, dag.Task{ID: "task-a", Title: "A", Project: "chum", Status: "ready", Priority: 10}); err != nil {
+		t.Fatalf("CreateTask task-a: %v", err)
+	}
+	if _, err := d.CreateTask(ctx, dag.Task{ID: "task-b", Title: "B", Project: "chum", Status: "approved", Priority: 20}); err != nil {
+		t.Fatalf("CreateTask task-b: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/dashboard/queue/reorder", strings.NewReader(`{"task_ids":["task-b","task-a"]}`))
+	w := httptest.NewRecorder()
+	api.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("queue reorder status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+
+	taskB, _ := d.GetTask(ctx, "task-b")
+	taskA, _ := d.GetTask(ctx, "task-a")
+	if taskB.Priority != 0 {
+		t.Fatalf("task-b priority = %d, want 0", taskB.Priority)
+	}
+	if taskA.Priority != 1 {
+		t.Fatalf("task-a priority = %d, want 1", taskA.Priority)
+	}
+}
+
 func TestDashboardOverviewGroupedDisplayStatus(t *testing.T) {
 	api, d := testDashboardAPI(t)
 	ctx := context.Background()

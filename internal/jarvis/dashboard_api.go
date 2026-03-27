@@ -17,6 +17,7 @@ import (
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/metrics"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/planning"
 	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/store"
+	"github.com/Heikkila-Pty-Ltd/chum-v2/internal/types"
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
@@ -1135,6 +1136,144 @@ func (a *API) handleDashboardTaskDecompose(w http.ResponseWriter, r *http.Reques
 	a.jsonOK(w, map[string]string{"task_id": taskID, "status": "needs_refinement"})
 }
 
+// handleDashboardTaskApprove transitions a ready task to approved for dispatch,
+// or accepts a needs_review task into completed.
+func (a *API) handleDashboardTaskApprove(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskID")
+	task, err := a.DAG.GetTask(r.Context(), taskID)
+	if err != nil {
+		a.jsonError(w, "task not found", http.StatusNotFound)
+		return
+	}
+	approvable := map[string]string{
+		string(types.StatusReady):       string(types.StatusApproved),
+		string(types.StatusNeedsReview): string(types.StatusCompleted),
+	}
+	nextStatus, ok := approvable[task.Status]
+	if !ok {
+		a.jsonError(w, "task is not in an approvable state", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Notes string `json:"notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		a.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	updates := map[string]any{
+		"status": nextStatus,
+	}
+	// Store approval notes in task metadata if provided.
+	if body.Notes != "" {
+		meta := task.Metadata
+		if meta == nil {
+			meta = make(map[string]string)
+		}
+		meta["approval_notes"] = body.Notes
+		updates["metadata"] = meta
+	}
+	if err := a.DAG.UpdateTask(r.Context(), taskID, updates); err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	a.jsonOK(w, map[string]string{"task_id": taskID, "status": nextStatus})
+}
+
+// handleDashboardTaskReject rejects review-gated work or returns approval-gated
+// work to ready with feedback.
+func (a *API) handleDashboardTaskReject(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("taskID")
+	task, err := a.DAG.GetTask(r.Context(), taskID)
+	if err != nil {
+		a.jsonError(w, "task not found", http.StatusNotFound)
+		return
+	}
+	rejectable := map[string]string{
+		string(types.StatusReady):       string(types.StatusReady),
+		string(types.StatusApproved):    string(types.StatusReady),
+		string(types.StatusNeedsReview): string(types.StatusRejected),
+	}
+	nextStatus, ok := rejectable[task.Status]
+	if !ok {
+		a.jsonError(w, "task is not in a rejectable state", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		a.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	updates := map[string]any{
+		"status": nextStatus,
+	}
+	if body.Reason != "" {
+		meta := task.Metadata
+		if meta == nil {
+			meta = make(map[string]string)
+		}
+		meta["rejection_reason"] = body.Reason
+		updates["metadata"] = meta
+	}
+	if err := a.DAG.UpdateTask(r.Context(), taskID, updates); err != nil {
+		a.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	a.jsonOK(w, map[string]string{"task_id": taskID, "status": nextStatus})
+}
+
+// handleDashboardTasksBulkApprove approves multiple ready tasks at once.
+func (a *API) handleDashboardTasksBulkApprove(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TaskIDs []string `json:"task_ids"`
+		Notes   string   `json:"notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		a.jsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(body.TaskIDs) == 0 {
+		a.jsonError(w, "task_ids required", http.StatusBadRequest)
+		return
+	}
+
+	approved := make([]string, 0, len(body.TaskIDs))
+	skipped := make([]string, 0)
+	for _, id := range body.TaskIDs {
+		if !validParam(id) {
+			skipped = append(skipped, id)
+			continue
+		}
+		task, err := a.DAG.GetTask(r.Context(), id)
+		if err != nil || task.Status != string(types.StatusReady) {
+			skipped = append(skipped, id)
+			continue
+		}
+		updates := map[string]any{
+			"status": string(types.StatusApproved),
+		}
+		if body.Notes != "" {
+			meta := task.Metadata
+			if meta == nil {
+				meta = make(map[string]string)
+			}
+			meta["approval_notes"] = body.Notes
+			updates["metadata"] = meta
+		}
+		if err := a.DAG.UpdateTask(r.Context(), id, updates); err != nil {
+			skipped = append(skipped, id)
+			continue
+		}
+		approved = append(approved, id)
+	}
+	a.jsonOK(w, map[string]any{
+		"approved": approved,
+		"skipped":  skipped,
+	})
+}
+
 // handleDashboardTraces returns execution traces and graph events for a task.
 func (a *API) handleDashboardTraces(w http.ResponseWriter, r *http.Request) {
 	taskID := r.PathValue("taskID")
@@ -1433,16 +1572,16 @@ func (a *API) handleDashboardActivity(w http.ResponseWriter, r *http.Request) {
 	a.jsonOK(w, map[string]any{
 		"events": events,
 		"summary": map[string]any{
-			"completed": completedCount,
-			"failed":    failedCount,
-			"running":   runningCount,
+			"completed":  completedCount,
+			"failed":     failedCount,
+			"running":    runningCount,
 			"total_cost": totalCost,
 		},
 		"hours": hours,
 	})
 }
 
-// handleDashboardProjectPause pauses all running/ready tasks in a project.
+// handleDashboardProjectPause pauses all running/ready/approved tasks in a project.
 // Idempotent — re-calling when already paused returns affected: 0.
 func (a *API) handleDashboardProjectPause(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("name")
@@ -1462,7 +1601,8 @@ func (a *API) handleDashboardProjectPause(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// handleDashboardProjectResume resumes all paused tasks in a project.
+// handleDashboardProjectResume resumes all paused tasks in a project back to
+// their prior dispatch state.
 func (a *API) handleDashboardProjectResume(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("name")
 	if !validParam(project) {
@@ -1480,7 +1620,7 @@ func (a *API) handleDashboardProjectResume(w http.ResponseWriter, r *http.Reques
 	a.jsonOK(w, map[string]any{
 		"project":    project,
 		"affected":   affected,
-		"new_status": "ready",
+		"new_status": "restored",
 	})
 }
 
