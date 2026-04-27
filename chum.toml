@@ -25,7 +25,7 @@ enabled = true
 dry_run = false
 canary_label = "chum-canary"
 reconcile_interval = "15m"
-ingress_policy = "beads_only"
+ingress_policy = "legacy"
 
 [projects.chum]
 enabled = true
@@ -36,6 +36,11 @@ dod_checks = ["go build ./...", "go test ./...", "go vet ./..."]
 enabled = true
 workspace = "/home/ubuntu/projects/hg-chum-integration-automation"
 dod_checks = ["go build ./...", "go vet ./..."]
+
+[projects.kaikki]
+enabled = true
+workspace = "/home/ubuntu/projects/kaikki"
+dod_checks = ["npm test"]
 
 [providers.gemini]
 cli = "gemini"

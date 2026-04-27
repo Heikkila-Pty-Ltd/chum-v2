@@ -67,7 +67,8 @@ type TaskRequest struct {
 	ShortTimeout          time.Duration `json:"short_timeout,omitempty"`
 	ReviewTimeout         time.Duration `json:"review_timeout,omitempty"`
 	MaxReviewRounds       int           `json:"max_review_rounds,omitempty"`
-	MaxExperimentAttempts int           `json:"max_experiment_attempts,omitempty"` // 0 = disabled (default)
+	MaxExperimentAttempts int               `json:"max_experiment_attempts,omitempty"` // 0 = disabled (default)
+	Metadata              map[string]string `json:"metadata,omitempty"`                // task metadata from DAG (carries callback_url, external_ref, etc.)
 }
 
 // ExecResult is the output of the execute activity.

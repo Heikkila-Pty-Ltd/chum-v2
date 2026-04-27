@@ -105,6 +105,7 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 				ShortTimeout:    c.ShortTimeout,
 				ReviewTimeout:   c.ReviewTimeout,
 				MaxReviewRounds: c.MaxReviewRounds,
+				Metadata:        c.Metadata,
 			}
 
 			// Wait for child workflow to actually start — without this,
@@ -197,6 +198,7 @@ type DispatchCandidate struct {
 	ShortTimeout    time.Duration
 	ReviewTimeout   time.Duration
 	MaxReviewRounds int
+	Metadata        map[string]string
 }
 
 // DispatchActivities holds dependencies for dispatch-related activities.
@@ -560,6 +562,7 @@ func (da *DispatchActivities) buildProjectCandidates(ctx context.Context, projec
 			ShortTimeout:    da.Config.General.ShortTimeout.Duration,
 			ReviewTimeout:   da.Config.General.ReviewTimeout.Duration,
 			MaxReviewRounds: da.Config.General.MaxReviewRounds,
+			Metadata:        t.Metadata,
 		})
 	}
 	return candidates
