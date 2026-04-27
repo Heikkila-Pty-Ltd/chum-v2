@@ -104,6 +104,14 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	req.WorkDir = worktreePath
 	logger.Info("Worktree isolated", "path", worktreePath)
 
+	// === WORKTREE SETUP (project-specific) ===
+	// Version gate: setup commands added after initial release.
+	setupVersion := workflow.GetVersion(ctx, "add-setup-commands", workflow.DefaultVersion, 1)
+	if setupVersion == 1 {
+		setupCtx := workflow.WithActivityOptions(ctx, shortOpts)
+		_ = workflow.ExecuteActivity(setupCtx, a.RunSetupCommandsActivity, worktreePath, req.Project).Get(ctx, nil)
+	}
+
 	// === DECOMPOSE ===
 	// Version gate: workflows started before decomposition was added must skip
 	// this block to avoid Temporal nondeterminism errors during replay.

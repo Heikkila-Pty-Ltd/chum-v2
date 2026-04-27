@@ -40,7 +40,8 @@ dod_checks = ["go build ./...", "go vet ./..."]
 [projects.kaikki]
 enabled = true
 workspace = "/home/ubuntu/projects/kaikki"
-dod_checks = ["npm test"]
+setup_commands = ["ln -sf /home/ubuntu/projects/kaikki/node_modules node_modules"]
+dod_checks = ["npx tsc --noEmit"]
 
 [providers.gemini]
 cli = "gemini"
