@@ -904,6 +904,7 @@ func (da *DispatchActivities) ScanOrphanedReviewsActivity(ctx context.Context) (
 				ShortTimeout:    da.Config.General.ShortTimeout.Duration,
 				ReviewTimeout:   da.Config.General.ReviewTimeout.Duration,
 				MaxReviewRounds: da.Config.General.MaxReviewRounds,
+				Metadata:        t.Metadata,
 			})
 		}
 	}

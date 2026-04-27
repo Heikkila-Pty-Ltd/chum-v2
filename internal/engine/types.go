@@ -154,5 +154,6 @@ type ReviewRequest struct {
 	ExecTimeout     time.Duration `json:"exec_timeout,omitempty"`
 	ShortTimeout    time.Duration `json:"short_timeout,omitempty"`
 	ReviewTimeout   time.Duration `json:"review_timeout,omitempty"`
-	MaxReviewRounds int           `json:"max_review_rounds,omitempty"`
+	MaxReviewRounds int               `json:"max_review_rounds,omitempty"`
+	Metadata        map[string]string `json:"metadata,omitempty"` // task metadata from DAG (carries callback_url, external_ref, etc.)
 }

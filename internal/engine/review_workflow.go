@@ -56,7 +56,7 @@ func ReviewWorkflow(ctx workflow.Context, req ReviewRequest) error {
 	// closeAndTrace wraps closeAndNotify and records an execution trace
 	// (version-gated so pre-existing workflows don't break on replay).
 	closeAndTrace := func(detail CloseDetail) error {
-		cerr := closeAndNotify(ctx, shortOpts, req.TaskID, detail)
+		cerr := closeAndNotify(ctx, shortOpts, req.TaskID, detail, req.Metadata)
 		if traceVersion == 1 {
 			traceCtx := workflow.WithActivityOptions(ctx, shortOpts)
 			info := workflow.GetInfo(ctx)

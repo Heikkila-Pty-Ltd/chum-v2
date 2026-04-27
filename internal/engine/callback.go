@@ -7,11 +7,32 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"go.temporal.io/sdk/activity"
 )
+
+// callbackClient is a dedicated HTTP client for callback delivery with a
+// sensible timeout so a hanging endpoint cannot block the activity worker.
+var callbackClient = &http.Client{Timeout: 30 * time.Second}
+
+// validateCallbackURL checks that the URL is a valid HTTP or HTTPS URL.
+// It rejects schemes like file://, ftp://, etc. that have no business being
+// used as callback endpoints.
+func validateCallbackURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid callback URL: %w", err)
+	}
+	switch u.Scheme {
+	case "http", "https":
+		return nil
+	default:
+		return fmt.Errorf("unsupported callback URL scheme %q: only http and https are allowed", u.Scheme)
+	}
+}
 
 // CallbackInput is the input to CallbackActivity.
 type CallbackInput struct {
@@ -29,6 +50,11 @@ func (a *Activities) CallbackActivity(ctx context.Context, input CallbackInput) 
 	url := strings.TrimSpace(input.URL)
 	if url == "" {
 		return nil // no callback configured — skip silently
+	}
+
+	if err := validateCallbackURL(url); err != nil {
+		logger.Error("Invalid callback URL, skipping", "url", url, "error", err)
+		return nil
 	}
 
 	payload := map[string]interface{}{
@@ -61,7 +87,7 @@ func (a *Activities) CallbackActivity(ctx context.Context, input CallbackInput) 
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := callbackClient.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("callback POST failed (attempt %d): %w", attempt+1, err)
 			logger.Warn("Callback delivery failed, retrying", "attempt", attempt+1, "error", err)
