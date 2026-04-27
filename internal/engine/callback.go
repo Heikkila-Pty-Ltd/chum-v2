@@ -37,7 +37,8 @@ func validateCallbackURL(raw string) error {
 // CallbackInput is the input to CallbackActivity.
 type CallbackInput struct {
 	URL         string      `json:"url"`
-	ExternalRef string      `json:"external_ref"` // Kaikki source item ID
+	Token       string      `json:"token,omitempty"` // Bearer token for callback auth
+	ExternalRef string      `json:"external_ref"`    // Kaikki source item ID
 	TaskID      string      `json:"task_id"`
 	Detail      CloseDetail `json:"detail"`
 }
@@ -86,6 +87,9 @@ func (a *Activities) CallbackActivity(ctx context.Context, input CallbackInput) 
 			return fmt.Errorf("build callback request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
+		if input.Token != "" {
+			req.Header.Set("Authorization", "Bearer "+input.Token)
+		}
 
 		resp, err := callbackClient.Do(req)
 		if err != nil {
