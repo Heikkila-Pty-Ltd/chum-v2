@@ -56,6 +56,21 @@ func (a *Activities) DecomposeActivity(ctx context.Context, req TaskRequest) (*t
 func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, project string, steps []types.DecompStep) ([]string, error) {
 	logger := activity.GetLogger(ctx)
 
+	// Inherit callback metadata from parent so subtask completions
+	// can fire callbacks back to the original dispatcher (e.g. Kaikki).
+	var inheritedMetadata map[string]string
+	if parentTask, err := a.DAG.GetTask(ctx, parentID); err == nil && parentTask.Metadata != nil {
+		inherited := map[string]string{}
+		for _, key := range []string{"callback_url", "external_ref", "source"} {
+			if v, ok := parentTask.Metadata[key]; ok && v != "" {
+				inherited[key] = v
+			}
+		}
+		if len(inherited) > 0 {
+			inheritedMetadata = inherited
+		}
+	}
+
 	requiresBeads := a.Config != nil &&
 		a.Config.BeadsBridge.Enabled &&
 		ingressPolicyRequiresBeads(a.Config.BeadsBridge.IngressPolicy)
@@ -69,6 +84,7 @@ func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, proje
 				Acceptance:      step.Acceptance,
 				EstimateMinutes: step.Estimate,
 				Project:         project,
+				Metadata:        inheritedMetadata,
 			})
 		}
 

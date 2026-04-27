@@ -172,7 +172,7 @@ func TestSubmitCreatesTask(t *testing.T) {
 	if task.Title != "Fix broken test" {
 		t.Errorf("title = %q, want %q", task.Title, "Fix broken test")
 	}
-	if task.Status != "ready" {
+	if task.Status != "approved" {
 		t.Errorf("status = %q, want %q", task.Status, "ready")
 	}
 	if task.Metadata["source"] != "jarvis-test" {
@@ -265,8 +265,8 @@ func TestSubmitBeadsIngressCreatesMappedTaskWithExternalRef(t *testing.T) {
 	if task.Metadata["beads_bridge"] != "true" {
 		t.Fatalf("metadata[beads_bridge] = %q, want true", task.Metadata["beads_bridge"])
 	}
-	if task.Status != "ready" {
-		t.Fatalf("task status = %q, want ready", task.Status)
+	if task.Status != "approved" {
+		t.Fatalf("task status = %q, want approved", task.Status)
 	}
 	if !hasLabel(task.Labels, "jarvis-submitted") {
 		t.Fatalf("task labels missing jarvis-submitted: %#v", task.Labels)
@@ -297,8 +297,8 @@ func TestSubmitBeadsIngressCreatesMappedTaskWithExternalRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("show issue: %v", err)
 	}
-	if issue.Status != "ready" {
-		t.Fatalf("issue status = %q, want ready", issue.Status)
+	if issue.Status != "approved" {
+		t.Fatalf("issue status = %q, want approved", issue.Status)
 	}
 }
 
@@ -335,7 +335,7 @@ func TestGetStatusReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get status: %v", err)
 	}
-	if result.Status != "ready" {
+	if result.Status != "approved" {
 		t.Errorf("status = %q, want %q", result.Status, "ready")
 	}
 	if result.TaskID != id {
@@ -385,7 +385,7 @@ func TestListPendingFiltersJarvisTasks(t *testing.T) {
 	if len(pending) != 1 {
 		t.Fatalf("expected 1 pending jarvis task, got %d", len(pending))
 	}
-	if pending[0].Status != "ready" {
+	if pending[0].Status != "approved" {
 		t.Errorf("status = %q, want %q", pending[0].Status, "ready")
 	}
 }
