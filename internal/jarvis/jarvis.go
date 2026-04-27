@@ -65,6 +65,12 @@ type WorkRequest struct {
 
 	// CallbackToken is an optional Bearer token sent with callback requests.
 	CallbackToken string `json:"callback_token,omitempty"`
+
+	// ExecutionMode controls how the task is executed: "code_change" (default), "research", or "command".
+	ExecutionMode string `json:"execution_mode,omitempty"`
+
+	// Commands is a list of shell commands for command mode execution.
+	Commands []string `json:"commands,omitempty"`
 }
 
 // WorkResult is returned when a work request completes.
@@ -172,6 +178,15 @@ func (e *Engine) Submit(ctx context.Context, req WorkRequest) (string, error) {
 		labels = append(labels, "jarvis-submitted")
 	}
 
+	if mode := strings.TrimSpace(req.ExecutionMode); mode != "" {
+		switch mode {
+		case "code_change", "research", "command":
+			// valid
+		default:
+			return "", fmt.Errorf("unknown execution_mode %q: must be code_change, research, or command", mode)
+		}
+	}
+
 	metadata := map[string]string{
 		"source": source,
 	}
@@ -183,6 +198,12 @@ func (e *Engine) Submit(ctx context.Context, req WorkRequest) (string, error) {
 	}
 	if callbackToken := strings.TrimSpace(req.CallbackToken); callbackToken != "" {
 		metadata["callback_token"] = callbackToken
+	}
+	if mode := strings.TrimSpace(req.ExecutionMode); mode != "" {
+		metadata["execution_mode"] = mode
+	}
+	if len(req.Commands) > 0 {
+		metadata["commands"] = strings.Join(req.Commands, "\n")
 	}
 
 	if e.ingressRequiresBeads() {

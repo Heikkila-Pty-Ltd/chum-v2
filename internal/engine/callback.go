@@ -36,11 +36,12 @@ func validateCallbackURL(raw string) error {
 
 // CallbackInput is the input to CallbackActivity.
 type CallbackInput struct {
-	URL         string      `json:"url"`
-	Token       string      `json:"token,omitempty"` // Bearer token for callback auth
-	ExternalRef string      `json:"external_ref"`    // Kaikki source item ID
-	TaskID      string      `json:"task_id"`
-	Detail      CloseDetail `json:"detail"`
+	URL           string      `json:"url"`
+	Token         string      `json:"token,omitempty"` // Bearer token for callback auth
+	ExternalRef   string      `json:"external_ref"`    // Kaikki source item ID
+	TaskID        string      `json:"task_id"`
+	ExecutionMode string      `json:"execution_mode,omitempty"` // "code_change", "research", "command"
+	Detail        CloseDetail `json:"detail"`
 }
 
 // CallbackActivity POSTs task results to an external callback URL (e.g. Kaikki webhook).
@@ -58,6 +59,13 @@ func (a *Activities) CallbackActivity(ctx context.Context, input CallbackInput) 
 		return nil
 	}
 
+	// Delivery mode: research/command results update the source item,
+	// code_change results create a new KNOWLEDGE item.
+	delivery := "new_item"
+	if input.ExecutionMode == "research" || input.ExecutionMode == "command" {
+		delivery = "update_source"
+	}
+
 	payload := map[string]interface{}{
 		"sourceItemId": input.ExternalRef,
 		"resultType":   mapResultType(input.Detail),
@@ -65,6 +73,7 @@ func (a *Activities) CallbackActivity(ctx context.Context, input CallbackInput) 
 		"body":         callbackBody(input.Detail),
 		"workflowId":   input.TaskID,
 		"status":       mapCallbackStatus(input.Detail.Reason),
+		"delivery":     delivery,
 	}
 
 	body, err := json.Marshal(payload)

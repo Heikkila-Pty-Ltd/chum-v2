@@ -69,6 +69,7 @@ type TaskRequest struct {
 	MaxReviewRounds       int               `json:"max_review_rounds,omitempty"`
 	MaxExperimentAttempts int               `json:"max_experiment_attempts,omitempty"` // 0 = disabled (default)
 	Metadata              map[string]string `json:"metadata,omitempty"`                // task metadata from DAG (carries callback_url, external_ref, etc.)
+	ExecutionMode         string            `json:"execution_mode,omitempty"`          // "code_change" (default), "research", "command"
 }
 
 // ExecResult is the output of the execute activity.

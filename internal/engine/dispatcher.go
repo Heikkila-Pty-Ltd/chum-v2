@@ -106,6 +106,7 @@ func DispatcherWorkflow(ctx workflow.Context, _ struct{}) error {
 				ReviewTimeout:   c.ReviewTimeout,
 				MaxReviewRounds: c.MaxReviewRounds,
 				Metadata:        c.Metadata,
+				ExecutionMode:   c.ExecutionMode,
 			}
 
 			// Wait for child workflow to actually start — without this,
@@ -199,6 +200,7 @@ type DispatchCandidate struct {
 	ReviewTimeout   time.Duration
 	MaxReviewRounds int
 	Metadata        map[string]string
+	ExecutionMode   string
 }
 
 // DispatchActivities holds dependencies for dispatch-related activities.
@@ -563,6 +565,7 @@ func (da *DispatchActivities) buildProjectCandidates(ctx context.Context, projec
 			ReviewTimeout:   da.Config.General.ReviewTimeout.Duration,
 			MaxReviewRounds: da.Config.General.MaxReviewRounds,
 			Metadata:        t.Metadata,
+			ExecutionMode:   t.Metadata["execution_mode"],
 		})
 	}
 	return candidates

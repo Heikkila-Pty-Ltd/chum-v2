@@ -112,12 +112,20 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		_ = workflow.ExecuteActivity(setupCtx, a.RunSetupCommandsActivity, worktreePath, req.Project).Get(ctx, nil)
 	}
 
+	// === RESOLVE EXECUTION MODE (needed before decompose decision) ===
+	modeVersion := workflow.GetVersion(ctx, "add-execution-modes", workflow.DefaultVersion, 1)
+	execMode := req.ExecutionMode
+	if execMode == "" {
+		execMode = "code_change"
+	}
+
 	// === DECOMPOSE ===
 	// Version gate: workflows started before decomposition was added must skip
 	// this block to avoid Temporal nondeterminism errors during replay.
+	// Skip decomposition for research and command modes — they are atomic by nature.
 	decompVersion := workflow.GetVersion(ctx, "add-decompose", workflow.DefaultVersion, 1)
-	if decompVersion == 1 {
-		// Every task must pass through decomposition. Subtasks (already decomposed)
+	if decompVersion == 1 && execMode == "code_change" {
+		// Code change tasks pass through decomposition. Subtasks (already decomposed)
 		// skip this step. If decomposition fails, the task fails — no direct execution
 		// without decomposition.
 		if req.ParentID != "" {
@@ -164,7 +172,54 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		}
 	}
 
-	// === EXECUTE + EXPERIMENT MODE ===
+	// === EXECUTION MODE BRANCHING ===
+	if modeVersion == 1 && execMode == "command" {
+		// Command mode: run shell commands directly, no LLM, no worktree pipeline.
+		commands := strings.Split(req.Metadata["commands"], "\n")
+		if len(commands) == 0 || (len(commands) == 1 && commands[0] == "") {
+			return closeAndTrace(CloseDetail{
+				Reason:    CloseFailed,
+				SubReason: "no_commands",
+				Summary:   "command mode requires commands in task metadata",
+			})
+		}
+		commandCtx := workflow.WithActivityOptions(ctx, execOpts)
+		var output string
+		if err := workflow.ExecuteActivity(commandCtx, a.RunCommandActivity, req.WorkDir, commands).Get(ctx, &output); err != nil {
+			return closeAndTrace(CloseDetail{
+				Reason:    CloseFailed,
+				SubReason: "command_failed",
+				Summary:   types.Truncate(output, 4000),
+			})
+		}
+		return closeAndTrace(CloseDetail{
+			Reason:    CloseCompleted,
+			SubReason: "command_output",
+			Summary:   types.Truncate(output, 4000),
+		})
+	}
+
+	if modeVersion == 1 && execMode == "research" {
+		// Research mode: run LLM in Plan mode (read-only), skip DoD/Push/PR pipeline.
+		execCtx := workflow.WithActivityOptions(ctx, execOpts)
+		var execResult ExecResult
+		if err := workflow.ExecuteActivity(execCtx, a.ExecuteActivity, req).Get(ctx, &execResult); err != nil {
+			return closeAndTrace(CloseDetail{
+				Reason:    CloseNeedsReview,
+				SubReason: "research_failed",
+			})
+		}
+		totalInputTokens += execResult.InputTokens
+		totalOutputTokens += execResult.OutputTokens
+		totalCostUSD += execResult.CostUSD
+		return closeAndTrace(CloseDetail{
+			Reason:    CloseCompleted,
+			SubReason: "research_complete",
+			Summary:   types.Truncate(execResult.Output, 4000),
+		})
+	}
+
+	// === CODE CHANGE: EXECUTE + EXPERIMENT MODE ===
 	// When MaxExperimentAttempts > 0, DoD failures trigger a retry loop:
 	// revert worktree, augment prompt with failure context, re-execute.
 	// Each failure is recorded as a lesson for future tasks.
@@ -466,11 +521,12 @@ func closeAndNotify(ctx workflow.Context, opts workflow.ActivityOptions, taskID 
 	if callbackVersion >= 1 && len(metadata) > 0 && metadata[0] != nil {
 		if callbackURL := metadata[0]["callback_url"]; callbackURL != "" {
 			_ = workflow.ExecuteActivity(actCtx, a.CallbackActivity, CallbackInput{
-				URL:         callbackURL,
-				Token:       metadata[0]["callback_token"],
-				ExternalRef: metadata[0]["external_ref"],
-				TaskID:      taskID,
-				Detail:      detail,
+				URL:           callbackURL,
+				Token:         metadata[0]["callback_token"],
+				ExternalRef:   metadata[0]["external_ref"],
+				TaskID:        taskID,
+				ExecutionMode: metadata[0]["execution_mode"],
+				Detail:        detail,
 			}).Get(ctx, nil) // best-effort: don't fail the workflow on callback errors
 		}
 	}
