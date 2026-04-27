@@ -113,9 +113,10 @@ type General struct {
 
 // Project configures a single managed project.
 type Project struct {
-	Enabled   bool     `toml:"enabled"`
-	Workspace string   `toml:"workspace"`
-	DoDChecks []string `toml:"dod_checks"`
+	Enabled       bool     `toml:"enabled"`
+	Workspace     string   `toml:"workspace"`
+	SetupCommands []string `toml:"setup_commands"` // run in worktree after creation (e.g. symlink node_modules)
+	DoDChecks     []string `toml:"dod_checks"`
 }
 
 // Provider defines an LLM CLI provider.

@@ -55,6 +55,29 @@ func (a *Activities) SetupWorktreeActivity(ctx context.Context, baseDir, taskID 
 	return wtDir, nil
 }
 
+// RunSetupCommandsActivity runs project-specific setup commands inside a worktree.
+// Used to prepare the worktree for execution (e.g. symlink node_modules, install deps).
+// Non-fatal: logs warnings on failure but does not block execution.
+func (a *Activities) RunSetupCommandsActivity(ctx context.Context, workDir, project string) error {
+	logger := activity.GetLogger(ctx)
+
+	projCfg, ok := a.Config.Projects[project]
+	if !ok || len(projCfg.SetupCommands) == 0 {
+		return nil
+	}
+
+	for _, cmdStr := range projCfg.SetupCommands {
+		logger.Info("Running setup command", "command", cmdStr, "workDir", workDir)
+		cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
+		cmd.Dir = workDir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			logger.Warn("Setup command failed (non-fatal)", "command", cmdStr, "error", err, "output", string(out))
+		}
+	}
+	return nil
+}
+
 // SetupWorktreeFromRefActivity creates an isolated git worktree for a task
 // branch, starting from a specific ref (for example a PR head SHA).
 func (a *Activities) SetupWorktreeFromRefActivity(ctx context.Context, baseDir, taskID, startRef string) (string, error) {

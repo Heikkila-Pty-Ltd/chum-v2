@@ -137,6 +137,7 @@ func registerEngineWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Confi
 	}
 	w.RegisterActivity(a.SetupWorktreeActivity)
 	w.RegisterActivity(a.SetupWorktreeFromRefActivity)
+	w.RegisterActivity(a.RunSetupCommandsActivity)
 	w.RegisterActivity(a.ExecuteActivity)
 	w.RegisterActivity(a.DoDCheckActivity)
 	w.RegisterActivity(a.PushActivity)
