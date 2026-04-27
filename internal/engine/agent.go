@@ -444,7 +444,16 @@ func closeAndNotify(ctx workflow.Context, opts workflow.ActivityOptions, taskID 
 		taskID, detail.Reason, detail.SubReason, detail.PRNumber, detail.ReviewURL)
 	notifyErr := workflow.ExecuteActivity(actCtx, a.NotifyActivity, message).Get(ctx, nil)
 
+	if closeErr != nil {
+		return fmt.Errorf("close task failed: %w", closeErr)
+	}
+	if notifyErr != nil {
+		return fmt.Errorf("notify failed: %w", notifyErr)
+	}
+
 	// Version-gated: deliver results to callback URL if present in task metadata.
+	// Only fires after close+notify succeed — prevents sending callbacks for tasks
+	// that CHUM failed to close, which would create inconsistent state with Kaikki.
 	callbackVersion := workflow.GetVersion(ctx, "add-callback-activity", workflow.DefaultVersion, 1)
 	if callbackVersion >= 1 && len(metadata) > 0 && metadata[0] != nil {
 		if callbackURL := metadata[0]["callback_url"]; callbackURL != "" {
@@ -457,12 +466,6 @@ func closeAndNotify(ctx workflow.Context, opts workflow.ActivityOptions, taskID 
 		}
 	}
 
-	if closeErr != nil {
-		return fmt.Errorf("close task failed: %w", closeErr)
-	}
-	if notifyErr != nil {
-		return fmt.Errorf("notify failed: %w", notifyErr)
-	}
 	return nil
 }
 
