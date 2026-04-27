@@ -153,6 +153,7 @@ func registerEngineWorkflows(w worker.Worker, d dag.TaskStore, cfg *config.Confi
 	w.RegisterActivity(a.GuardReviewerCleanActivity)
 	w.RegisterActivity(a.ResolveReviewerLoginActivity)
 	w.RegisterActivity(a.NotifyActivity)
+	w.RegisterActivity(a.CallbackActivity)
 	w.RegisterActivity(a.DecomposeActivity)
 	w.RegisterActivity(a.CreateSubtasksActivity)
 	w.RegisterActivity(a.RecordTraceActivity)

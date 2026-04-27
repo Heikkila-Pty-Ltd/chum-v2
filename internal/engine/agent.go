@@ -69,7 +69,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 
 	// closeAndTrace wraps closeAndNotify and records an execution trace.
 	closeAndTrace := func(detail CloseDetail) error {
-		cerr := closeAndNotify(ctx, shortOpts, req.TaskID, detail)
+		cerr := closeAndNotify(ctx, shortOpts, req.TaskID, detail, req.Metadata)
 		if traceVersion == 1 {
 			traceCtx := workflow.WithActivityOptions(ctx, shortOpts)
 			info := workflow.GetInfo(ctx)
@@ -435,7 +435,7 @@ func storeExperimentLesson(ctx workflow.Context, opts workflow.ActivityOptions, 
 	}).Get(ctx, nil)
 }
 
-func closeAndNotify(ctx workflow.Context, opts workflow.ActivityOptions, taskID string, detail CloseDetail) error {
+func closeAndNotify(ctx workflow.Context, opts workflow.ActivityOptions, taskID string, detail CloseDetail, metadata ...map[string]string) error {
 	var a *Activities
 	actCtx := workflow.WithActivityOptions(ctx, opts)
 	closeErr := workflow.ExecuteActivity(actCtx, a.CloseTaskWithDetailActivity, taskID, detail).Get(ctx, nil)
@@ -443,12 +443,29 @@ func closeAndNotify(ctx workflow.Context, opts workflow.ActivityOptions, taskID 
 	message := fmt.Sprintf("task=%s reason=%s sub_reason=%s pr=%d review=%s",
 		taskID, detail.Reason, detail.SubReason, detail.PRNumber, detail.ReviewURL)
 	notifyErr := workflow.ExecuteActivity(actCtx, a.NotifyActivity, message).Get(ctx, nil)
+
 	if closeErr != nil {
 		return fmt.Errorf("close task failed: %w", closeErr)
 	}
 	if notifyErr != nil {
 		return fmt.Errorf("notify failed: %w", notifyErr)
 	}
+
+	// Version-gated: deliver results to callback URL if present in task metadata.
+	// Only fires after close+notify succeed — prevents sending callbacks for tasks
+	// that CHUM failed to close, which would create inconsistent state with Kaikki.
+	callbackVersion := workflow.GetVersion(ctx, "add-callback-activity", workflow.DefaultVersion, 1)
+	if callbackVersion >= 1 && len(metadata) > 0 && metadata[0] != nil {
+		if callbackURL := metadata[0]["callback_url"]; callbackURL != "" {
+			_ = workflow.ExecuteActivity(actCtx, a.CallbackActivity, CallbackInput{
+				URL:         callbackURL,
+				ExternalRef: metadata[0]["external_ref"],
+				TaskID:      taskID,
+				Detail:      detail,
+			}).Get(ctx, nil) // best-effort: don't fail the workflow on callback errors
+		}
+	}
+
 	return nil
 }
 
