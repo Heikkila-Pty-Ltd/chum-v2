@@ -37,8 +37,8 @@ func validateCallbackURL(raw string) error {
 // CallbackInput is the input to CallbackActivity.
 type CallbackInput struct {
 	URL           string      `json:"url"`
-	Token         string      `json:"token,omitempty"`          // Bearer token for callback auth
-	ExternalRef   string      `json:"external_ref"`             // Kaikki source item ID
+	Token         string      `json:"token,omitempty"` // Bearer token for callback auth
+	ExternalRef   string      `json:"external_ref"`    // Kaikki source item ID
 	TaskID        string      `json:"task_id"`
 	ExecutionMode string      `json:"execution_mode,omitempty"` // "code_change", "research", "command"
 	Detail        CloseDetail `json:"detail"`
