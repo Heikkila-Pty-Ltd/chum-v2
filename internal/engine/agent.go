@@ -164,7 +164,57 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		}
 	}
 
-	// === EXECUTE + EXPERIMENT MODE ===
+	// === EXECUTION MODE BRANCHING ===
+	// Version gate: execution modes added after initial release.
+	modeVersion := workflow.GetVersion(ctx, "add-execution-modes", workflow.DefaultVersion, 1)
+	execMode := req.ExecutionMode
+	if execMode == "" {
+		execMode = "code_change"
+	}
+
+	if modeVersion == 1 && execMode == "command" {
+		// Command mode: run shell commands directly, no LLM, no worktree pipeline.
+		commands := strings.Split(req.Metadata["commands"], "\n")
+		if len(commands) == 0 || (len(commands) == 1 && commands[0] == "") {
+			commands = []string{req.Prompt} // fallback: treat prompt as the command
+		}
+		commandCtx := workflow.WithActivityOptions(ctx, execOpts)
+		var output string
+		if err := workflow.ExecuteActivity(commandCtx, a.RunCommandActivity, req.WorkDir, commands).Get(ctx, &output); err != nil {
+			return closeAndTrace(CloseDetail{
+				Reason:    CloseFailed,
+				SubReason: "command_failed",
+				Summary:   types.Truncate(output, 200),
+			})
+		}
+		return closeAndTrace(CloseDetail{
+			Reason:    CloseCompleted,
+			SubReason: "command_output",
+			Summary:   types.Truncate(output, 500),
+		})
+	}
+
+	if modeVersion == 1 && execMode == "research" {
+		// Research mode: run LLM in Plan mode (read-only), skip DoD/Push/PR pipeline.
+		execCtx := workflow.WithActivityOptions(ctx, execOpts)
+		var execResult ExecResult
+		if err := workflow.ExecuteActivity(execCtx, a.ExecuteActivity, req).Get(ctx, &execResult); err != nil {
+			return closeAndTrace(CloseDetail{
+				Reason:    CloseNeedsReview,
+				SubReason: "research_failed",
+			})
+		}
+		totalInputTokens += execResult.InputTokens
+		totalOutputTokens += execResult.OutputTokens
+		totalCostUSD += execResult.CostUSD
+		return closeAndTrace(CloseDetail{
+			Reason:    CloseCompleted,
+			SubReason: "research_complete",
+			Summary:   types.Truncate(execResult.Output, 500),
+		})
+	}
+
+	// === CODE CHANGE: EXECUTE + EXPERIMENT MODE ===
 	// When MaxExperimentAttempts > 0, DoD failures trigger a retry loop:
 	// revert worktree, augment prompt with failure context, re-execute.
 	// Each failure is recorded as a lesson for future tasks.
@@ -466,11 +516,12 @@ func closeAndNotify(ctx workflow.Context, opts workflow.ActivityOptions, taskID 
 	if callbackVersion >= 1 && len(metadata) > 0 && metadata[0] != nil {
 		if callbackURL := metadata[0]["callback_url"]; callbackURL != "" {
 			_ = workflow.ExecuteActivity(actCtx, a.CallbackActivity, CallbackInput{
-				URL:         callbackURL,
-				Token:       metadata[0]["callback_token"],
-				ExternalRef: metadata[0]["external_ref"],
-				TaskID:      taskID,
-				Detail:      detail,
+				URL:           callbackURL,
+				Token:         metadata[0]["callback_token"],
+				ExternalRef:   metadata[0]["external_ref"],
+				TaskID:        taskID,
+				ExecutionMode: metadata[0]["execution_mode"],
+				Detail:        detail,
 			}).Get(ctx, nil) // best-effort: don't fail the workflow on callback errors
 		}
 	}

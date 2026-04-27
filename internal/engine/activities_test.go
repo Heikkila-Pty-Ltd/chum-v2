@@ -88,6 +88,88 @@ func TestRunSetupCommandsActivity_UnknownProjectIsNoop(t *testing.T) {
 	}
 }
 
+func TestBuildPromptForMode_Research(t *testing.T) {
+	t.Parallel()
+	prompt := buildPromptForMode("research", "investigate the bug", "func main() {}")
+	if !strings.Contains(prompt, "investigating a question") {
+		t.Error("research prompt should mention investigating")
+	}
+	if !strings.Contains(prompt, "Do NOT make code changes") {
+		t.Error("research prompt should prohibit code changes")
+	}
+	if !strings.Contains(prompt, "func main()") {
+		t.Error("research prompt should include codebase context")
+	}
+}
+
+func TestBuildPromptForMode_ResearchNoCodebase(t *testing.T) {
+	t.Parallel()
+	prompt := buildPromptForMode("research", "research competitor pricing", "")
+	if strings.Contains(prompt, "CODEBASE") {
+		t.Error("research prompt without codebase should not mention CODEBASE")
+	}
+}
+
+func TestBuildPromptForMode_CodeChange(t *testing.T) {
+	t.Parallel()
+	prompt := buildPromptForMode("code_change", "add endpoint", "func main() {}")
+	if !strings.Contains(prompt, "Implement") {
+		t.Error("code_change prompt should mention Implement")
+	}
+}
+
+func TestBuildPromptForMode_DefaultIsCodeChange(t *testing.T) {
+	t.Parallel()
+	prompt := buildPromptForMode("", "do something", "context")
+	if !strings.Contains(prompt, "Implement") {
+		t.Error("empty mode should default to code_change prompt")
+	}
+}
+
+func TestRunCommandActivity_RunsCommands(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	a := &Activities{Config: &config.Config{}}
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(a.RunCommandActivity)
+
+	var output string
+	val, err := env.ExecuteActivity(a.RunCommandActivity, dir, []string{"echo hello", "echo world"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := val.Get(&output); err != nil {
+		t.Fatalf("get output: %v", err)
+	}
+	if !strings.Contains(output, "hello") || !strings.Contains(output, "world") {
+		t.Errorf("output should contain both commands: %s", output)
+	}
+}
+
+func TestRunCommandActivity_FailingCommandIncludesError(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	a := &Activities{Config: &config.Config{}}
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(a.RunCommandActivity)
+
+	var output string
+	val, err := env.ExecuteActivity(a.RunCommandActivity, dir, []string{"false"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := val.Get(&output); err != nil {
+		t.Fatalf("get output: %v", err)
+	}
+	if !strings.Contains(output, "ERROR") {
+		t.Errorf("output should contain ERROR for failing command: %s", output)
+	}
+}
+
 func TestDoDCheckActivity_ProjectNotFound(t *testing.T) {
 	t.Parallel()
 

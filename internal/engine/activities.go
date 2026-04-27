@@ -97,76 +97,94 @@ func (a *Activities) SetupWorktreeFromRefActivity(ctx context.Context, baseDir, 
 // AST context is injected so the agent understands the codebase structure.
 func (a *Activities) ExecuteActivity(ctx context.Context, req TaskRequest) (*ExecResult, error) {
 	logger := activity.GetLogger(ctx)
-	logger.Info("Executing task", "TaskID", req.TaskID, "Agent", req.Agent)
-
-	// --- Preflight 1: CLI binary exists ---
-	cliName := llm.NormalizeCLIName(req.Agent)
-	if _, err := exec.LookPath(cliName); err != nil {
-		return nil, fmt.Errorf("PREFLIGHT: CLI %q not found on PATH — cannot execute", cliName)
+	mode := req.ExecutionMode
+	if mode == "" {
+		mode = "code_change"
 	}
+	logger.Info("Executing task", "TaskID", req.TaskID, "Agent", req.Agent, "Mode", mode)
 
-	// --- Preflight 2: worktree still intact ---
-	if _, err := os.Stat(filepath.Join(req.WorkDir, ".git")); err != nil {
-		return nil, fmt.Errorf("PREFLIGHT: worktree broken — .git missing in %s", req.WorkDir)
-	}
+	// --- Preflight checks (skip for research without worktree) ---
+	if mode == "code_change" || (mode == "research" && hasWorktree(req.WorkDir)) {
+		// Preflight 1: CLI binary exists
+		cliName := llm.NormalizeCLIName(req.Agent)
+		if _, err := exec.LookPath(cliName); err != nil {
+			return nil, fmt.Errorf("PREFLIGHT: CLI %q not found on PATH — cannot execute", cliName)
+		}
 
-	// --- Preflight 3: not on master/main (worktree enforcement) ---
-	if err := gitpkg.AssertFeatureBranch(ctx, req.WorkDir); err != nil {
-		return nil, fmt.Errorf("PREFLIGHT: %w", err)
-	}
+		// Preflight 2: worktree still intact
+		if _, err := os.Stat(filepath.Join(req.WorkDir, ".git")); err != nil {
+			return nil, fmt.Errorf("PREFLIGHT: worktree broken — .git missing in %s", req.WorkDir)
+		}
 
-	// --- Preflight 4: project builds before we start ---
-	projCfg, ok := a.Config.Projects[req.Project]
-	if ok && len(projCfg.DoDChecks) > 0 {
-		buildCmd := projCfg.DoDChecks[0]
-		parts := strings.Fields(buildCmd)
-		if len(parts) > 0 {
-			out, err := runCommandCombinedOutput(ctx, req.WorkDir, parts...)
-			if err != nil {
-				// Empty-output failures are commonly transient/cancellation artifacts.
-				// Retry once before failing hard.
-				if strings.TrimSpace(out) == "" && ctx.Err() == nil {
-					logger.Warn("Preflight baseline build failed with empty output; retrying once",
-						"TaskID", req.TaskID,
-						"Project", req.Project,
-						"Command", buildCmd,
-						"Error", err.Error(),
-					)
-					out, err = runCommandCombinedOutput(ctx, req.WorkDir, parts...)
-				}
-				if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					cancelErr := ctx.Err()
-					if cancelErr == nil {
-						cancelErr = err
-					}
-					return nil, fmt.Errorf("PREFLIGHT: baseline build cancelled while running %q: %w", buildCmd, cancelErr)
-				}
-				if strings.TrimSpace(out) == "" {
-					return nil, fmt.Errorf("PREFLIGHT: project doesn't build before coding — %s failed with no output: %v",
-						buildCmd, err)
-				}
-				return nil, fmt.Errorf("PREFLIGHT: project doesn't build before coding — %s failed: %s",
-					buildCmd, types.Truncate(out, 300))
+		// Preflight 3: not on master/main (worktree enforcement) — code_change only
+		if mode == "code_change" {
+			if err := gitpkg.AssertFeatureBranch(ctx, req.WorkDir); err != nil {
+				return nil, fmt.Errorf("PREFLIGHT: %w", err)
 			}
-			logger.Info("Preflight: baseline build OK")
+		}
+
+		// Preflight 4: project builds before we start — code_change only
+		if mode == "code_change" {
+			projCfg, ok := a.Config.Projects[req.Project]
+			if ok && len(projCfg.DoDChecks) > 0 {
+				buildCmd := projCfg.DoDChecks[0]
+				parts := strings.Fields(buildCmd)
+				if len(parts) > 0 {
+					out, err := runCommandCombinedOutput(ctx, req.WorkDir, parts...)
+					if err != nil {
+						if strings.TrimSpace(out) == "" && ctx.Err() == nil {
+							logger.Warn("Preflight baseline build failed with empty output; retrying once",
+								"TaskID", req.TaskID, "Project", req.Project, "Command", buildCmd, "Error", err.Error())
+							out, err = runCommandCombinedOutput(ctx, req.WorkDir, parts...)
+						}
+						if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+							cancelErr := ctx.Err()
+							if cancelErr == nil {
+								cancelErr = err
+							}
+							return nil, fmt.Errorf("PREFLIGHT: baseline build cancelled while running %q: %w", buildCmd, cancelErr)
+						}
+						if strings.TrimSpace(out) == "" {
+							return nil, fmt.Errorf("PREFLIGHT: project doesn't build before coding — %s failed with no output: %v", buildCmd, err)
+						}
+						return nil, fmt.Errorf("PREFLIGHT: project doesn't build before coding — %s failed: %s", buildCmd, types.Truncate(out, 300))
+					}
+					logger.Info("Preflight: baseline build OK")
+				}
+			}
 		}
 	}
 
-	// Build AST codebase context (filtered by task relevance)
-	codeContext := a.buildCodebaseContextForTask(ctx, req.WorkDir, req.Prompt)
+	// Build prompt and invoke LLM based on execution mode
+	codeContext := ""
+	if mode != "command" {
+		codeContext = a.buildCodebaseContextForTask(ctx, req.WorkDir, req.Prompt)
+	}
 
-	prompt := fmt.Sprintf(`You are a senior software engineer. Implement the following task.
+	prompt := buildPromptForMode(mode, req.Prompt, codeContext)
 
-%s
+	var cliResult *llm.CLIResult
+	var err error
 
-CODEBASE:
-%s
+	switch mode {
+	case "research":
+		// Use Plan mode (read-only) for research tasks
+		cliResult, err = a.LLM.Plan(ctx, req.Agent, req.Model, req.WorkDir, prompt)
+	default:
+		// Use Exec mode (file-modifying) for code_change
+		cliResult, err = a.LLM.Exec(ctx, req.Agent, req.Model, req.WorkDir, prompt)
+	}
 
-Implement this task by modifying the necessary files. Do not explain, just code.`, wrapUserContent("TASK", req.Prompt), codeContext)
-
-	result, err := a.LLM.Exec(ctx, req.Agent, req.Model, req.WorkDir, prompt)
 	if err != nil {
-		return nil, fmt.Errorf("execute CLI: %w", err)
+		return nil, fmt.Errorf("execute CLI (%s mode): %w", mode, err)
+	}
+
+	result := &ExecResult{
+		ExitCode:     cliResult.ExitCode,
+		Output:       cliResult.Output,
+		InputTokens:  cliResult.InputTokens,
+		OutputTokens: cliResult.OutputTokens,
+		CostUSD:      cliResult.CostUSD,
 	}
 
 	if result.ExitCode != 0 {
@@ -174,24 +192,63 @@ Implement this task by modifying the necessary files. Do not explain, just code.
 			result.ExitCode, types.Truncate(result.Output, 500))
 	}
 
-	// Auto-commit any changes the agent made
-	commitMsg := fmt.Sprintf("chum: %s\n\nTask: %s", types.Truncate(req.Prompt, 72), req.TaskID)
-	committed, err := gitpkg.CommitAll(ctx, req.WorkDir, commitMsg)
-	if err != nil {
-		logger.Warn("Auto-commit failed", "error", err)
-	} else if committed {
-		logger.Info("Changes committed")
-	} else {
-		logger.Warn("Agent produced no file changes")
+	// Auto-commit any changes the agent made (code_change mode only)
+	if mode == "code_change" {
+		commitMsg := fmt.Sprintf("chum: %s\n\nTask: %s", types.Truncate(req.Prompt, 72), req.TaskID)
+		committed, err := gitpkg.CommitAll(ctx, req.WorkDir, commitMsg)
+		if err != nil {
+			logger.Warn("Auto-commit failed", "error", err)
+		} else if committed {
+			logger.Info("Changes committed")
+		} else {
+			logger.Warn("Agent produced no file changes")
+		}
 	}
 
-	return &ExecResult{
-		ExitCode:     result.ExitCode,
-		Output:       result.Output,
-		InputTokens:  result.InputTokens,
-		OutputTokens: result.OutputTokens,
-		CostUSD:      result.CostUSD,
-	}, nil
+	return result, nil
+}
+
+// buildPromptForMode returns the LLM prompt appropriate for the execution mode.
+func buildPromptForMode(mode, taskPrompt, codeContext string) string {
+	switch mode {
+	case "research":
+		if codeContext != "" {
+			return fmt.Sprintf("You are a senior engineer investigating a question. Analyze the codebase and report your findings clearly.\n\n%s\n\nCODEBASE:\n%s\n\nReport findings in structured markdown. Do NOT make code changes.",
+				wrapUserContent("TASK", taskPrompt), codeContext)
+		}
+		return fmt.Sprintf("You are a senior engineer investigating a question. Report your findings clearly.\n\n%s\n\nReport findings in structured markdown.",
+			wrapUserContent("TASK", taskPrompt))
+	default: // "code_change"
+		return fmt.Sprintf("You are a senior software engineer. Implement the following task.\n\n%s\n\nCODEBASE:\n%s\n\nImplement this task by modifying the necessary files. Do not explain, just code.",
+			wrapUserContent("TASK", taskPrompt), codeContext)
+	}
+}
+
+// hasWorktree checks if workDir contains a .git file/dir (indicating a worktree or repo).
+func hasWorktree(workDir string) bool {
+	_, err := os.Stat(filepath.Join(workDir, ".git"))
+	return err == nil
+}
+
+// RunCommandActivity runs shell commands in a directory and returns combined output.
+// Used for command-mode tasks that don't need an LLM.
+func (a *Activities) RunCommandActivity(ctx context.Context, workDir string, commands []string) (string, error) {
+	logger := activity.GetLogger(ctx)
+	var output strings.Builder
+	for _, cmdStr := range commands {
+		logger.Info("Running command", "command", cmdStr, "workDir", workDir)
+		cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
+		cmd.Dir = workDir
+		out, err := cmd.CombinedOutput()
+		output.WriteString(fmt.Sprintf("$ %s\n%s\n", cmdStr, string(out)))
+		if err != nil {
+			output.WriteString(fmt.Sprintf("ERROR: %v\n\n", err))
+			logger.Warn("Command failed", "command", cmdStr, "error", err)
+		} else {
+			output.WriteString("\n")
+		}
+	}
+	return output.String(), nil
 }
 
 func runCommandCombinedOutput(ctx context.Context, workDir string, args ...string) (string, error) {
