@@ -112,12 +112,20 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		_ = workflow.ExecuteActivity(setupCtx, a.RunSetupCommandsActivity, worktreePath, req.Project).Get(ctx, nil)
 	}
 
+	// === RESOLVE EXECUTION MODE (needed before decompose decision) ===
+	modeVersion := workflow.GetVersion(ctx, "add-execution-modes", workflow.DefaultVersion, 1)
+	execMode := req.ExecutionMode
+	if execMode == "" {
+		execMode = "code_change"
+	}
+
 	// === DECOMPOSE ===
 	// Version gate: workflows started before decomposition was added must skip
 	// this block to avoid Temporal nondeterminism errors during replay.
+	// Skip decomposition for research and command modes — they are atomic by nature.
 	decompVersion := workflow.GetVersion(ctx, "add-decompose", workflow.DefaultVersion, 1)
-	if decompVersion == 1 {
-		// Every task must pass through decomposition. Subtasks (already decomposed)
+	if decompVersion == 1 && execMode == "code_change" {
+		// Code change tasks pass through decomposition. Subtasks (already decomposed)
 		// skip this step. If decomposition fails, the task fails — no direct execution
 		// without decomposition.
 		if req.ParentID != "" {
@@ -165,13 +173,6 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 	}
 
 	// === EXECUTION MODE BRANCHING ===
-	// Version gate: execution modes added after initial release.
-	modeVersion := workflow.GetVersion(ctx, "add-execution-modes", workflow.DefaultVersion, 1)
-	execMode := req.ExecutionMode
-	if execMode == "" {
-		execMode = "code_change"
-	}
-
 	if modeVersion == 1 && execMode == "command" {
 		// Command mode: run shell commands directly, no LLM, no worktree pipeline.
 		commands := strings.Split(req.Metadata["commands"], "\n")

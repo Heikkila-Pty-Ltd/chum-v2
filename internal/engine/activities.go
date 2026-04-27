@@ -102,8 +102,10 @@ func (a *Activities) ExecuteActivity(ctx context.Context, req TaskRequest) (*Exe
 		mode = "code_change"
 	}
 	switch mode {
-	case "code_change", "research", "command":
-		// valid
+	case "code_change", "research":
+		// valid — handled by this activity
+	case "command":
+		return nil, fmt.Errorf("command mode must use RunCommandActivity, not ExecuteActivity")
 	default:
 		return nil, fmt.Errorf("unknown execution mode %q", mode)
 	}
@@ -236,8 +238,12 @@ func hasWorktree(workDir string) bool {
 	return err == nil
 }
 
+// maxCommandOutputBytes caps total command output to avoid Temporal payload limits (2MB).
+const maxCommandOutputBytes = 512 * 1024 // 512KB
+
 // RunCommandActivity runs shell commands in a directory and returns combined output.
 // Used for command-mode tasks that don't need an LLM.
+// Output is capped at 512KB to stay within Temporal's activity result payload limits.
 func (a *Activities) RunCommandActivity(ctx context.Context, workDir string, commands []string) (string, error) {
 	logger := activity.GetLogger(ctx)
 	var output strings.Builder
@@ -247,6 +253,10 @@ func (a *Activities) RunCommandActivity(ctx context.Context, workDir string, com
 		cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
 		cmd.Dir = workDir
 		out, err := cmd.CombinedOutput()
+		// Cap per-command output to prevent unbounded memory growth
+		if len(out) > maxCommandOutputBytes/len(commands) {
+			out = append(out[:maxCommandOutputBytes/len(commands)], []byte("\n... (output truncated)\n")...)
+		}
 		output.WriteString(fmt.Sprintf("$ %s\n%s\n", cmdStr, string(out)))
 		if err != nil {
 			output.WriteString(fmt.Sprintf("ERROR: %v\n\n", err))
@@ -254,6 +264,11 @@ func (a *Activities) RunCommandActivity(ctx context.Context, workDir string, com
 			failed = true
 		} else {
 			output.WriteString("\n")
+		}
+		// Hard cap on total output
+		if output.Len() > maxCommandOutputBytes {
+			output.WriteString("\n... (total output truncated at 512KB)\n")
+			break
 		}
 	}
 	if failed {
