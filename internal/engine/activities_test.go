@@ -148,7 +148,7 @@ func TestRunCommandActivity_RunsCommands(t *testing.T) {
 	}
 }
 
-func TestRunCommandActivity_FailingCommandIncludesError(t *testing.T) {
+func TestRunCommandActivity_FailingCommandReturnsError(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
@@ -157,16 +157,13 @@ func TestRunCommandActivity_FailingCommandIncludesError(t *testing.T) {
 	env := s.NewTestActivityEnvironment()
 	env.RegisterActivity(a.RunCommandActivity)
 
-	var output string
-	val, err := env.ExecuteActivity(a.RunCommandActivity, dir, []string{"false"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := env.ExecuteActivity(a.RunCommandActivity, dir, []string{"false"})
+	if err == nil {
+		t.Fatal("expected error for failing command, got nil")
 	}
-	if err := val.Get(&output); err != nil {
-		t.Fatalf("get output: %v", err)
-	}
-	if !strings.Contains(output, "ERROR") {
-		t.Errorf("output should contain ERROR for failing command: %s", output)
+	// The error message should mention the failure
+	if !strings.Contains(err.Error(), "failed") {
+		t.Errorf("error should mention failure: %v", err)
 	}
 }
 

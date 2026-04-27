@@ -176,7 +176,11 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		// Command mode: run shell commands directly, no LLM, no worktree pipeline.
 		commands := strings.Split(req.Metadata["commands"], "\n")
 		if len(commands) == 0 || (len(commands) == 1 && commands[0] == "") {
-			commands = []string{req.Prompt} // fallback: treat prompt as the command
+			return closeAndTrace(CloseDetail{
+				Reason:    CloseFailed,
+				SubReason: "no_commands",
+				Summary:   "command mode requires commands in task metadata",
+			})
 		}
 		commandCtx := workflow.WithActivityOptions(ctx, execOpts)
 		var output string
@@ -184,13 +188,13 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 			return closeAndTrace(CloseDetail{
 				Reason:    CloseFailed,
 				SubReason: "command_failed",
-				Summary:   types.Truncate(output, 200),
+				Summary:   types.Truncate(output, 4000),
 			})
 		}
 		return closeAndTrace(CloseDetail{
 			Reason:    CloseCompleted,
 			SubReason: "command_output",
-			Summary:   types.Truncate(output, 500),
+			Summary:   types.Truncate(output, 4000),
 		})
 	}
 
@@ -210,7 +214,7 @@ func AgentWorkflow(ctx workflow.Context, req TaskRequest) error {
 		return closeAndTrace(CloseDetail{
 			Reason:    CloseCompleted,
 			SubReason: "research_complete",
-			Summary:   types.Truncate(execResult.Output, 500),
+			Summary:   types.Truncate(execResult.Output, 4000),
 		})
 	}
 

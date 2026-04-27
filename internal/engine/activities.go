@@ -101,6 +101,12 @@ func (a *Activities) ExecuteActivity(ctx context.Context, req TaskRequest) (*Exe
 	if mode == "" {
 		mode = "code_change"
 	}
+	switch mode {
+	case "code_change", "research", "command":
+		// valid
+	default:
+		return nil, fmt.Errorf("unknown execution mode %q", mode)
+	}
 	logger.Info("Executing task", "TaskID", req.TaskID, "Agent", req.Agent, "Mode", mode)
 
 	// --- Preflight checks (skip for research without worktree) ---
@@ -235,6 +241,7 @@ func hasWorktree(workDir string) bool {
 func (a *Activities) RunCommandActivity(ctx context.Context, workDir string, commands []string) (string, error) {
 	logger := activity.GetLogger(ctx)
 	var output strings.Builder
+	var failed bool
 	for _, cmdStr := range commands {
 		logger.Info("Running command", "command", cmdStr, "workDir", workDir)
 		cmd := exec.CommandContext(ctx, "sh", "-c", cmdStr)
@@ -244,9 +251,13 @@ func (a *Activities) RunCommandActivity(ctx context.Context, workDir string, com
 		if err != nil {
 			output.WriteString(fmt.Sprintf("ERROR: %v\n\n", err))
 			logger.Warn("Command failed", "command", cmdStr, "error", err)
+			failed = true
 		} else {
 			output.WriteString("\n")
 		}
+	}
+	if failed {
+		return output.String(), fmt.Errorf("one or more commands failed")
 	}
 	return output.String(), nil
 }
