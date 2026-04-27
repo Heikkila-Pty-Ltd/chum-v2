@@ -335,6 +335,63 @@ func TestCallbackActivity_SuccessfulDelivery(t *testing.T) {
 	}
 }
 
+func TestCallbackActivity_SendsBearerToken(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	a := &Activities{}
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(a.CallbackActivity)
+
+	_, err := env.ExecuteActivity(a.CallbackActivity, CallbackInput{
+		URL:    srv.URL,
+		Token:  "my-secret-key",
+		TaskID: "task-auth",
+		Detail: CloseDetail{Reason: CloseCompleted},
+	})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if gotAuth != "Bearer my-secret-key" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer my-secret-key")
+	}
+}
+
+func TestCallbackActivity_NoTokenNoAuthHeader(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	a := &Activities{}
+	s := testsuite.WorkflowTestSuite{}
+	env := s.NewTestActivityEnvironment()
+	env.RegisterActivity(a.CallbackActivity)
+
+	_, err := env.ExecuteActivity(a.CallbackActivity, CallbackInput{
+		URL:    srv.URL,
+		TaskID: "task-no-auth",
+		Detail: CloseDetail{Reason: CloseCompleted},
+	})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if gotAuth != "" {
+		t.Errorf("Authorization = %q, want empty (no token provided)", gotAuth)
+	}
+}
+
 func TestCallbackActivity_RetryOn500(t *testing.T) {
 	t.Parallel()
 
