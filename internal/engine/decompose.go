@@ -61,7 +61,7 @@ func (a *Activities) CreateSubtasksActivity(ctx context.Context, parentID, proje
 	var inheritedMetadata map[string]string
 	if parentTask, err := a.DAG.GetTask(ctx, parentID); err == nil && parentTask.Metadata != nil {
 		inherited := map[string]string{}
-		for _, key := range []string{"callback_url", "external_ref", "source"} {
+		for _, key := range []string{"callback_url", "callback_token", "external_ref", "source"} {
 			if v, ok := parentTask.Metadata[key]; ok && v != "" {
 				inherited[key] = v
 			}

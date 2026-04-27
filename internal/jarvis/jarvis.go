@@ -62,6 +62,9 @@ type WorkRequest struct {
 	// CallbackURL is an optional URL to POST results to when the task completes.
 	// Used by Kaikki to receive results back via webhook.
 	CallbackURL string `json:"callback_url,omitempty"`
+
+	// CallbackToken is an optional Bearer token sent with callback requests.
+	CallbackToken string `json:"callback_token,omitempty"`
 }
 
 // WorkResult is returned when a work request completes.
@@ -177,6 +180,9 @@ func (e *Engine) Submit(ctx context.Context, req WorkRequest) (string, error) {
 	}
 	if callbackURL := strings.TrimSpace(req.CallbackURL); callbackURL != "" {
 		metadata["callback_url"] = callbackURL
+	}
+	if callbackToken := strings.TrimSpace(req.CallbackToken); callbackToken != "" {
+		metadata["callback_token"] = callbackToken
 	}
 
 	if e.ingressRequiresBeads() {

@@ -459,6 +459,7 @@ func closeAndNotify(ctx workflow.Context, opts workflow.ActivityOptions, taskID 
 		if callbackURL := metadata[0]["callback_url"]; callbackURL != "" {
 			_ = workflow.ExecuteActivity(actCtx, a.CallbackActivity, CallbackInput{
 				URL:         callbackURL,
+				Token:       metadata[0]["callback_token"],
 				ExternalRef: metadata[0]["external_ref"],
 				TaskID:      taskID,
 				Detail:      detail,
