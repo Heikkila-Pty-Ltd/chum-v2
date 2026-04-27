@@ -186,7 +186,7 @@ func (e *Engine) Submit(ctx context.Context, req WorkRequest) (string, error) {
 	task := dag.Task{
 		Title:       req.Title,
 		Description: req.Description,
-		Status:      string(types.StatusReady),
+		Status:      string(types.StatusApproved),
 		Project:     req.Project,
 		Labels:      labels,
 		ParentID:    req.ParentTaskID,
@@ -263,8 +263,8 @@ func (e *Engine) submitViaBeads(ctx context.Context, req WorkRequest, labels []s
 	if err != nil {
 		return "", fmt.Errorf("create beads issue: %w", err)
 	}
-	if err := bc.Update(ctx, issueID, map[string]string{"status": string(types.StatusReady)}); err != nil {
-		return "", fmt.Errorf("mark beads issue %s ready: %w", issueID, err)
+	if err := bc.Update(ctx, issueID, map[string]string{"status": string(types.StatusApproved)}); err != nil {
+		return "", fmt.Errorf("mark beads issue %s approved: %w", issueID, err)
 	}
 
 	fingerprint := ""
@@ -280,7 +280,7 @@ func (e *Engine) submitViaBeads(ctx context.Context, req WorkRequest, labels []s
 	fields := map[string]any{
 		"title":       req.Title,
 		"description": req.Description,
-		"status":      string(types.StatusReady),
+		"status":      string(types.StatusApproved),
 		"labels":      issueLabels,
 		"parent_id":   req.ParentTaskID,
 		"metadata":    taskMetadata,
@@ -298,7 +298,7 @@ func (e *Engine) submitViaBeads(ctx context.Context, req WorkRequest, labels []s
 			ID:          issueID,
 			Title:       req.Title,
 			Description: req.Description,
-			Status:      string(types.StatusReady),
+			Status:      string(types.StatusApproved),
 			Project:     req.Project,
 			Priority:    req.Priority,
 			Labels:      issueLabels,
@@ -411,7 +411,7 @@ func (e *Engine) GetStatus(ctx context.Context, taskID string) (WorkResult, erro
 
 // ListPending returns all Jarvis-submitted tasks that haven't completed yet.
 func (e *Engine) ListPending(ctx context.Context, project string) ([]WorkResult, error) {
-	tasks, err := e.dag.ListTasks(ctx, project, string(types.StatusReady), string(types.StatusRunning))
+	tasks, err := e.dag.ListTasks(ctx, project, string(types.StatusApproved), string(types.StatusReady), string(types.StatusRunning))
 	if err != nil {
 		return nil, fmt.Errorf("list tasks: %w", err)
 	}

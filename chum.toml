@@ -21,7 +21,7 @@ jarvis_port = 9780
 jarvis_kb_path = "/home/ubuntu/.picoclaw/bots/jarvis/jarvis.db"
 
 [beads_bridge]
-enabled = true
+enabled = false
 dry_run = false
 canary_label = "chum-canary"
 reconcile_interval = "15m"
@@ -33,7 +33,7 @@ workspace = "/home/ubuntu/projects/chum-automation"
 dod_checks = ["go build ./...", "go test ./...", "go vet ./..."]
 
 [projects.hg]
-enabled = true
+enabled = false
 workspace = "/home/ubuntu/projects/hg-chum-integration-automation"
 dod_checks = ["go build ./...", "go vet ./..."]
 

@@ -185,8 +185,8 @@ func TestAPIStatus(t *testing.T) {
 	if result.TaskID != id {
 		t.Errorf("task_id = %q, want %q", result.TaskID, id)
 	}
-	if result.Status != "ready" {
-		t.Errorf("status = %q, want ready", result.Status)
+	if result.Status != "approved" {
+		t.Errorf("status = %q, want approved", result.Status)
 	}
 }
 
